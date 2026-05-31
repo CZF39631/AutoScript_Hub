@@ -1,0 +1,2 @@
+requests==2.31.0
+pywebview==4.4.1
