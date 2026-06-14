@@ -30,14 +30,17 @@ def test_execute_script(client, dev_token):
 
 def test_execute_no_concurrent(client, dev_token):
     sid = _upload(client, dev_token)
+    # Use valid params (url_file is required per sample_script config) so the request
+    # passes validation and actually creates a run — otherwise we'd get 422 before
+    # the concurrency check runs, defeating the test's purpose.
     client.post(
         "/api/runs/execute",
-        json={"script_id": sid, "params": {}},
+        json={"script_id": sid, "params": {"url_file": "C:/test.txt"}},
         headers={"Authorization": f"Bearer {dev_token}"},
     )
     resp = client.post(
         "/api/runs/execute",
-        json={"script_id": sid, "params": {}},
+        json={"script_id": sid, "params": {"url_file": "C:/test.txt"}},
         headers={"Authorization": f"Bearer {dev_token}"},
     )
     assert resp.status_code == 409
@@ -47,7 +50,7 @@ def test_list_runs(client, dev_token):
     sid = _upload(client, dev_token)
     client.post(
         "/api/runs/execute",
-        json={"script_id": sid, "params": {}},
+        json={"script_id": sid, "params": {"url_file": "C:/test.txt"}},
         headers={"Authorization": f"Bearer {dev_token}"},
     )
     resp = client.get("/api/runs", headers={"Authorization": f"Bearer {dev_token}"})
@@ -59,7 +62,7 @@ def test_operator_sees_own_runs(client, op_token, dev_token):
     sid = _upload(client, dev_token)
     client.post(
         "/api/runs/execute",
-        json={"script_id": sid, "params": {}},
+        json={"script_id": sid, "params": {"url_file": "C:/test.txt"}},
         headers={"Authorization": f"Bearer {dev_token}"},
     )
     resp = client.get("/api/runs", headers={"Authorization": f"Bearer {op_token}"})
@@ -71,7 +74,7 @@ def test_cancel_run(client, dev_token):
     sid = _upload(client, dev_token)
     run_resp = client.post(
         "/api/runs/execute",
-        json={"script_id": sid, "params": {}},
+        json={"script_id": sid, "params": {"url_file": "C:/test.txt"}},
         headers={"Authorization": f"Bearer {dev_token}"},
     )
     rid = run_resp.json()["id"]
@@ -83,7 +86,7 @@ def test_update_run_status(client, dev_token):
     sid = _upload(client, dev_token)
     run_resp = client.post(
         "/api/runs/execute",
-        json={"script_id": sid, "params": {}},
+        json={"script_id": sid, "params": {"url_file": "C:/test.txt"}},
         headers={"Authorization": f"Bearer {dev_token}"},
     )
     rid = run_resp.json()["id"]
