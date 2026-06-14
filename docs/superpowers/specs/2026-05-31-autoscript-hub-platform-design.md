@@ -2,6 +2,34 @@
 
 > 日期：2026-05-31
 > 状态：已确认
+> 修订：2026-06-15 — 实现校准(追加功能保留 / 设计缺失补齐 / 离线模式新增)
+
+## 修订摘要(2026-06-15)
+
+本次修订将设计文档与实际实现对齐。三类变更:
+
+1. **追加功能正式写入设计**(原本不在设计里但已实现):
+   - `Environment` 表(本地运行环境配置:浏览器/Python/venv) — §4.9
+   - `UserScript` 表(用户已安装脚本关联) — §4.10
+   - `UserSettings` 表(用户客户端配置) — §4.11
+   - 客户端→后端通信由 WebSocket 改为 **HTTP 轮询** — §5.9 / §6.4
+   - UI 进程直连远程后端(经本地 UI server 代理),而非"仅连本地 Agent" — §5.11
+
+2. **设计要求但缺失/做错的已补齐**:
+   - `agents` 表补齐并明确与 `Environment` 的分工 — §4.4
+   - `issues` 表补 `script_version` / `log_snapshot` / `resolved_version` 字段 — §4.6
+   - 新增 `user_presets` 表(§5.3 个人预设持久化) — §4.12
+   - 实时日志流改为 **SSE**(Server-Sent Events)而非 WS,理由:日志是单向服务器推送,SSE 更轻量 — §6.3
+   - Agent 自动更新补完整流程(下载→替换→重启) — §5.8
+   - 后端心跳超时看门狗 — §5.1
+   - 日志清理定时任务 — §5.12
+
+3. **新增能力:客户端离线执行**(用户新需求):
+   - 客户端可执行已下载脚本,无需后端在线 — §5.13
+   - 本地 Agent HTTP API(`/local/*`) — §6.8
+   - 联网后自动同步本地 runs 到后端 — §5.13
+
+---
 
 ## 1. 项目概述
 
@@ -276,6 +304,11 @@ def main(url_file, save_dir, timeout, method):
 | updated_at | DATETIME | 最后更新时间 |
 | is_deleted | BOOLEAN | 软删除 |
 
+> **实现说明(2026-06)**:`agents` 与 `environments`(§4.9)分工:
+> - `agents` = 远程机器身份与在线状态(后端视角看「哪台机器在线」)
+> - `environments` = 本地运行环境配置(浏览器路径 / Python 版本 / venv 路径,「怎么跑」)
+> `runs` 表同时挂 `agent_id`(在哪跑)+ `environment_id`(用什么环境配置),两者均可空。
+
 ### 4.5 runs — 执行记录表
 
 | 字段 | 类型 | 说明 |
@@ -366,6 +399,65 @@ agents (客户端)
 
 audit_logs (独立，记录所有操作)
 ```
+
+---
+
+### 4.9 environments — 运行环境配置表(追加,2026-06)
+
+存储每台客户端的本地执行环境配置。最初设计未列,实现过程中发现需要让用户为不同脚本场景配置不同浏览器/Python/代理,遂追加。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PK | 唯一标识 |
+| user_id | INTEGER FK→users | 属于哪个用户 |
+| name | TEXT | 环境名称(如「Chrome 120 + Python 3.10」) |
+| browser_port | INTEGER | 浏览器调试端口(DrissionPage 用) |
+| browser_path | TEXT | 浏览器可执行路径 |
+| python_version | TEXT | Python 版本号 |
+| venv_path | TEXT | venv 目录路径 |
+| venv_status | TEXT | venv 状态:none / creating / ready / error |
+| python_executable | TEXT | Python 解释器路径 |
+| output_dir | TEXT | 默认结果输出目录 |
+| proxy | TEXT | 代理地址 |
+| extra_env | TEXT | 额外环境变量(JSON) |
+| is_default | BOOLEAN | 是否默认环境 |
+| created_at / updated_at | DATETIME | 创建/更新时间 |
+
+### 4.10 user_scripts — 用户已安装脚本(追加,2026-06)
+
+operator 角色用户需要先"安装"脚本才能看到并执行。admin 自动拥有全部脚本访问权。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PK | |
+| user_id | INTEGER FK→users | |
+| script_id | INTEGER FK→scripts | |
+| installed_at | DATETIME | 安装时间 |
+| UNIQUE(user_id, script_id) | | 同一用户不重复安装 |
+
+### 4.11 user_settings — 用户客户端设置(追加,2026-06)
+
+存储每个用户的客户端偏好(默认服务器地址、默认浏览器、输出目录等)。Web 端可编辑,客户端同步到 `client_config.json`。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PK | |
+| user_id | INTEGER FK→users UNIQUE | 一对一 |
+| settings_json | TEXT | 设置 JSON |
+
+### 4.12 user_presets — 用户个人参数预设(追加,2026-06)
+
+支持 §5.3 的「员工个人预设」持久化。开发者预设写在脚本 `config().presets` 中,所有用户可见但只读。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PK | |
+| user_id | INTEGER FK→users | 属于哪个用户 |
+| script_id | INTEGER FK→scripts | 关联脚本 |
+| name | TEXT | 预设名称 |
+| values_json | TEXT | 参数值 JSON |
+| created_at / updated_at | DATETIME | |
+| UNIQUE(user_id, script_id, name) | | 同一用户同一脚本下名称唯一 |
 
 ---
 
@@ -548,6 +640,66 @@ LOG_ARCHIVE_RETENTION_DAYS = 90   # 归档保留 90 天后彻底删除
 
 ---
 
+### 5.13 客户端离线执行能力(追加,2026-06)
+
+**需求背景**:员工网络不稳定或后端维护时,客户端仍需可用 — 只要脚本已经下载到本地,就能执行,结果在恢复连接后自动同步回后端。
+
+#### 工作流程
+
+```
+员工触发执行(后端不可达)
+  → UI 检测到 /api/health 失败,自动切换"离线模式"
+  → UI 显示离线横幅,调用 http://127.0.0.1:18080/local/* (本地 Agent)
+  → POST /local/execute {script_id, params}
+  → Agent 启动子进程,本地分配 local_run_id (如 "L1")
+  → 执行完成,结果存到 .local_runs.json (持久化,跨进程重启)
+  → 系统气泡通知员工"执行完成"
+  → 主循环检测到后端可达 → _sync_local_runs_to_backend():
+      ├── POST /api/runs/execute 创建后端 run 记录
+      ├── PATCH /api/runs/{id}/status 回填最终状态 + 结果
+      └── 标记本地 run synced + 记录 backend_run_id
+```
+
+#### 关键约束
+
+- **本地脚本缓存**:Agent 已下载过的脚本保留在 `storage/scripts/{script_id}/{version}/`,离线模式直接复用
+- **并发限制**:本地执行同样遵守"一次只跑一个"(与后端触发的任务共享 `_running_proc` 检查)
+- **环境配置**:离线模式下 Environment 表不可用,UI 可在请求中直接传 `env_vars` 字典
+- **依赖安装**:离线时 `pip install` 仍尝试执行(假设 PyPI 可达),失败则脚本失败
+- **同步去重**:已 `synced` 的本地 run 不会重复同步,通过 `backend_run_id` 字段标识
+
+#### 本地 HTTP API(详见 §6.8)
+
+Agent 进程在 `127.0.0.1:18080` 提供 `/local/*` 端点供 UI 离线调用:
+- `GET /local/scripts` — 列出本地缓存的脚本
+- `POST /local/execute` — 触发本地执行
+- `GET /local/runs` / `GET /local/runs/{id}` — 本地执行记录
+- `GET /local/runs/{id}/log` — 本地执行日志
+- `GET /local/connection` — 客户端连接状态(在线/待同步数)
+
+### 5.14 通信模型说明(轮询替代 WebSocket,2026-06 校准)
+
+**设计原文(§5.9 / §6.4)假设**:Agent ↔ 后端用 WebSocket 长连接。
+
+**实现采用的方案**:Agent ↔ 后端用 **HTTP 轮询**(每 5 秒拉 `GET /api/runs?status=pending`)。
+
+**变更理由**:
+1. 轮询模式部署简单,不需要 WebSocket 状态管理
+2. 20 人规模下,5 秒轮询的开销可忽略
+3. 天然容错 — 网络抖动只是错过几次轮询,不会"断开连接"
+4. 实时日志流仍然用 **SSE**(Server-Sent Events),前端体验无损
+
+**前端实时日志流**:用 SSE 而非 WS,理由是日志是单向服务器推送,SSE 比 WS 更轻量、原生浏览器支持、不需要协议升级。详见 §6.3。
+
+**Agent 心跳**:每次轮询周期发一次 `POST /api/agents/{id}/heartbeat`,后端定时扫描(每 30 秒)将 >90 秒无心跳的 Agent 标记 offline,并将其 running 的 runs 标记 failed(§5.1 后端看门狗)。
+
+**离线容错(适配轮询)**:
+- status 上报失败 → 写入本地 `.pending_reports.json`,下个周期重试
+- 连续断线 30 分钟 → 弹系统通知(§5.9)
+- 后端可达时自动 flush 所有 pending 上报
+
+---
+
 ## 6. API 设计概要
 
 ### 6.1 认证
@@ -590,6 +742,51 @@ LOG_ARCHIVE_RETENTION_DAYS = 90   # 归档保留 90 天后彻底删除
 
 ### 6.7 仪表盘
 - `GET /api/dashboard/stats` — 统计数据
+
+---
+
+### 6.8 新增/校准端点(2026-06)
+
+#### Agent 注册与心跳(§4.4 / §5.1)
+- `POST /api/agents/register` — Agent 启动注册,返回 agent_id(同 user+machine 幂等)
+- `POST /api/agents/{id}/heartbeat` — 心跳上报
+- `GET /api/agents` — 列表(admin/developer)
+- `GET /api/agents/mine` — 当前用户的 Agent
+- `GET /api/agents/{id}` — 详情
+- `DELETE /api/agents/{id}` — 软删除(admin)
+
+#### 参数预设(§5.3)
+- `GET /api/scripts/{id}/presets` — 返回 `{developer: [...], personal: [...]}`
+- `POST /api/scripts/{id}/presets` — 创建个人预设
+- `PUT /api/presets/{id}` — 更新个人预设
+- `DELETE /api/presets/{id}` — 删除个人预设
+
+#### Run 结果下载
+- `GET /api/runs/{id}/download` — 单文件直接下载;多文件打包 zip 流式返回
+
+#### Agent 自动更新(§5.8)
+- `GET /api/agent/check-update?version=X.X.X` — 返回 `{latest_version, update_available, package_available}`
+- `GET /api/agent/download/{version}` — 下载客户端安装包 zip(从 `client_dist/` 提供)
+
+#### 实时日志流(§6.3 校准)
+- `GET /api/runs/{id}/log/stream?token=...` — **SSE**(Server-Sent Events),非 WebSocket
+- 数据格式:`data: {"log": "...片段..."}\n\n`,结束时发 `data: {"done": true}\n\n`
+- token 通过 query string 传递(浏览器 EventSource API 不支持自定义 header)
+
+#### 客户端本地 HTTP API(§5.13 离线模式)
+
+Agent 进程在 `127.0.0.1:18080` 提供,UI 在后端不可达时使用:
+- `GET /local/scripts` — 本地缓存脚本列表(扫描 `storage/scripts/` 并解析每个 main.py 的 config())
+- `POST /local/execute` — 触发本地执行,请求体 `{script_id, params, env_vars?}`
+- `GET /local/runs` — 本地执行记录列表
+- `GET /local/runs/{local_run_id}` — 单个本地 run 详情
+- `GET /local/runs/{local_run_id}/log` — 本地 run 日志
+- `GET /local/connection` — 返回 `{online, last_online_at, pending_sync_count, agent_id}`
+
+#### 既有但补充说明的端点
+- `GET /api/scripts/{id}/versions` — 版本历史(已实现)
+- `GET /api/scripts/{id}/download?version=X` — 脚本文件下载(已实现,区别于 `/api/runs/{id}/download`)
+- `GET /api/scripts/{id}` — 返回 ScriptDetail 含 `config_json`,等价于设计 §6.2 的 `/config` 端点
 
 ---
 
