@@ -1,11 +1,14 @@
 import json
 import os
+import io
 import time
 import asyncio
+import logging
+import zipfile
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -13,14 +16,52 @@ from app.database import get_db
 from app.models import User, Script, Run
 from app.schemas import ExecuteRequest, RunBrief, RunDetail
 from app.auth import get_current_user, require_role
-from app.config import LOGS_DIR
+from app.config import LOGS_DIR, PROJECT_ROOT
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
+def _ensure_aware(dt):
+    """SQLite strips tzinfo on round-trip; reattach UTC before arithmetic with aware datetimes."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _resolve_log_file(run, run_id):
+    """Locate the log file for a run.
+
+    Agent writes logs to its own _LOGS_DIR (which may differ from the server's LOGS_DIR,
+    especially in dev where client_config.json's script_download_dir is empty → Agent uses
+    PROJECT_ROOT/logs/). Try multiple candidate locations so the UI can always find the log:
+      1. run.log_path (authority — Agent reports where it actually wrote), resolved vs PROJECT_ROOT
+      2. {LOGS_DIR}/{run_id}.log  (server-side default)
+      3. {PROJECT_ROOT}/logs/{run_id}.log  (Agent's default when its _LOGS_DIR is relative)
+    Returns the first existing path, or None.
+    """
+    candidates = []
+    if run and run.log_path:
+        rp = run.log_path
+        candidates.append(rp if os.path.isabs(rp) else os.path.join(PROJECT_ROOT, rp))
+    candidates.append(os.path.join(LOGS_DIR, "{}.log".format(run_id)))
+    candidates.append(os.path.join(PROJECT_ROOT, "logs", "{}.log".format(run_id)))
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
+
+
 def _validate_params(param_defs, params):
-    """Validate user-submitted params against config definitions. Returns list of error strings."""
+    """Validate user-submitted params against config definitions. Returns list of error strings.
+
+    NOTE (design §5.2): file/folder existence is NOT checked here — those files live on the
+    client machine and the backend cannot verify them. Existence checks are performed by the
+    Agent before invoking main(). Only format-level checks (required, number range, select
+    options) run on the backend.
+    """
     errors = []
     param_map = {p["key"]: p for p in param_defs}
 
@@ -36,15 +77,7 @@ def _validate_params(param_defs, params):
         if val is None or val == "":
             continue
 
-        if ptype == "file":
-            if not os.path.isfile(val):
-                errors.append("{}: 文件不存在 - {}".format(label, val))
-        elif ptype == "folder":
-            if not os.path.isdir(val):
-                auto_create = defn.get("auto_create", False)
-                if not auto_create:
-                    errors.append("{}: 目录不存在 - {}".format(label, val))
-        elif ptype == "number":
+        if ptype == "number":
             try:
                 num = float(val)
             except (TypeError, ValueError):
@@ -81,15 +114,26 @@ def execute_script(
         Script.status == "active",
     ).first()
     if not script:
-        raise HTTPException(status_code=404, detail="Script not found or not active")
+        raise HTTPException(status_code=404, detail="脚本不存在或未启用")
 
+    # Check for active runs — auto-cancel stale pending runs (>5 min)
     active = db.query(Run).filter(
         Run.user_id == current_user.id,
         Run.status.in_(["pending", "running"]),
         Run.is_deleted == False,
     ).first()
     if active:
-        raise HTTPException(status_code=409, detail="You have a running task, please wait")
+        if active.status == "pending":
+            stale_secs = (datetime.now(timezone.utc) - _ensure_aware(active.created_at)).total_seconds()
+            if stale_secs > 300:  # 5 minutes
+                active.status = "cancelled"
+                active.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                db.refresh(active)
+            else:
+                raise HTTPException(status_code=409, detail="当前有任务正在执行,请等待完成")
+        else:
+            raise HTTPException(status_code=409, detail="当前有任务正在执行,请等待完成")
 
     # Validate params against config
     if script.config_json:
@@ -142,13 +186,13 @@ def list_runs(
         try:
             q = q.filter(Run.created_at >= dt.fromisoformat(date_from))
         except ValueError:
-            pass
+            pass  # invalid date format, skip filter
     if date_to:
         from datetime import datetime as dt
         try:
             q = q.filter(Run.created_at < dt.fromisoformat(date_to))
         except ValueError:
-            pass
+            pass  # invalid date format, skip filter
 
     runs = q.order_by(Run.created_at.desc()).offset(offset).limit(limit).all()
 
@@ -182,9 +226,9 @@ def get_run(
 ):
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="执行记录不存在")
     if current_user.role == "operator" and run.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="无权限访问")
     return run
 
 
@@ -197,17 +241,17 @@ def update_run_status(
 ):
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="执行记录不存在")
     if run.user_id != current_user.id and current_user.role == "operator":
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="无权限访问")
 
     run.status = update.status
     if update.status == "running":
-        run.started_at = datetime.utcnow()
+        run.started_at = datetime.now(timezone.utc)
     if update.status in ("success", "failed", "cancelled"):
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(timezone.utc)
         if run.started_at:
-            run.duration_sec = int((run.finished_at - run.started_at).total_seconds())
+            run.duration_sec = int((run.finished_at - _ensure_aware(run.started_at)).total_seconds())
     if update.error_msg:
         run.error_msg = update.error_msg
     if update.result_files:
@@ -215,7 +259,7 @@ def update_run_status(
     if update.log_path:
         run.log_path = update.log_path
     db.commit()
-    return {"message": "Status updated"}
+    return {"message": "状态已更新"}
 
 
 @router.post("/{run_id}/cancel")
@@ -226,17 +270,17 @@ def cancel_run(
 ):
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="执行记录不存在")
     if run.status not in ("pending", "running"):
-        raise HTTPException(status_code=400, detail="Run is not cancellable")
+        raise HTTPException(status_code=400, detail="该任务无法取消")
     run.status = "cancelled"
-    run.finished_at = datetime.utcnow()
+    run.finished_at = datetime.now(timezone.utc)
     if run.started_at:
-        run.duration_sec = int((run.finished_at - run.started_at).total_seconds())
+        run.duration_sec = int((run.finished_at - _ensure_aware(run.started_at)).total_seconds())
     db.commit()
     write_audit(current_user.id, current_user.username, "cancel_run",
                 target_type="run", target_id=run_id)
-    return {"message": "Run cancelled"}
+    return {"message": "任务已取消"}
 
 
 @router.get("/{run_id}/log")
@@ -247,12 +291,12 @@ def get_run_log(
 ):
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="执行记录不存在")
     if current_user.role == "operator" and run.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="无权限访问")
 
-    log_file = os.path.join(LOGS_DIR, f"{run_id}.log")
-    if not os.path.isfile(log_file):
+    log_file = _resolve_log_file(run, run_id)
+    if not log_file:
         return {"log": ""}
     with open(log_file, "r", encoding="utf-8", errors="replace") as f:
         return {"log": f.read()}
@@ -270,20 +314,24 @@ def stream_run_log(
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user_id = int(payload.get("sub"))
     except (JWTError, ValueError):
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="无效的令牌")
     current_user = db.query(User).filter(
         User.id == user_id, User.status == "active", User.is_deleted == False
     ).first()
     if not current_user:
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=401, detail="用户不存在")
 
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="执行记录不存在")
     if current_user.role == "operator" and run.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="无权限访问")
 
-    log_file = os.path.join(LOGS_DIR, "{}.log".format(run_id))
+    log_file = _resolve_log_file(run, run_id)
+    if not log_file:
+        # Log not generated yet (run just started) — watch the Agent's default location
+        # so the SSE generator can stream content as soon as the file appears.
+        log_file = os.path.join(PROJECT_ROOT, "logs", "{}.log".format(run_id))
 
     def event_generator():
         from app.database import SessionLocal
@@ -335,17 +383,60 @@ def open_result_file(
 ):
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="执行记录不存在")
     if current_user.role == "operator" and run.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="无权限访问")
     if not run.result_files:
-        raise HTTPException(status_code=400, detail="No result file")
+        raise HTTPException(status_code=400, detail="无结果文件")
 
     file_path = json.loads(run.result_files)
     if isinstance(file_path, list):
         file_path = file_path[0]
     if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="File not found: {}".format(file_path))
+        raise HTTPException(status_code=404, detail="文件不存在: {}".format(file_path))
 
     os.startfile(file_path)
-    return {"message": "Opened"}
+    return {"message": "已打开"}
+
+
+@router.get("/{run_id}/download")
+def download_result(
+    run_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Download run result file(s). Single file → direct download; multiple → zipped."""
+    run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="执行记录不存在")
+    if current_user.role == "operator" and run.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权限访问")
+    if not run.result_files:
+        raise HTTPException(status_code=400, detail="无结果文件")
+
+    paths = json.loads(run.result_files)
+    if isinstance(paths, str):
+        paths = [paths]
+
+    existing = [p for p in paths if isinstance(p, str) and os.path.isfile(p)]
+    if not existing:
+        raise HTTPException(status_code=404, detail="结果文件在服务器上不存在")
+
+    if len(existing) == 1:
+        f = existing[0]
+        return FileResponse(f, filename=os.path.basename(f))
+
+    # Multiple files: stream a zip
+    def _zip_iter():
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fp in existing:
+                zf.write(fp, os.path.basename(fp))
+        buf.seek(0)
+        yield buf.read()
+
+    return StreamingResponse(
+        _zip_iter(),
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=run_{}_results.zip".format(run_id)},
+    )
