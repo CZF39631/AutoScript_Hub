@@ -1,5 +1,6 @@
 """Create database tables and seed admin user."""
 import json
+import logging
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -9,6 +10,7 @@ from app.database import engine, SessionLocal
 from passlib.context import CryptContext
 from app.config import SCRIPTS_DIR, LOGS_DIR, PROJECT_ROOT
 
+logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -18,8 +20,8 @@ def _load_admin_config():
         try:
             with open(cfg_path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load admin config: %s", e)
     return {}
 
 
@@ -31,6 +33,12 @@ def _migrate(conn):
         ("environments", "venv_path", "VARCHAR(500)"),
         ("environments", "venv_status", "VARCHAR(20) DEFAULT 'none'"),
         ("environments", "python_executable", "VARCHAR(500)"),
+        # design §4.4 / §4.5: agents table + run.agent_id (machine identity tracking)
+        ("runs", "agent_id", "INTEGER REFERENCES agents(id)"),
+        # design §4.6: issues missing fields
+        ("issues", "script_version", "INTEGER"),
+        ("issues", "log_snapshot", "TEXT"),
+        ("issues", "resolved_version", "INTEGER"),
     ]
     for table, column, definition in migrations:
         try:
@@ -50,8 +58,8 @@ def _migrate(conn):
                 settings_json TEXT NOT NULL DEFAULT '{}'
             )
         """)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("user_settings table already exists or creation skipped: %s", e)
 
 
 def init():

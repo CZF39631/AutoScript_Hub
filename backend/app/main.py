@@ -17,7 +17,8 @@ from app.routers import dashboard as dashboard_router
 from app.routers import issues as issues_router
 from app.routers import environments as env_router
 from app.routers import settings as settings_router
-
+from app.routers import agents as agents_router
+from app.routers import presets as presets_router
 app = FastAPI(title="AutoScript Hub", version="0.1.0")
 
 app.add_middleware(
@@ -37,6 +38,16 @@ app.include_router(dashboard_router.router)
 app.include_router(issues_router.router)
 app.include_router(env_router.router)
 app.include_router(settings_router.router)
+app.include_router(settings_router.agent_update_router)
+app.include_router(agents_router.router)
+app.include_router(presets_router.router)
+
+
+@app.on_event("startup")
+def _start_scheduler():
+    """Start background scheduler (heartbeat scan + log cleanup)."""
+    from app.scheduler import start_scheduler
+    start_scheduler()
 
 
 @app.get("/api/health")
@@ -65,4 +76,4 @@ if os.path.isdir(_STATIC_DIR):
 if __name__ == "__main__":
     import uvicorn
     from app.config import BACKEND_HOST, BACKEND_PORT
-    uvicorn.run(app, host=BACKEND_HOST, port=BACKEND_PORT)
+    uvicorn.run(app, host=str(BACKEND_HOST), port=int(BACKEND_PORT))
