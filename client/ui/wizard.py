@@ -177,7 +177,6 @@ async function pickFolder(inputId) {
 async function finish() {
   var config = {
     server_url: document.getElementById('server_url').value,
-    frontend_url: document.getElementById('server_url').value.replace(/:\\d+$/, ':5173'),
     username: document.getElementById('username').value,
     password: document.getElementById('password').value,
     script_download_dir: document.getElementById('script_dir').value,
@@ -200,7 +199,7 @@ class WizardApi:
     """JS bridge for the setup wizard."""
 
     def openFolderDialog(self):
-        result = webview.windows[0].create_file_dialog(webview.FileDialog.FOLDER)
+        result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
         return result[0] if result else None
 
     def saveAndFinish(self, config_json):

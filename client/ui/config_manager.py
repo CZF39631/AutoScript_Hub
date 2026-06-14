@@ -7,7 +7,6 @@ CONFIG_PATH = os.path.join(PROJECT_ROOT, "client_config.json")
 
 DEFAULT_CONFIG = {
     "server_url": "http://127.0.0.1:8000",
-    "frontend_url": "http://127.0.0.1:8000",
     "username": "",
     "password": "",
     "script_download_dir": "",
@@ -28,7 +27,7 @@ def load_config():
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             config.update(saved)
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             pass
     return config
 

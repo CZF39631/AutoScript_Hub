@@ -14,7 +14,7 @@ def _load_config():
         try:
             with open(CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             pass
     return {}
 
@@ -25,37 +25,31 @@ def main():
     if len(sys.argv) >= 3:
         username = sys.argv[1]
         password = sys.argv[2]
-        frontend_url = sys.argv[3] if len(sys.argv) > 3 else config.get("frontend_url", "")
     else:
         username = config.get("username", "")
         password = config.get("password", "")
-        frontend_url = config.get("frontend_url", "")
 
     if not username or not password:
-        print("No credentials found. Run setup.py --client first,")
-        print("or provide: python -m client.start <username> <password>")
+        print("未找到凭据。请先运行 setup.py --client,")
+        print("或使用:python -m client.start <用户名> <密码>")
         sys.exit(1)
-
-    if not frontend_url:
-        frontend_url = config.get("server_url", "http://127.0.0.1:8000")
 
     # Start Agent in background
     agent_proc = subprocess.Popen(
         [sys.executable, "-m", "client.agent.main", username, password],
         cwd=PROJECT_ROOT,
     )
-    print("Agent started (PID {})".format(agent_proc.pid))
+    print("Agent 已启动 (PID {})".format(agent_proc.pid))
 
-    # Start UI (blocking)
+    # Start UI (blocking) — UI manages its own local frontend server
     try:
-        ui_script = os.path.join(ROOT_DIR, "ui", "main.py")
         subprocess.run(
-            [sys.executable, ui_script, frontend_url],
+            [sys.executable, "-m", "client.ui.main"],
             cwd=PROJECT_ROOT,
         )
     finally:
         agent_proc.terminate()
-        print("Agent stopped")
+        print("Agent 已停止")
 
 
 if __name__ == "__main__":
