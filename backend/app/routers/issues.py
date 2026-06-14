@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -53,7 +53,7 @@ def create_issue(
     if req.run_id:
         run = db.query(Run).filter(Run.id == req.run_id).first()
         if not run:
-            raise HTTPException(status_code=404, detail="Run not found")
+            raise HTTPException(status_code=404, detail="执行记录不存在")
         script_id = run.script_id
 
     issue = Issue(
@@ -97,9 +97,9 @@ def get_issue_log(
     import os
     issue = db.query(Issue).filter(Issue.id == issue_id, Issue.is_deleted == False).first()
     if not issue:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail="问题工单不存在")
     if current_user.role == "operator" and issue.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(status_code=403, detail="无权限访问")
 
     if not issue.run_id:
         return {"log": ""}
@@ -120,15 +120,15 @@ def resolve_issue(
 ):
     issue = db.query(Issue).filter(Issue.id == issue_id, Issue.is_deleted == False).first()
     if not issue:
-        raise HTTPException(status_code=404, detail="Issue not found")
+        raise HTTPException(status_code=404, detail="问题工单不存在")
     issue.status = "resolved"
     issue.resolve_note = req.resolve_note
     issue.resolved_by = current_user.id
-    issue.resolved_at = datetime.utcnow()
+    issue.resolved_at = datetime.now(timezone.utc)
     db.commit()
     write_audit(current_user.id, current_user.username, "resolve_issue",
                 target_type="issue", target_id=issue_id, detail=issue.title)
-    return {"message": "Issue resolved"}
+    return {"message": "问题已解决"}
 
 
 def _enrich_issue(issue, db):

@@ -1,6 +1,9 @@
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from app.database import SessionLocal
 from app.models import AuditLog
+
+logger = logging.getLogger(__name__)
 
 
 def write_audit(user_id, username, action, target_type=None, target_id=None, detail=None, ip_address=None):
@@ -15,11 +18,12 @@ def write_audit(user_id, username, action, target_type=None, target_id=None, det
             target_id=target_id,
             detail=detail,
             ip_address=ip_address,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         db.add(entry)
         db.commit()
     except Exception:
         db.rollback()
+        logger.warning("Failed to write audit log: action=%s user=%s", action, username)
     finally:
         db.close()

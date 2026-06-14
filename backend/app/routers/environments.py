@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -23,7 +23,7 @@ class EnvCreate(BaseModel):
     python_executable: Optional[str] = None
     output_dir: Optional[str] = None
     proxy: Optional[str] = None
-    extra_env: Optional[dict] = None
+    extra_env: Optional[Dict[str, Any]] = None
     is_default: bool = False
 
 
@@ -37,7 +37,7 @@ class EnvUpdate(BaseModel):
     python_executable: Optional[str] = None
     output_dir: Optional[str] = None
     proxy: Optional[str] = None
-    extra_env: Optional[dict] = None
+    extra_env: Optional[Dict[str, Any]] = None
     is_default: Optional[bool] = None
 
 
@@ -53,7 +53,7 @@ class EnvItem(BaseModel):
     python_executable: Optional[str] = None
     output_dir: Optional[str] = None
     proxy: Optional[str] = None
-    extra_env: Optional[dict] = None
+    extra_env: Optional[Dict[str, Any]] = None
     is_default: bool
     created_at: datetime
     updated_at: datetime
@@ -68,7 +68,7 @@ def _parse_extra(env):
     if isinstance(env.extra_env, str):
         try:
             item.extra_env = json.loads(env.extra_env)
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             item.extra_env = {}
     return item
 
@@ -126,7 +126,7 @@ def update_environment(
         Environment.id == env_id, Environment.user_id == current_user.id
     ).first()
     if not env:
-        raise HTTPException(status_code=404, detail="Environment not found")
+        raise HTTPException(status_code=404, detail="运行环境不存在")
 
     if req.is_default:
         db.query(Environment).filter(
@@ -157,12 +157,12 @@ def delete_environment(
         Environment.id == env_id, Environment.user_id == current_user.id
     ).first()
     if not env:
-        raise HTTPException(status_code=404, detail="Environment not found")
+        raise HTTPException(status_code=404, detail="运行环境不存在")
     db.delete(env)
     db.commit()
     write_audit(current_user.id, current_user.username, "delete_env",
                 target_type="environment", target_id=env_id, detail=env.name)
-    return {"message": "Deleted"}
+    return {"message": "已删除"}
 
 
 @router.get("/default", response_model=EnvItem)
@@ -174,7 +174,7 @@ def get_default_environment(
         Environment.user_id == current_user.id, Environment.is_default == True
     ).first()
     if not env:
-        raise HTTPException(status_code=404, detail="No default environment")
+        raise HTTPException(status_code=404, detail="未设置默认环境")
     return _parse_extra(env)
 
 
@@ -188,5 +188,5 @@ def get_environment(
         Environment.id == env_id, Environment.user_id == current_user.id
     ).first()
     if not env:
-        raise HTTPException(status_code=404, detail="Environment not found")
+        raise HTTPException(status_code=404, detail="运行环境不存在")
     return _parse_extra(env)
