@@ -27,7 +27,7 @@ def create_user(
 ):
     exists = db.query(User).filter(User.username == req.username).first()
     if exists:
-        raise HTTPException(status_code=400, detail="Username already exists")
+        raise HTTPException(status_code=400, detail="用户名已存在")
     user = User(
         username=req.username,
         password_hash=hash_password(req.password),
@@ -53,7 +53,7 @@ def update_user(
 ):
     user = db.query(User).filter(User.id == user_id, User.is_deleted == False).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="用户不存在")
     changes = []
     if req.display_name is not None:
         user.display_name = req.display_name
