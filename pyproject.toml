@@ -1,0 +1,21 @@
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+executionEnvironments = [
+    { root = "backend" }
+]
+exclude = [
+    ".venv",
+    "node_modules",
+    "frontend/dist",
+    "backend/.pytest_cache"
+]
+reportMissingTypeStubs = false
+reportUnannotatedClassAttribute = false
+reportCallInDefaultInitializer = false
+reportImplicitRelativeImport = false
+reportCallIssue = false
+reportOptionalCall = false
+reportArgumentType = false
+reportAttributeAccessIssue = false
+reportIncompatibleVariableOverride = false
