@@ -34,3 +34,19 @@ client_config.json
 
 # Docs plans (generated)
 docs/superpowers/plans/
+
+# Agent downloaded scripts
+3/
+
+# Runtime logs
+logs/
+
+# Client built assets (rebuilt from frontend)
+client/ui/static/
+
+# CodeGraph (local indexing)
+.codegraph/
+
+# Temporary backups
+docs/main_script3_backup.py
+docs/test/
