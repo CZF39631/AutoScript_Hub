@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -7,6 +8,8 @@ import threading
 import winreg
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 
 def _detect_browsers():
@@ -104,8 +107,8 @@ def _detect_python_versions():
                 if path and path.lower() not in seen and os.path.isfile(path):
                     seen.add(path.lower())
                     results.append({"version": version or "unknown", "path": os.path.normpath(path)})
-    except Exception:
-        pass
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug("py --list 检测已跳过: %s", e)
 
     # Registry: SOFTWARE\Python\PythonCore
     for hive, flags in [
@@ -149,6 +152,13 @@ def _detect_python_versions():
 
 class AgentHandler(BaseHTTPRequestHandler):
     get_status_fn = None
+    # Offline execution callbacks (design §5.x offline mode): UI calls /local/* when backend unreachable
+    list_local_scripts_fn = None     # () -> List[dict]
+    start_local_run_fn = None        # (body: dict) -> dict (local_run record)
+    list_local_runs_fn = None        # () -> List[dict]
+    get_local_run_fn = None          # (local_run_id: str) -> dict | None
+    get_local_run_log_fn = None      # (local_run_id: str) -> {"log": str}
+    get_connection_status_fn = None  # () -> {"online": bool, "last_online_at": ..., "pending_sync": int}
 
     def do_GET(self):
         if self.path == "/status":
@@ -158,6 +168,29 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._json(_detect_browsers())
         elif self.path == "/detect-python-versions":
             self._json(_detect_python_versions())
+        elif self.path == "/local/scripts":
+            self._json(self.list_local_scripts_fn() if self.list_local_scripts_fn else [])
+        elif self.path == "/local/runs":
+            self._json(self.list_local_runs_fn() if self.list_local_runs_fn else [])
+        elif self.path == "/local/connection":
+            self._json(self.get_connection_status_fn() if self.get_connection_status_fn else {"online": False})
+        elif self.path.startswith("/local/runs/") and self.path.endswith("/log"):
+            run_id = self.path[len("/local/runs/"):-len("/log")]
+            try:
+                result = self.get_local_run_log_fn(run_id) if self.get_local_run_log_fn else {"log": ""}
+                self._json(result)
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
+        elif self.path.startswith("/local/runs/"):
+            run_id = self.path[len("/local/runs/"):]
+            try:
+                result = self.get_local_run_fn(run_id) if self.get_local_run_fn else None
+                if result is None:
+                    self._json({"error": "not found"}, 404)
+                else:
+                    self._json(result)
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
         else:
             self._json({"error": "not found"}, 404)
 
@@ -208,6 +241,18 @@ class AgentHandler(BaseHTTPRequestHandler):
                     self._json({"error": str(e)}, 500)
             else:
                 self._json({"success": True, "note": "directory not found"})
+        elif self.path == "/local/execute":
+            data = self._read_json()
+            if not data:
+                return
+            if not self.start_local_run_fn:
+                self._json({"error": "local execution not available"}, 503)
+                return
+            try:
+                result = self.start_local_run_fn(data)
+                self._json(result)
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
         else:
             self._json({"error": "not found"}, 404)
 
@@ -216,7 +261,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
             return json.loads(body)
-        except Exception:
+        except (json.JSONDecodeError, ValueError, OSError):
             self._json({"error": "invalid json"}, 400)
             return None
 
@@ -238,8 +283,23 @@ class AgentHandler(BaseHTTPRequestHandler):
         pass
 
 
-def start_local_server(port, get_status_fn):
+def start_local_server(
+    port,
+    get_status_fn,
+    list_local_scripts_fn=None,
+    start_local_run_fn=None,
+    list_local_runs_fn=None,
+    get_local_run_fn=None,
+    get_local_run_log_fn=None,
+    get_connection_status_fn=None,
+):
     AgentHandler.get_status_fn = get_status_fn
+    AgentHandler.list_local_scripts_fn = list_local_scripts_fn
+    AgentHandler.start_local_run_fn = start_local_run_fn
+    AgentHandler.list_local_runs_fn = list_local_runs_fn
+    AgentHandler.get_local_run_fn = get_local_run_fn
+    AgentHandler.get_local_run_log_fn = get_local_run_log_fn
+    AgentHandler.get_connection_status_fn = get_connection_status_fn
     server = HTTPServer(("127.0.0.1", port), AgentHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     return t
