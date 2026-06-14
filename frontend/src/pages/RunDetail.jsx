@@ -26,6 +26,11 @@ export default function RunDetail() {
     api.get(`/api/runs/${id}`).then(r => setRun(r.data)).catch(() => message.error('加载失败')).finally(() => setLoading(false))
   }, [id])
 
+  // Called by LogViewer when SSE stream ends — refresh run status without flashing the spinner.
+  const onLogComplete = useCallback(() => {
+    api.get(`/api/runs/${id}`).then(r => setRun(r.data)).catch(() => {})
+  }, [id])
+
   useEffect(load, [load])
 
   const onCancel = async () => {
@@ -92,7 +97,7 @@ export default function RunDetail() {
         )}
         {run.params && <Descriptions.Item label="参数" span={2}><pre style={{ margin: 0 }}>{JSON.stringify(JSON.parse(run.params), null, 2)}</pre></Descriptions.Item>}
       </Descriptions>
-      <LogViewer runId={run.id} status={run.status} />
+      <LogViewer runId={run.id} status={run.status} onComplete={onLogComplete} />
 
       <Modal title="上报问题" open={issueModal} onCancel={() => setIssueModal(false)}
         confirmLoading={submitting} onOk={() => issueForm.submit()} okText="提交">

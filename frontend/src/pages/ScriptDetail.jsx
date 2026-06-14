@@ -3,6 +3,7 @@ import { Descriptions, Collapse, Tag, Spin, Button, Upload, Modal, Input, Form, 
 import { UploadOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useConnection } from '../contexts/ConnectionContext'
 import api from '../api/client'
 import ParamForm from '../components/ParamForm'
 
@@ -27,8 +28,10 @@ export default function ScriptDetail() {
   const { id } = useParams()
   const nav = useNavigate()
   const { user } = useAuth()
+  const { online, localApi } = useConnection()
   const [script, setScript] = useState(null)
   const [versions, setVersions] = useState([])
+  const [presets, setPresets] = useState({ developer: [], personal: [] })
   const [loading, setLoading] = useState(true)
   const [savedParams, setSavedParams] = useState(null)
   const [verModalOpen, setVerModalOpen] = useState(false)
@@ -36,11 +39,47 @@ export default function ScriptDetail() {
   const [environments, setEnvironments] = useState([])
   const [selectedEnvId, setSelectedEnvId] = useState(null)
   const [verForm] = Form.useForm()
+  const [offlineMode, setOfflineMode] = useState(false)
 
-  const canUpload = user?.role === 'admin' || user?.role === 'developer'
+  const canUpload = (user?.role === 'admin' || user?.role === 'developer') && online
+
+  const loadPresets = () => {
+    if (!online) return
+    api.get(`/api/scripts/${id}/presets`).then(r => setPresets(r.data)).catch(() => {})
+  }
+
+  const loadFromLocal = () => {
+    localApi.get('/local/scripts').then(r => {
+      const local = (r.data || []).find(s => s.id === parseInt(id))
+      if (local) {
+        const configJson = local.config_json || (local.config ? JSON.stringify(local.config) : '{}')
+        setScript({
+          id: local.id,
+          name: local.name,
+          description: local.description,
+          category: local.category,
+          latest_version: local.latest_version,
+          status: 'active',
+          type: 'local',
+          updated_at: null,
+          config_json: configJson,
+        })
+        setVersions([{ version: local.latest_version, changelog: '(本地缓存版本,离线可用)' }])
+        setEnvironments([])
+        setOfflineMode(true)
+      } else {
+        message.error('本地未缓存该脚本,无法离线使用')
+      }
+    }).catch(() => message.error('本地 Agent 不可用')).finally(() => setLoading(false))
+  }
 
   const loadScript = () => {
     setLoading(true)
+    if (!online) {
+      loadFromLocal()
+      setSavedParams(loadSavedParams(id))
+      return
+    }
     Promise.all([
       api.get(`/api/scripts/${id}`),
       api.get(`/api/scripts/${id}/versions`),
@@ -51,14 +90,66 @@ export default function ScriptDetail() {
       setEnvironments(e.data)
       const defEnv = e.data.find(e => e.is_default)
       if (defEnv) setSelectedEnvId(defEnv.id)
-    }).catch(() => message.error('加载失败')).finally(() => setLoading(false))
+      setOfflineMode(false)
+    }).catch(() => {
+      // Backend failed mid-request — fall back to local cache
+      loadFromLocal()
+    }).finally(() => setLoading(false))
 
     setSavedParams(loadSavedParams(id))
+    loadPresets()
   }
 
-  useEffect(loadScript, [id])
+  useEffect(loadScript, [id, online])
+
+  const onSavePreset = async (name, values) => {
+    await api.post(`/api/scripts/${id}/presets`, { name, values })
+    message.success('预设已保存')
+    loadPresets()
+  }
+
+  const onDeletePreset = async (presetId) => {
+    try {
+      await api.delete(`/api/presets/${presetId}`)
+      message.success('预设已删除')
+      loadPresets()
+    } catch (e) {
+      message.error(e.response?.data?.detail || '删除失败')
+    }
+  }
+
+  // Offline: parse developer presets directly from the script's config_json
+  // (personal presets require backend storage, so unavailable offline)
+  useEffect(() => {
+    if (offlineMode && script?.config_json) {
+      try {
+        const config = JSON.parse(script.config_json)
+        const devPresets = (config.presets || []).map(p => ({
+          name: p.name || 'Preset',
+          values: p.values || {},
+        }))
+        setPresets({ developer: devPresets, personal: [] })
+      } catch {
+        setPresets({ developer: [], personal: [] })
+      }
+    }
+  }, [offlineMode, script])
 
   const onExecute = async (params) => {
+    // Offline path: submit directly to the local Agent (design §5.x offline)
+    if (offlineMode || !online) {
+      try {
+        await localApi.post('/local/execute', {
+          script_id: parseInt(id),
+          params,
+        })
+        message.success('已离线提交执行,结果将在恢复连接后同步')
+        nav('/runs')
+      } catch (e) {
+        message.error(e.response?.data?.detail || e.message || '离线执行失败')
+      }
+      return
+    }
     try {
       await api.post('/api/runs/execute', {
         script_id: parseInt(id),
@@ -147,8 +238,11 @@ export default function ScriptDetail() {
           <ParamForm
             params={paramDefs}
             initialValues={savedParams}
+            presets={presets}
             onSubmit={onExecute}
             onSave={onSaveParams}
+            onSavePreset={onSavePreset}
+            onDeletePreset={onDeletePreset}
           />
         </div>
       )}

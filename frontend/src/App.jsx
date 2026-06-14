@@ -9,6 +9,7 @@ import {
 import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { ConnectionProvider, useConnection } from './contexts/ConnectionContext'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Scripts from './pages/Scripts'
@@ -26,6 +27,28 @@ const { Sider, Content } = Layout
 function PrivateRoute({ children }) {
   const { token } = useAuth()
   return token ? children : <Navigate to="/login" />
+}
+
+function OfflineBanner() {
+  const { online, agentOnline, pendingSync } = useConnection()
+  if (online) return null
+  const bg = agentOnline ? '#fffbe6' : '#fff1f0'
+  const border = agentOnline ? '#ffe58f' : '#ffa39e'
+  return (
+    <div style={{
+      background: bg, padding: '8px 24px', borderBottom: `1px solid ${border}`,
+      fontSize: 13,
+    }}>
+      {agentOnline ? (
+        <>
+          ⚠️ 与服务器断开,已切换到 <strong>离线模式</strong>。可执行已下载的脚本,结果会在恢复连接后自动同步
+          {pendingSync > 0 && <>(待同步 {pendingSync} 条)</>}
+        </>
+      ) : (
+        <>⚠️ 与服务器断开,且本地 Agent 不可用。请检查 Agent 进程是否运行</>
+      )}
+    </div>
+  )
 }
 
 function AppLayout() {
@@ -75,6 +98,7 @@ function AppLayout() {
         </div>
       </Sider>
       <Layout>
+        <OfflineBanner />
         <Content style={{ padding: 24, background: '#f5f5f5', minHeight: 'auto' }}>
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
@@ -98,12 +122,14 @@ function AppLayout() {
 export default function App() {
   return (
     <ConfigProvider locale={zhCN}>
-      <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/*" element={<PrivateRoute><AppLayout /></PrivateRoute>} />
-        </Routes>
-      </AuthProvider>
+      <ConnectionProvider>
+        <AuthProvider>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/*" element={<PrivateRoute><AppLayout /></PrivateRoute>} />
+          </Routes>
+        </AuthProvider>
+      </ConnectionProvider>
     </ConfigProvider>
   )
 }
