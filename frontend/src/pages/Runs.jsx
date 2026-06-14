@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { Table, Tag, Button, Select, DatePicker, Space, message, Tooltip } from 'antd'
 import { FolderOpenOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -49,6 +49,32 @@ export default function Runs() {
   useEffect(load, [statusFilter, userFilter, dateRange])
 
   const hasAlive = useMemo(() => runs.some(r => r.status === 'pending' || r.status === 'running'), [runs])
+
+  // Track previous statuses so we can fire a toast when a run finishes.
+  const prevStatusRef = useRef({})
+
+  useEffect(() => {
+    runs.forEach(r => {
+      const prev = prevStatusRef.current[r.id]
+      // Only fire if we previously saw it as pending/running and now it's terminal
+      if (prev && (prev === 'pending' || prev === 'running') &&
+          (r.status === 'success' || r.status === 'failed')) {
+        if (r.status === 'success') {
+          message.success(`${r.script_name || '脚本'} 执行完成`)
+        } else {
+          message.error(`${r.script_name || '脚本'} 执行失败`)
+        }
+      }
+      prevStatusRef.current[r.id] = r.status
+    })
+  }, [runs])
+
+  // Auto-refresh while any run is alive (design §5.5 web notification)
+  useEffect(() => {
+    if (!hasAlive) return
+    const interval = setInterval(load, 5000)
+    return () => clearInterval(interval)
+  }, [hasAlive, statusFilter, userFilter, dateRange])
 
   const columns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 55 },

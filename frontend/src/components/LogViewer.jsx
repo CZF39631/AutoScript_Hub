@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Spin } from 'antd'
 import api from '../api/client'
 
-export default function LogViewer({ runId, status }) {
+export default function LogViewer({ runId, status, onComplete }) {
   const [log, setLog] = useState('')
   const [loading, setLoading] = useState(true)
   const [streaming, setStreaming] = useState(false)
@@ -12,12 +12,22 @@ export default function LogViewer({ runId, status }) {
 
   useEffect(() => {
     if (isAlive) {
-      // SSE for live runs
+      // SSE for live runs — connect directly to backend (bypass local proxy)
       setStreaming(true)
-      setLoading(false)  // Show empty state immediately for SSE
+      setLoading(false)
       const token = localStorage.getItem('token')
-      const url = `/api/runs/${runId}/log/stream?token=${token}`
+      const backendUrl = window._BACKEND_URL || 'http://127.0.0.1:8000'
+      const url = `${backendUrl}/api/runs/${runId}/log/stream?token=${token}`
       const es = new EventSource(url)
+
+      const finish = () => {
+        // Final full fetch to ensure completeness, then notify parent so it can refresh status.
+        api.get(`/api/runs/${runId}/log`).then(r => {
+          setLog(r.data.log || '')
+        }).finally(() => {
+          if (onComplete) onComplete()
+        })
+      }
 
       es.onmessage = (e) => {
         try {
@@ -25,10 +35,7 @@ export default function LogViewer({ runId, status }) {
           if (data.done) {
             es.close()
             setStreaming(false)
-            // Final full fetch to ensure completeness
-            api.get(`/api/runs/${runId}/log`).then(r => {
-              setLog(r.data.log || '')
-            })
+            finish()
             return
           }
           if (data.log) {
@@ -41,11 +48,7 @@ export default function LogViewer({ runId, status }) {
       es.onerror = () => {
         es.close()
         setStreaming(false)
-        // Fallback: fetch full log once
-        api.get(`/api/runs/${runId}/log`).then(r => {
-          setLog(r.data.log || '')
-          setLoading(false)
-        })
+        finish()
       }
 
       return () => es.close()
@@ -55,7 +58,7 @@ export default function LogViewer({ runId, status }) {
         setLog(r.data.log || '')
       }).catch(() => {}).finally(() => setLoading(false))
     }
-  }, [runId, isAlive])
+  }, [runId, isAlive, onComplete])
 
   useEffect(() => {
     if (preRef.current) {
