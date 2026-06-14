@@ -22,6 +22,11 @@ def _is_admin(current_user):
     return current_user.role == "admin"
 
 
+def _can_manage_scripts(current_user):
+    """Admin and developer can both see all scripts (design §1.3: developer uploads/manages scripts)."""
+    return current_user.role in ("admin", "developer")
+
+
 @router.get("", response_model=List[ScriptBrief])
 def list_scripts(
     category: Optional[str] = None,
@@ -32,7 +37,8 @@ def list_scripts(
     if category:
         q = q.filter(Script.category == category)
 
-    if _is_admin(current_user):
+    # Admin and developer see all scripts (design §1.3: developer manages scripts)
+    if _can_manage_scripts(current_user):
         return q.order_by(Script.updated_at.desc()).all()
 
     # Non-admin: only installed scripts
@@ -78,23 +84,23 @@ def install_script(
     db: Session = Depends(get_db),
 ):
     if _is_admin(current_user):
-        return {"message": "Admin has access to all scripts"}
+        return {"message": "管理员拥有所有脚本权限"}
 
     script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False, Script.status == "active").first()
     if not script:
-        raise HTTPException(status_code=404, detail="Script not found")
+        raise HTTPException(status_code=404, detail="脚本不存在")
 
     existing = db.query(UserScript).filter(
         UserScript.user_id == current_user.id, UserScript.script_id == script_id
     ).first()
     if existing:
-        return {"message": "Already installed"}
+        return {"message": "已安装"}
 
     db.add(UserScript(user_id=current_user.id, script_id=script_id))
     db.commit()
     write_audit(current_user.id, current_user.username, "install_script",
                 target_type="script", target_id=script_id, detail=script.name)
-    return {"message": "Installed"}
+    return {"message": "已安装"}
 
 
 @router.post("/{script_id}/uninstall")
@@ -104,18 +110,18 @@ def uninstall_script(
     db: Session = Depends(get_db),
 ):
     if _is_admin(current_user):
-        return {"message": "Admin cannot uninstall"}
+        return {"message": "管理员无法卸载"}
 
     existing = db.query(UserScript).filter(
         UserScript.user_id == current_user.id, UserScript.script_id == script_id
     ).first()
     if not existing:
-        raise HTTPException(status_code=404, detail="Not installed")
+        raise HTTPException(status_code=404, detail="尚未安装该脚本")
     db.delete(existing)
     db.commit()
     write_audit(current_user.id, current_user.username, "uninstall_script",
                 target_type="script", target_id=script_id)
-    return {"message": "Uninstalled"}
+    return {"message": "已卸载"}
 
 
 @router.post("/upload", response_model=ScriptDetail)
@@ -126,11 +132,11 @@ def upload_script(
     db: Session = Depends(get_db),
 ):
     if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
+        raise HTTPException(status_code=400, detail="未提供文件")
 
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in (".py", ".zip"):
-        raise HTTPException(status_code=400, detail="Only .py and .zip files allowed")
+        raise HTTPException(status_code=400, detail="仅支持 .py 和 .zip 文件")
 
     script_type = "zip" if ext == ".zip" else "py"
 
@@ -151,7 +157,7 @@ def upload_script(
 
         config = parse_script_config(parse_path)
         if not config:
-            raise HTTPException(status_code=400, detail="Script must have a config() function")
+            raise HTTPException(status_code=400, detail="脚本必须包含 config() 函数")
 
         script = Script(
             name=config.get("name", file.filename),
@@ -198,14 +204,14 @@ def upload_version(
 ):
     script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
     if not script:
-        raise HTTPException(status_code=404, detail="Script not found")
+        raise HTTPException(status_code=404, detail="脚本不存在")
 
     if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
+        raise HTTPException(status_code=400, detail="未提供文件")
 
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in (".py", ".zip"):
-        raise HTTPException(status_code=400, detail="Only .py and .zip files allowed")
+        raise HTTPException(status_code=400, detail="仅支持 .py 和 .zip 文件")
 
     script_type = "zip" if ext == ".zip" else "py"
     new_version = script.latest_version + 1
@@ -227,7 +233,7 @@ def upload_version(
 
         config = parse_script_config(parse_path)
         if not config:
-            raise HTTPException(status_code=400, detail="Script must have a config() function")
+            raise HTTPException(status_code=400, detail="脚本必须包含 config() 函数")
 
         save_script_file(script.id, new_version, tmp_path, script_type)
 
@@ -266,8 +272,41 @@ def get_script(
 ):
     script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
     if not script:
-        raise HTTPException(status_code=404, detail="Script not found")
+        raise HTTPException(status_code=404, detail="脚本不存在")
     return script
+
+
+@router.get("/{script_id}/download")
+def download_script(
+    script_id: int,
+    version: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Download script files as a ZIP archive."""
+    from fastapi.responses import FileResponse
+    from app.services.script_storage import get_script_file_path
+
+    script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
+    if not script:
+        raise HTTPException(status_code=404, detail="脚本不存在")
+
+    ver = version or script.latest_version
+    script_dir = get_script_file_path(script_id, ver)
+    if not script_dir:
+        raise HTTPException(status_code=404, detail="服务器上找不到脚本文件")
+
+    # Zip the script directory
+    import tempfile
+    import shutil
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    tmp_name = tmp.name
+    tmp.close()
+
+    shutil.make_archive(tmp_name.replace(".zip", ""), "zip", script_dir)
+
+    filename = "{}-v{}.zip".format(script.name.replace(" ", "_"), ver)
+    return FileResponse(tmp_name, filename=filename, media_type="application/zip")
 
 
 @router.get("/{script_id}/versions", response_model=List[ScriptVersionBrief])
@@ -289,13 +328,13 @@ def disable_script(
 ):
     script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
     if not script:
-        raise HTTPException(status_code=404, detail="Script not found")
+        raise HTTPException(status_code=404, detail="脚本不存在")
     script.status = "disabled"
     script.updated_by = current_user.id
     db.commit()
     write_audit(current_user.id, current_user.username, "disable_script",
                 target_type="script", target_id=script.id, detail=script.name)
-    return {"message": "Script disabled"}
+    return {"message": "脚本已禁用"}
 
 
 @router.post("/{script_id}/enable")
@@ -306,10 +345,10 @@ def enable_script(
 ):
     script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
     if not script:
-        raise HTTPException(status_code=404, detail="Script not found")
+        raise HTTPException(status_code=404, detail="脚本不存在")
     script.status = "active"
     script.updated_by = current_user.id
     db.commit()
     write_audit(current_user.id, current_user.username, "enable_script",
                 target_type="script", target_id=script.id, detail=script.name)
-    return {"message": "Script enabled"}
+    return {"message": "脚本已启用"}
