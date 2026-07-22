@@ -212,6 +212,7 @@ def test_workflows_cover_windows_dual_arch_images_and_both_release_hosts():
     assert 'docker run --platform "$platform"' in release
     assert '"${{ github.ref_name }}".TrimStart' not in release
     assert "write_checksums.py" in release
+    assert 'pattern: "!*.dockerbuild"' in release
 
 
 def test_release_windows_job_uses_the_exact_private_runtime_version():
