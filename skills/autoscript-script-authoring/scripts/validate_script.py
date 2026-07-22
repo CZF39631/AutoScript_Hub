@@ -16,12 +16,18 @@ def _live_validator():
     return validate
 
 
+def _console_text(value):
+    """Keep standalone diagnostics printable on legacy Windows code pages."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return str(value).encode(encoding, errors="backslashreplace").decode(encoding)
+
+
 def run(path, strict=False):
     report = _live_validator()(path, strict=strict)
     for issue in report.errors:
-        print(f"ERROR {issue.code}: {issue.message}")
+        print(f"ERROR {issue.code}: {_console_text(issue.message)}")
     for issue in report.warnings:
-        print(f"WARNING {issue.code}: {issue.message}")
+        print(f"WARNING {issue.code}: {_console_text(issue.message)}")
     print(f"{len(report.errors)} errors, {len(report.warnings)} warnings")
     return 0 if not report.errors and (not strict or not report.warnings) else 1
 

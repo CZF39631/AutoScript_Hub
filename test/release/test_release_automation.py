@@ -1,6 +1,7 @@
 from pathlib import Path
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import os
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,43 @@ def main(mode):
 
     assert completed.returncode == 1
     assert "params.select-default" in completed.stdout
+
+
+def test_standalone_skill_validator_reports_rule_codes_with_legacy_console_encoding(tmp_path):
+    source_skill = ROOT / "skills" / "autoscript-script-authoring"
+    standalone_skill = tmp_path / "autoscript-script-authoring"
+    shutil.copytree(source_skill, standalone_skill)
+    invalid_script = tmp_path / "invalid_select.py"
+    invalid_script.write_text(
+        """def config():
+    return {'name': 'invalid', 'version': '1.0.0', 'description': '', 'category': '',
+            'params': [{'key': 'mode', 'type': 'select', 'label': 'Mode',
+                        'options': ['safe'], 'default': 'fast'}],
+            'requirements': [], 'timeout': 30, 'presets': []}
+
+def main(mode):
+    return None
+""",
+        encoding="utf-8",
+    )
+    environment = os.environ | {"PYTHONIOENCODING": "cp1252"}
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(standalone_skill / "scripts" / "validate_script.py"),
+            str(invalid_script),
+            "--strict",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert "params.select-default" in completed.stdout
+    assert "UnicodeEncodeError" not in completed.stderr
 
 
 def test_asset_builder_outputs_standalone_skill_and_deploy_bundles(tmp_path):
