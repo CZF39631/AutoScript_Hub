@@ -299,6 +299,17 @@ def test_anonymous_mirror_verifier_requires_identical_assets(tmp_path):
         completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
+        single_source_command = [
+            sys.executable,
+            "release/scripts/verify_release_mirrors.py",
+            "--directory", str(release),
+            "--base-url", f"{base}/github",
+            "--attempts", "1",
+            "--delay", "0",
+        ]
+        single_source = subprocess.run(single_source_command, cwd=ROOT, capture_output=True, text=True)
+        assert single_source.returncode == 0, single_source.stdout + single_source.stderr
+
         (webroot / "gitee" / "autoscript-hub-update.json").write_bytes(b"divergent")
         rejected = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
         assert rejected.returncode != 0
