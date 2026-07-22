@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Switch, Tag, Select, Radio, Spin, Collapse, Space, Popconfirm, message } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, DesktopOutlined, PythonOutlined } from '@ant-design/icons'
+import { useEffect, useState } from 'react'
+import { Alert, Table, Button, Modal, Form, Input, InputNumber, Switch, Tag, Select, Spin, Collapse, Space, Popconfirm, message } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, DesktopOutlined } from '@ant-design/icons'
 import api from '../api/client'
+import { useConnection } from '../contexts/ConnectionContext'
 
 const AGENT_URL = 'http://127.0.0.1:18080'
 
@@ -17,19 +18,12 @@ export default function Environments() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [form] = Form.useForm()
+  const { agentOnline, localApi } = useConnection()
+  const [runtimeInfo, setRuntimeInfo] = useState(null)
 
   // Browser detection
   const [browsers, setBrowsers] = useState([])
   const [detectingBrowser, setDetectingBrowser] = useState(false)
-
-  // Python detection
-  const [pythonVersions, setPythonVersions] = useState([])
-  const [detectingPython, setDetectingPython] = useState(false)
-
-  // Venv management
-  const [venvMode, setVenvMode] = useState('default')
-  const [creatingVenv, setCreatingVenv] = useState(false)
-  const [venvStatus, setVenvStatus] = useState('none')
 
   const load = () => {
     setLoading(true)
@@ -39,6 +33,14 @@ export default function Environments() {
   }
 
   useEffect(load, [])
+
+  useEffect(() => {
+    if (!agentOnline) {
+      setRuntimeInfo(null)
+      return
+    }
+    localApi.get('/local/runtime').then(r => setRuntimeInfo(r.data)).catch(() => setRuntimeInfo(null))
+  }, [agentOnline, localApi])
 
   // --- Detection helpers ---
 
@@ -57,114 +59,18 @@ export default function Environments() {
     }
   }
 
-  const detectPythonVersions = async () => {
-    setDetectingPython(true)
-    try {
-      const resp = await fetch(`${AGENT_URL}/detect-python-versions`)
-      if (!resp.ok) throw new Error()
-      const data = await resp.json()
-      setPythonVersions(data)
-      if (data.length === 0) message.info('未检测到 Python')
-    } catch {
-      message.error('检测失败，请确认 Agent 已启动')
-    } finally {
-      setDetectingPython(false)
-    }
-  }
-
-  // --- Venv management ---
-
-  const createVenv = async () => {
-    const pythonPath = form.getFieldValue('selected_python_path')
-    const envName = form.getFieldValue('name') || 'env'
-    if (!pythonPath) {
-      message.error('请先选择 Python 版本')
-      return
-    }
-    setCreatingVenv(true)
-    setVenvStatus('creating')
-    try {
-      const slug = envName.replace(/[^a-zA-Z0-9_-]/g, '_')
-      const venvPath = form.getFieldValue('venv_path') || `D:\\python项目\\AutoScript_Hub\\.envs\\${slug}`
-
-      const resp = await fetch(`${AGENT_URL}/create-venv`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ python_executable: pythonPath, venv_path: venvPath }),
-      })
-      const data = await resp.json()
-      if (!resp.ok) {
-        message.error(data.error || '创建失败')
-        setVenvStatus('none')
-        return
-      }
-      // Find the version label for the selected python
-      const selected = pythonVersions.find(v => v.path === pythonPath)
-      form.setFieldsValue({
-        venv_path: venvPath,
-        python_executable: data.venv_python,
-        python_version: selected?.version || '',
-      })
-      setVenvStatus('ready')
-      // Save to backend immediately if editing
-      if (editingId) {
-        await api.put(`/api/environments/${editingId}`, {
-          venv_path: venvPath,
-          python_executable: data.venv_python,
-          python_version: selected?.version || '',
-          venv_status: 'ready',
-        })
-      }
-      message.success('虚拟环境创建成功')
-    } catch (e) {
-      message.error('创建失败: ' + (e.message || '未知错误'))
-      setVenvStatus('none')
-    } finally {
-      setCreatingVenv(false)
-    }
-  }
-
-  const deleteVenv = async () => {
-    const venvPath = form.getFieldValue('venv_path')
-    if (!venvPath) return
-    try {
-      await fetch(`${AGENT_URL}/delete-venv`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ venv_path: venvPath }),
-      })
-      form.setFieldsValue({
-        venv_path: null, python_executable: null, python_version: null,
-      })
-      setVenvStatus('none')
-      if (editingId) {
-        await api.put(`/api/environments/${editingId}`, {
-          venv_path: null, python_executable: null, python_version: null, venv_status: 'none',
-        })
-      }
-      message.success('虚拟环境已删除')
-    } catch {
-      message.error('删除失败')
-    }
-  }
-
   // --- Modal handlers ---
 
   const openCreate = () => {
     setEditingId(null)
     form.resetFields()
     form.setFieldsValue(emptyForm)
-    setVenvMode('default')
-    setVenvStatus('none')
     setModalOpen(true)
     if (browsers.length === 0) detectBrowsers()
-    if (pythonVersions.length === 0) detectPythonVersions()
   }
 
   const openEdit = (record) => {
     setEditingId(record.id)
-    setVenvMode(record.python_executable ? 'custom' : 'default')
-    setVenvStatus(record.venv_status || (record.python_executable ? 'ready' : 'none'))
     form.setFieldsValue({
       name: record.name,
       browser_port: record.browser_port,
@@ -182,7 +88,6 @@ export default function Environments() {
     })
     setModalOpen(true)
     if (browsers.length === 0) detectBrowsers()
-    if (pythonVersions.length === 0) detectPythonVersions()
   }
 
   const onSubmit = async (values) => {
@@ -196,7 +101,10 @@ export default function Environments() {
       }
       const payload = {
         ...values,
-        venv_status: venvStatus,
+        python_version: null,
+        venv_path: null,
+        venv_status: 'managed',
+        python_executable: null,
         extra_env: Object.keys(extraEnv).length > 0 ? extraEnv : null,
       }
       delete payload.extra_env_raw
@@ -218,16 +126,6 @@ export default function Environments() {
 
   const onDelete = async (id) => {
     try {
-      const env = envs.find(e => e.id === id)
-      if (env?.venv_path) {
-        try {
-          await fetch(`${AGENT_URL}/delete-venv`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ venv_path: env.venv_path }),
-          })
-        } catch { /* ignore */ }
-      }
       await api.delete(`/api/environments/${id}`)
       message.success('已删除')
       load()
@@ -242,13 +140,7 @@ export default function Environments() {
     { title: '名称', dataIndex: 'name', key: 'name', width: 140 },
     {
       title: 'Python', key: 'python', width: 120,
-      render: (_, r) => {
-        if (r.venv_status === 'ready' && r.python_version)
-          return <Tag color="green">venv {r.python_version}</Tag>
-        if (r.venv_status === 'creating')
-          return <Tag color="blue">创建中</Tag>
-        return <Tag>默认</Tag>
-      },
+      render: () => <Tag color="green">自动隔离</Tag>,
     },
     { title: '浏览器端口', dataIndex: 'browser_port', key: 'port', width: 90, render: v => v || '-' },
     { title: '浏览器路径', dataIndex: 'browser_path', key: 'bpath', ellipsis: true, render: v => v || '-' },
@@ -278,57 +170,14 @@ export default function Environments() {
       key: 'python',
       label: 'Python 虚拟环境',
       children: (
-        <>
-          <Form.Item label="环境模式">
-            <Radio.Group value={venvMode} onChange={e => setVenvMode(e.target.value)}>
-              <Radio value="default">使用项目默认 (.venv)</Radio>
-              <Radio value="custom">使用自定义虚拟环境</Radio>
-            </Radio.Group>
-          </Form.Item>
-          {venvMode === 'custom' && (
-            <>
-              <Form.Item label="选择 Python 版本">
-                <Space.Compact style={{ width: '100%' }}>
-                  <Form.Item name="selected_python_path" noStyle>
-                    <Select
-                      placeholder="选择检测到的 Python 版本"
-                      style={{ width: '100%' }}
-                      options={pythonVersions.map(v => ({
-                        label: `Python ${v.version} - ${v.path}`,
-                        value: v.path,
-                      }))}
-                    />
-                  </Form.Item>
-                </Space.Compact>
-                <div style={{ marginTop: 4 }}>
-                  {detectingPython ? <Spin size="small" /> : (
-                    <Button size="small" icon={<DesktopOutlined />} onClick={detectPythonVersions}>检测 Python 版本</Button>
-                  )}
-                </div>
-              </Form.Item>
-              <Form.Item name="venv_path" label="虚拟环境路径">
-                <Input placeholder="如：D:\项目\.envs\my-env（留空自动生成）" />
-              </Form.Item>
-              <div style={{ marginBottom: 16 }}>
-                {venvStatus === 'ready' ? (
-                  <Space>
-                    <Tag color="green">已就绪</Tag>
-                    <span style={{ fontSize: 12, color: '#888' }}>{form.getFieldValue('python_executable')}</span>
-                    <Popconfirm title="确定删除虚拟环境？" onConfirm={deleteVenv} okText="删除" cancelText="取消">
-                      <Button size="small" danger>删除环境</Button>
-                    </Popconfirm>
-                  </Space>
-                ) : venvStatus === 'creating' ? (
-                  <Spin tip="创建中..." />
-                ) : (
-                  <Button type="primary" size="small" loading={creatingVenv} onClick={createVenv}>
-                    创建虚拟环境
-                  </Button>
-                )}
-              </div>
-            </>
-          )}
-        </>
+        <Alert
+          type={runtimeInfo?.status === 'ready' ? 'success' : 'info'}
+          showIcon
+          message="私有 Python 3.11.9"
+          description={runtimeInfo?.status === 'ready'
+            ? `已就绪：${runtimeInfo.path}。脚本依赖会按指纹自动创建、校验并复用独立环境。`
+            : '请在 Windows 客户端中查看运行时状态；安装器会提供私有 Python，脚本不使用系统 Python。'}
+        />
       ),
     },
     {

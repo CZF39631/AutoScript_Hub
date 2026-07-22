@@ -1,0 +1,175 @@
+name: Release
+
+on:
+  push:
+    tags: ['v0.9.*', 'v1.*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  windows:
+    needs: ci
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11.9'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '20', cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - run: choco install innosetup --no-progress -y
+      - run: python -m pip install -r backend/requirements.txt -r client/requirements.txt
+      - shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          & release/windows/build.ps1 -Version $version
+      - uses: actions/upload-artifact@v4
+        with: {name: windows-release, path: release-output/AutoScript-Hub-Setup-*.exe, if-no-files-found: error}
+
+  bundles:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python release/scripts/build_release_assets.py --version "${GITHUB_REF_NAME#v}" --output release-output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-bundles
+          path: |
+            release-output/autoscript-script-authoring-*.zip
+            release-output/autoscript-hub-server-deploy-*.zip
+            release-output/SHA256SUMS.txt
+          if-no-files-found: error
+
+  image:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/autoscript-hub-server" >> "$GITHUB_OUTPUT"
+      - name: Resolve image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.release.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=beta,enable=${{ startsWith(github.ref_name, 'v0.9.') }}
+            type=raw,value=stable,enable=${{ startsWith(github.ref_name, 'v1.') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref_name, 'v1.') }}
+      - name: Build and push linux/amd64,linux/arm64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            AUTOSCRIPT_VERSION=${{ steps.release.outputs.version }}
+            AUTOSCRIPT_CHANNEL=${{ startsWith(github.ref_name, 'v1.') && 'stable' || 'beta' }}
+      - name: Smoke-test the published amd64 and arm64 images
+        shell: bash
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          for entry in "linux/amd64:18090" "linux/arm64:18091"; do
+            platform="${entry%:*}"
+            port="${entry##*:}"
+            name="autoscript-smoke-${platform##*/}"
+            docker run --platform "$platform" -d --name "$name" -p "127.0.0.1:${port}:8000" \
+              -e JWT_SECRET=release-smoke-only -e ADMIN_PASSWORD=release-smoke-only "$IMAGE"
+            ready=0
+            for attempt in $(seq 1 60); do
+              if curl -fsS "http://127.0.0.1:${port}/api/health/ready"; then ready=1; break; fi
+              sleep 2
+            done
+            if [ "$ready" -ne 1 ]; then docker logs "$name"; exit 1; fi
+            docker rm -f "$name"
+          done
+
+  publish:
+    needs: [windows, bundles, image]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      GITEE_OWNER: ${{ vars.GITEE_OWNER }}
+      GITEE_REPO: ${{ vars.GITEE_REPO }}
+      GITEE_ENABLED: ${{ secrets.GITEE_TOKEN != '' && vars.GITEE_OWNER != '' && vars.GITEE_REPO != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: {path: release-output, merge-multiple: true}
+      - run: python -m pip install cryptography requests
+      - name: Require signing secret
+        run: test -n "${{ secrets.UPDATE_PRIVATE_KEY_B64 }}"
+      - name: Restore signing key
+        run: echo '${{ secrets.UPDATE_PRIVATE_KEY_B64 }}' | base64 -d > update-private-key.pem
+      - name: Create draft releases and upload base assets
+        id: release_hosts
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          GH_PRERELEASE=()
+          if [[ "$GITHUB_REF_NAME" == v0.9.* ]]; then GH_PRERELEASE=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" --draft "${GH_PRERELEASE[@]}" --title "$GITHUB_REF_NAME" --notes "AutoScript Hub $VERSION"
+          gh release upload "$GITHUB_REF_NAME" release-output/*.exe release-output/*.zip --clobber
+          if [[ "$GITEE_ENABLED" == "true" ]]; then
+            GITEE_RELEASE_ID="$(python release/scripts/gitee_release.py create --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --tag "$GITHUB_REF_NAME")"
+            test -n "$GITEE_RELEASE_ID"
+            echo "gitee_release_id=$GITEE_RELEASE_ID" >> "$GITHUB_OUTPUT"
+            python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" $(printf -- '--file %q ' release-output/*.exe release-output/*.zip)
+          fi
+      - name: Sign and mirror update manifest
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          INSTALLER="release-output/AutoScript-Hub-Setup-$VERSION.exe"
+          URLS=(--url "https://github.com/${GITHUB_REPOSITORY}/releases/download/$GITHUB_REF_NAME/$(basename "$INSTALLER")")
+          if [[ "$GITEE_ENABLED" == "true" ]]; then
+            URLS=(--url "https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME/$(basename "$INSTALLER")" "${URLS[@]}")
+          fi
+          python release/scripts/make_update_manifest.py --version "$VERSION" --installer "$INSTALLER" --private-key update-private-key.pem --output release-output "${URLS[@]}"
+          python release/scripts/write_checksums.py --directory release-output
+          gh release upload "$GITHUB_REF_NAME" release-output/autoscript-hub-update.json release-output/autoscript-hub-update.json.sig release-output/SHA256SUMS.txt --clobber
+          if [[ "$GITEE_ENABLED" == "true" ]]; then
+            python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "${{ steps.release_hosts.outputs.gitee_release_id }}" --file release-output/autoscript-hub-update.json --file release-output/autoscript-hub-update.json.sig --file release-output/SHA256SUMS.txt
+          fi
+      - name: Publish both release hosts
+        run: |
+          GITEE_PRERELEASE=false
+          if [[ "$GITHUB_REF_NAME" == v0.9.* ]]; then GITEE_PRERELEASE=true; fi
+          if [[ "$GITEE_ENABLED" == "true" ]]; then
+            python release/scripts/gitee_release.py publish --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "${{ steps.release_hosts.outputs.gitee_release_id }}" --prerelease "$GITEE_PRERELEASE"
+          fi
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+      - name: Verify configured public mirrors anonymously
+        run: |
+          MIRRORS=(--base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME")
+          if [[ "$GITEE_ENABLED" == "true" ]]; then
+            MIRRORS+=(--base-url "https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME")
+          fi
+          python release/scripts/verify_release_mirrors.py --directory release-output "${MIRRORS[@]}"
+      - name: Remove partial releases after any publication failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          gh release delete "$GITHUB_REF_NAME" --yes || true
+          GITEE_RELEASE_ID="${{ steps.release_hosts.outputs.gitee_release_id }}"
+          if [ -n "$GITEE_RELEASE_ID" ]; then
+            python release/scripts/gitee_release.py delete --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" || true
+          fi

@@ -1,9 +1,11 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useState, useMemo, useRef } from 'react'
 import { Table, Tag, Button, Select, DatePicker, Space, message, Tooltip } from 'antd'
 import { FolderOpenOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+import { useConnection } from '../contexts/ConnectionContext'
+import { canOpenResultLocally, firstResultPath, loadRunList } from '../api/offlineData'
 
 const { RangePicker } = DatePicker
 
@@ -26,19 +28,24 @@ export default function Runs() {
   const [dateRange, setDateRange] = useState(null)
   const nav = useNavigate()
   const { user } = useAuth()
+  const { online, agentOnline, agentId, localApi } = useConnection()
 
   const isAdmin = user?.role === 'admin' || user?.role === 'developer'
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true)
     const params = new URLSearchParams()
     if (statusFilter) params.set('status', statusFilter)
     if (userFilter) params.set('user_id', userFilter)
     if (dateRange && dateRange[0]) params.set('date_from', dateRange[0].startOf('day').toISOString())
     if (dateRange && dateRange[1]) params.set('date_to', dateRange[1].endOf('day').toISOString())
-    api.get(`/api/runs?${params.toString()}`).then(r => setRuns(r.data))
+    loadRunList({ online, api, localApi, query: params.toString() }).then(data => {
+      let result = data
+      if (!online && statusFilter) result = result.filter(r => r.status === statusFilter)
+      setRuns(result)
+    })
       .catch(() => message.error('加载失败')).finally(() => setLoading(false))
-  }
+  }, [online, localApi, statusFilter, userFilter, dateRange])
 
   useEffect(() => {
     if (isAdmin) {
@@ -46,7 +53,7 @@ export default function Runs() {
     }
   }, [isAdmin])
 
-  useEffect(load, [statusFilter, userFilter, dateRange])
+  useEffect(load, [load])
 
   const hasAlive = useMemo(() => runs.some(r => r.status === 'pending' || r.status === 'running'), [runs])
 
@@ -74,7 +81,17 @@ export default function Runs() {
     if (!hasAlive) return
     const interval = setInterval(load, 5000)
     return () => clearInterval(interval)
-  }, [hasAlive, statusFilter, userFilter, dateRange])
+  }, [hasAlive, load])
+
+  const openLocalResult = async (run) => {
+    try {
+      const path = firstResultPath(run.result_files)
+      if (!path) throw new Error('没有可打开的结果路径')
+      await localApi.post('/local/results/open', { path })
+    } catch (error) {
+      message.error(error.response?.data?.error || error.message || '打开失败')
+    }
+  }
 
   const columns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 55 },
@@ -106,11 +123,11 @@ export default function Runs() {
         <Space>
           <Button type="link" onClick={() => nav(`/runs/${r.id}`)}>详情</Button>
           {r.result_files && (
-            <Tooltip title="打开结果文件">
-              <Button type="link" icon={<FolderOpenOutlined />} onClick={() => {
-                api.post(`/api/runs/${r.id}/open-result`).catch(e => message.error(e.response?.data?.detail || '打开失败'))
-              }} />
-            </Tooltip>
+            canOpenResultLocally(r, agentOnline, agentId) ? (
+              <Tooltip title="在执行客户端打开结果文件">
+                <Button type="link" icon={<FolderOpenOutlined />} onClick={() => openLocalResult(r)} />
+              </Tooltip>
+            ) : <Tooltip title="结果保存在执行客户端"><span>本地结果</span></Tooltip>
           )}
         </Space>
       )

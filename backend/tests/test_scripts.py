@@ -1,4 +1,6 @@
 import os
+import io
+import zipfile
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -73,3 +75,41 @@ def test_list_versions(client, dev_token):
     resp = client.get(f"/api/scripts/{sid}/versions", headers={"Authorization": f"Bearer {dev_token}"})
     assert resp.status_code == 200
     assert len(resp.json()) == 1
+
+
+def test_upload_rejects_main_signature_mismatch_with_structured_error(client, dev_token):
+    source = b'''\
+def config():
+    return {"name":"bad","version":"1.0.0","description":"bad","category":"test","params":[{"key":"value","type":"text","label":"Value"}],"requirements":[],"timeout":60}
+
+def main():
+    return None
+'''
+
+    response = client.post(
+        "/api/scripts/upload",
+        files={"file": ("bad.py", source, "text/x-python")},
+        headers={"Authorization": f"Bearer {dev_token}"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "main.signature"
+
+
+def test_upload_rejects_zip_path_traversal(client, dev_token):
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("../outside.py", "raise RuntimeError('unsafe')")
+        bundle.writestr(
+            "main.py",
+            "def config(): return {'name':'x'}\ndef main(): return None\n",
+        )
+
+    response = client.post(
+        "/api/scripts/upload",
+        files={"file": ("unsafe.zip", archive.getvalue(), "application/zip")},
+        headers={"Authorization": f"Bearer {dev_token}"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "zip.unsafe-path"

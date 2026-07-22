@@ -27,6 +27,15 @@ HEARTBEAT_TIMEOUT_SEC = 90
 _last_cleanup_date: Optional[str] = None
 
 
+def _ensure_aware(value: Optional[datetime]) -> Optional[datetime]:
+    """Normalize SQLite's timezone-naive datetimes to UTC-aware values."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def start_scheduler() -> None:
     """Start the background scheduler thread. Idempotent."""
     t = threading.Thread(target=_scheduler_loop, daemon=True, name="autoscript-scheduler")
@@ -78,7 +87,7 @@ def _heartbeat_scan() -> None:
             run.error_msg = "Agent heartbeat timeout (server-side watchdog)"
             run.finished_at = now
             if run.started_at:
-                run.duration_sec = int((now - run.started_at).total_seconds())
+                run.duration_sec = int((now - _ensure_aware(run.started_at)).total_seconds())
 
         db.commit()
         if stale_agents or stuck_runs:

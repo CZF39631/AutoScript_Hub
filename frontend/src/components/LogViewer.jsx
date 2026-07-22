@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Spin } from 'antd'
 import api from '../api/client'
+import { loadRunLog } from '../api/offlineData'
 
-export default function LogViewer({ runId, status, onComplete }) {
+export default function LogViewer({ runId, status, onComplete, localOnly = false, localApi = null }) {
   const [log, setLog] = useState('')
   const [loading, setLoading] = useState(true)
   const [streaming, setStreaming] = useState(false)
@@ -11,6 +12,18 @@ export default function LogViewer({ runId, status, onComplete }) {
   const isAlive = status === 'pending' || status === 'running'
 
   useEffect(() => {
+    if (localOnly) {
+      let active = true
+      const refreshLocal = () => loadRunLog({ id: runId, localOnly: true, api, localApi })
+        .then(data => { if (active) setLog(data.log || '') })
+        .finally(() => { if (active) setLoading(false) })
+      refreshLocal()
+      const interval = isAlive ? setInterval(refreshLocal, 1000) : null
+      return () => {
+        active = false
+        if (interval) clearInterval(interval)
+      }
+    }
     if (isAlive) {
       // SSE for live runs — connect directly to backend (bypass local proxy)
       setStreaming(true)
@@ -58,7 +71,7 @@ export default function LogViewer({ runId, status, onComplete }) {
         setLog(r.data.log || '')
       }).catch(() => {}).finally(() => setLoading(false))
     }
-  }, [runId, isAlive, onComplete])
+  }, [runId, isAlive, onComplete, localOnly, localApi])
 
   useEffect(() => {
     if (preRef.current) {

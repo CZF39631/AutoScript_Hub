@@ -1,8 +1,8 @@
 import json
+import logging
 import os
 import shutil
 import tempfile
-import zipfile
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
@@ -14,8 +14,23 @@ from app.auth import get_current_user, require_role
 from app.services.script_parser import parse_script_config
 from app.services.script_storage import save_script_file
 from app.services.audit import write_audit
+from shared.script_contract import validate_script
 
 router = APIRouter(prefix="/api/scripts", tags=["scripts"])
+logger = logging.getLogger(__name__)
+
+
+def _validated_upload(path):
+    report = validate_script(path, strict=False)
+    if report.errors:
+        first = report.errors[0]
+        raise HTTPException(
+            status_code=400,
+            detail={"code": first.code, "message": first.message, "path": first.path},
+        )
+    for warning in report.warnings:
+        logger.warning("Script compatibility warning %s: %s", warning.code, warning.message)
+    return report.config
 
 
 def _is_admin(current_user):
@@ -146,18 +161,7 @@ def upload_script(
         shutil.copyfileobj(file.file, f)
 
     try:
-        parse_path = tmp_path
-        if script_type == "zip":
-            with zipfile.ZipFile(tmp_path, "r") as zf:
-                zf.extractall(tmp_dir)
-            for root, dirs, files in os.walk(tmp_dir):
-                if "main.py" in files:
-                    parse_path = os.path.join(root, "main.py")
-                    break
-
-        config = parse_script_config(parse_path)
-        if not config:
-            raise HTTPException(status_code=400, detail="脚本必须包含 config() 函数")
+        config = _validated_upload(tmp_path)
 
         script = Script(
             name=config.get("name", file.filename),
@@ -222,18 +226,7 @@ def upload_version(
         shutil.copyfileobj(file.file, f)
 
     try:
-        parse_path = tmp_path
-        if script_type == "zip":
-            with zipfile.ZipFile(tmp_path, "r") as zf:
-                zf.extractall(tmp_dir)
-            for root, dirs, files in os.walk(tmp_dir):
-                if "main.py" in files:
-                    parse_path = os.path.join(root, "main.py")
-                    break
-
-        config = parse_script_config(parse_path)
-        if not config:
-            raise HTTPException(status_code=400, detail="脚本必须包含 config() 函数")
+        config = _validated_upload(tmp_path)
 
         save_script_file(script.id, new_version, tmp_path, script_type)
 

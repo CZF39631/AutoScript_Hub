@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { Card, Col, Row, Statistic, Table, Tag, Spin, Progress } from 'antd'
+import { useEffect, useState } from 'react'
+import { Card, Col, Row, Statistic, Table, Spin, Progress } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined,
   CodeOutlined, TeamOutlined, HistoryOutlined

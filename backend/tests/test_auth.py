@@ -1,3 +1,35 @@
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+
+@pytest.mark.real_db
+def test_startup_seeds_admin_user_for_login(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from app import database as database_module
+    from app import scheduler as scheduler_module
+    from app import main as main_module
+    import init_db as init_db_module
+
+    db_path = tmp_path / "startup-login.db"
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    monkeypatch.setattr(database_module, "engine", engine)
+    monkeypatch.setattr(database_module, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(init_db_module, "engine", engine)
+    monkeypatch.setattr(init_db_module, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(scheduler_module, "start_scheduler", lambda: None)
+
+    try:
+        with TestClient(main_module.app) as client:
+            resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+        assert resp.status_code == 200
+        assert resp.json()["user"]["username"] == "admin"
+    finally:
+        engine.dispose()
+
+
 def test_login_success(client, admin_token):
     assert admin_token is not None
     assert len(admin_token) > 10

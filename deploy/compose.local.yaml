@@ -1,0 +1,9 @@
+services:
+  server:
+    image: autoscript-hub-server:${AUTOSCRIPT_IMAGE_TAG:-0.9-local}
+    build:
+      context: ..
+      args:
+        BASE_REGISTRY: ${AUTOSCRIPT_BASE_REGISTRY:-docker.io/library}
+        AUTOSCRIPT_VERSION: ${AUTOSCRIPT_VERSION:-0.9.0-dev}
+        AUTOSCRIPT_CHANNEL: ${AUTOSCRIPT_CHANNEL:-beta}

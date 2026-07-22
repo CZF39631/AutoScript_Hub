@@ -17,5 +17,17 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    rules: {
+      // Data-loading effects in this app intentionally update loading state before
+      // subscribing/fetching. The connection loop itself is covered by a timer test.
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
+  {
+    files: ['src/contexts/*.jsx'],
+    rules: {
+      // Context modules intentionally export both providers and their consumer hooks.
+      'react-refresh/only-export-components': 'off',
+    },
   },
 ])

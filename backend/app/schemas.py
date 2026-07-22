@@ -89,6 +89,7 @@ class RunBrief(BaseModel):
     script_id: int
     script_version: int
     user_id: int
+    agent_id: Optional[int] = None
     status: str
     params: Optional[str] = None
     result_files: Optional[str] = None

@@ -154,8 +154,13 @@ async function testLogin() {
 
 async function detectBrowsers() {
   try {
-    var resp = await fetch('http://127.0.0.1:18080/detect-browsers');
-    var browsers = await resp.json();
+    var browsers;
+    if (window.pywebview && window.pywebview.api) {
+      browsers = await window.pywebview.api.detectBrowsers();
+    } else {
+      var resp = await fetch('http://127.0.0.1:18080/detect-browsers');
+      browsers = await resp.json();
+    }
     var sel = document.getElementById('browser_path');
     sel.innerHTML = '<option value="">Default (no override)</option>';
     browsers.forEach(function(b) {
@@ -201,6 +206,10 @@ class WizardApi:
     def openFolderDialog(self):
         result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
         return result[0] if result else None
+
+    def detectBrowsers(self):
+        from client.agent.local_server import _detect_browsers
+        return _detect_browsers()
 
     def saveAndFinish(self, config_json):
         config = json.loads(config_json)

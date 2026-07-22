@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoScript Script Authoring"
+  short_description: "Create, audit, repair, and package AutoScript Hub scripts"
+  default_prompt: "Create or repair an AutoScript Hub script and validate it against the repository contract."

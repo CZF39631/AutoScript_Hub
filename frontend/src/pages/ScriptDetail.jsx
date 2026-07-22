@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { Descriptions, Collapse, Tag, Spin, Button, Upload, Modal, Input, Form, Select, message, Space } from 'antd'
+import { useCallback, useEffect, useState } from 'react'
+import { Descriptions, Collapse, Tag, Spin, Button, Upload, Modal, Input, Form, Select, message } from 'antd'
 import { UploadOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
@@ -43,12 +43,12 @@ export default function ScriptDetail() {
 
   const canUpload = (user?.role === 'admin' || user?.role === 'developer') && online
 
-  const loadPresets = () => {
+  const loadPresets = useCallback(() => {
     if (!online) return
     api.get(`/api/scripts/${id}/presets`).then(r => setPresets(r.data)).catch(() => {})
-  }
+  }, [id, online])
 
-  const loadFromLocal = () => {
+  const loadFromLocal = useCallback(() => {
     localApi.get('/local/scripts').then(r => {
       const local = (r.data || []).find(s => s.id === parseInt(id))
       if (local) {
@@ -71,9 +71,9 @@ export default function ScriptDetail() {
         message.error('本地未缓存该脚本,无法离线使用')
       }
     }).catch(() => message.error('本地 Agent 不可用')).finally(() => setLoading(false))
-  }
+  }, [id, localApi])
 
-  const loadScript = () => {
+  const loadScript = useCallback(() => {
     setLoading(true)
     if (!online) {
       loadFromLocal()
@@ -98,9 +98,9 @@ export default function ScriptDetail() {
 
     setSavedParams(loadSavedParams(id))
     loadPresets()
-  }
+  }, [id, online, loadFromLocal, loadPresets])
 
-  useEffect(loadScript, [id, online])
+  useEffect(loadScript, [loadScript])
 
   const onSavePreset = async (name, values) => {
     await api.post(`/api/scripts/${id}/presets`, { name, values })

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, Select, Tag, message, Space } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import api from '../api/client'
@@ -33,7 +33,7 @@ export default function Users() {
       await api.put(`/api/users/${user.id}`, { status: newStatus })
       message.success(newStatus === 'disabled' ? '已禁用' : '已启用')
       load()
-    } catch (e) {
+    } catch {
       message.error('操作失败')
     }
   }
