@@ -82,8 +82,6 @@ def main() -> None:
     parser.add_argument("--attempts", type=int, default=12)
     parser.add_argument("--delay", type=float, default=5.0)
     args = parser.parse_args()
-    if len(args.base_url) < 2:
-        parser.error("at least two --base-url values are required")
     if args.attempts < 1 or args.delay < 0:
         parser.error("attempts must be positive and delay cannot be negative")
     verify_mirrors(args.directory, args.base_url, args.attempts, args.delay)
