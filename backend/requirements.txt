@@ -7,4 +7,5 @@ passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 aiofiles==23.2.1
 httpx==0.25.2
-pytest==7.4.3
+packaging==24.2
+alembic==1.13.3

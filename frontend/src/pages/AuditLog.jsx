@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Table, Input, Select, Space } from 'antd'
 import api from '../api/client'
 

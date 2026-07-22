@@ -1,0 +1,17 @@
+services:
+  server:
+    image: ${AUTOSCRIPT_SERVER_IMAGE:-ghcr.io/czf39631/autoscript-hub-server:0.9.0}
+    ports:
+      - "${AUTOSCRIPT_BIND_ADDRESS:-0.0.0.0}:${AUTOSCRIPT_PORT:-8000}:8000"
+    volumes:
+      - "${AUTOSCRIPT_DATA_DIR:-/opt/autoscript-hub/data}:/data"
+    user: "${AUTOSCRIPT_UID:-1000}:${AUTOSCRIPT_GID:-1000}"
+    env_file:
+      - ./.env
+    environment:
+      DATA_DIR: /data
+      DATABASE_URL: sqlite:////data/autoscript.db
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: 8000
+    init: true
+    restart: unless-stopped

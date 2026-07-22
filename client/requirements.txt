@@ -1,2 +1,4 @@
 requests==2.31.0
 pywebview==4.4.1
+packaging==24.2
+cryptography==43.0.3

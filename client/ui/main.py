@@ -161,7 +161,7 @@ def start_local_server(backend_url):
     return t
 
 
-def start_ui():
+def start_ui(on_started=None):
     config = load_config()
     backend_url = config.get("server_url", "http://127.0.0.1:8000")
 
@@ -169,9 +169,9 @@ def start_ui():
     if not is_setup_complete():
         from client.ui.wizard import run_wizard
         run_wizard()
-        # Reload config after wizard
-        config = load_config()
-        backend_url = config.get("server_url", "http://127.0.0.1:8000")
+        # pywebview owns one GUI event loop per process. The packaged entrypoint
+        # relaunches after a completed wizard instead of starting it twice.
+        return False
 
     # Start local server for frontend + API proxy
     start_local_server(backend_url)
@@ -187,7 +187,10 @@ def start_ui():
         height=800,
         min_size=(800, 600),
     )
+    if on_started:
+        window.events.loaded += on_started
     webview.start()
+    return True
 
 
 if __name__ == "__main__":

@@ -1,9 +1,11 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Descriptions, Tag, Spin, Button, Space, Modal, Input, Form, message } from 'antd'
 import { FolderOpenOutlined, StopOutlined, ReloadOutlined, BugOutlined } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import api from '../api/client'
 import LogViewer from '../components/LogViewer'
+import { useConnection } from '../contexts/ConnectionContext'
+import { canOpenResultLocally, firstResultPath, loadRunDetail } from '../api/offlineData'
 
 const statusMap = {
   pending: { color: 'blue', text: '等待中' },
@@ -20,18 +22,32 @@ export default function RunDetail() {
   const [issueModal, setIssueModal] = useState(false)
   const [issueForm] = Form.useForm()
   const [submitting, setSubmitting] = useState(false)
+  const { online, agentOnline, agentId, localApi } = useConnection()
+  const localOnly = String(id).startsWith('L') || !online
+  const runStatus = run?.status
 
   const load = useCallback(() => {
     setLoading(true)
-    api.get(`/api/runs/${id}`).then(r => setRun(r.data)).catch(() => message.error('加载失败')).finally(() => setLoading(false))
-  }, [id])
+    loadRunDetail({ id, online, api, localApi })
+      .then(setRun)
+      .catch(() => message.error(localOnly ? '本地执行记录不存在' : '加载失败'))
+      .finally(() => setLoading(false))
+  }, [id, online, localApi, localOnly])
 
   // Called by LogViewer when SSE stream ends — refresh run status without flashing the spinner.
   const onLogComplete = useCallback(() => {
-    api.get(`/api/runs/${id}`).then(r => setRun(r.data)).catch(() => {})
-  }, [id])
+    if (!localOnly) api.get(`/api/runs/${id}`).then(r => setRun(r.data)).catch(() => {})
+  }, [id, localOnly])
 
   useEffect(load, [load])
+
+  useEffect(() => {
+    if (!localOnly || !['pending', 'running'].includes(runStatus)) return undefined
+    const interval = setInterval(() => {
+      loadRunDetail({ id, online: false, api, localApi }).then(setRun).catch(() => {})
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [id, localOnly, localApi, runStatus])
 
   const onCancel = async () => {
     try {
@@ -57,6 +73,16 @@ export default function RunDetail() {
     }
   }
 
+  const onOpenResult = async () => {
+    try {
+      const path = firstResultPath(run.result_files)
+      if (!path) throw new Error('没有可打开的结果路径')
+      await localApi.post('/local/results/open', { path })
+    } catch (error) {
+      message.error(error.response?.data?.error || error.message || '打开失败')
+    }
+  }
+
   if (loading) return <Spin />
   if (!run) return <div>记录不存在</div>
 
@@ -69,10 +95,10 @@ export default function RunDetail() {
         <h2 style={{ margin: 0 }}>执行详情 #{run.id}</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-          {isAlive && (
+          {isAlive && !localOnly && (
             <Button danger icon={<StopOutlined />} onClick={onCancel}>取消执行</Button>
           )}
-          {(run.status === 'failed' || run.status === 'success') && (
+          {!localOnly && (run.status === 'failed' || run.status === 'success') && (
             <Button icon={<BugOutlined />} onClick={() => { setIssueModal(true); issueForm.resetFields() }}>上报问题</Button>
           )}
         </Space>
@@ -87,17 +113,20 @@ export default function RunDetail() {
         {run.error_msg && <Descriptions.Item label="错误信息" span={2}>{run.error_msg}</Descriptions.Item>}
         {run.result_files && (
           <Descriptions.Item label="结果文件" span={2}>
-            <Button
-              icon={<FolderOpenOutlined />}
-              onClick={() => api.post(`/api/runs/${run.id}/open-result`).catch(e => message.error(e.response?.data?.detail || '打开失败'))}
-            >
-              {(() => { try { const v = JSON.parse(run.result_files); return typeof v === 'string' ? v : '打开结果文件' } catch { return '打开结果文件' } })()}
-            </Button>
+            {canOpenResultLocally(run, agentOnline, agentId) ? (
+              <Button icon={<FolderOpenOutlined />} onClick={onOpenResult}>在本机打开结果文件</Button>
+            ) : '结果文件保存在执行客户端'}
           </Descriptions.Item>
         )}
         {run.params && <Descriptions.Item label="参数" span={2}><pre style={{ margin: 0 }}>{JSON.stringify(JSON.parse(run.params), null, 2)}</pre></Descriptions.Item>}
       </Descriptions>
-      <LogViewer runId={run.id} status={run.status} onComplete={onLogComplete} />
+      <LogViewer
+        runId={run.id}
+        status={run.status}
+        onComplete={onLogComplete}
+        localOnly={localOnly}
+        localApi={localApi}
+      />
 
       <Modal title="上报问题" open={issueModal} onCancel={() => setIssueModal(false)}
         confirmLoading={submitting} onOk={() => issueForm.submit()} okText="提交">

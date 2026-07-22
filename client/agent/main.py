@@ -1,27 +1,38 @@
-import io
+import ast
 import json
 import logging
 import os
+from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
-import zipfile
 from datetime import datetime
 
 import requests
 
 from client.agent.local_server import start_local_server
 from client.agent.script_parser import parse_script_config
+from shared.script_contract import extract_script_archive, validate_params
+from shared.version import get_version
+from client.runtime.environment_manager import EnvironmentUnavailable, ensure_environment
+from client.runtime.paths import ClientPaths
+from client.runtime.python_runtime import PrivatePythonUnavailable, private_python, python_runtime_info
 
 logger = logging.getLogger(__name__)
 
 # Load client config
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_CLIENT_CONFIG_PATH = os.path.join(_PROJECT_ROOT, "client_config.json")
+_CLIENT_PATHS = ClientPaths.from_environment()
+_CLIENT_PATHS.ensure()
+_PROJECT_ROOT = str(_CLIENT_PATHS.install_dir)
+_CLIENT_CONFIG_PATH = str(_CLIENT_PATHS.config_file)
+_LEGACY_CLIENT_CONFIG_PATH = os.path.join(_PROJECT_ROOT, "client_config.json")
 _client_config = {}
-if os.path.isfile(_CLIENT_CONFIG_PATH):
+_config_source = _CLIENT_CONFIG_PATH if os.path.isfile(_CLIENT_CONFIG_PATH) else _LEGACY_CLIENT_CONFIG_PATH
+if os.path.isfile(_config_source):
     try:
-        with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(_config_source, "r", encoding="utf-8") as f:
             _client_config = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("加载客户端配置失败: %s", e)
@@ -36,11 +47,11 @@ LOCAL_PORT = 18080
 # Local paths for script storage and logs (decoupled from backend)
 _SCRIPTS_DIR = os.environ.get(
     "SCRIPTS_DIR",
-    _client_config.get("script_download_dir", os.path.join(_PROJECT_ROOT, "storage", "scripts")),
+    _client_config.get("script_download_dir") or str(_CLIENT_PATHS.scripts_dir),
 )
 _LOGS_DIR = os.environ.get(
     "LOGS_DIR",
-    os.path.join(os.path.dirname(_SCRIPTS_DIR), "logs"),
+    str(_CLIENT_PATHS.logs_dir),
 )
 
 _token = None
@@ -56,9 +67,57 @@ _agent_id = None          # server-assigned agent id after register
 _last_online_time = None  # last successful backend HTTP timestamp (disconnect detection)
 _pending_reports = []     # cached run status updates that failed to send
 _offline_notified = False  # avoid spamming disconnect notifications
+_log_upload_offsets = {}  # run_id -> server-acknowledged UTF-8 byte offset
+_pending_log_uploads = {}  # run_id -> local log path requiring a final retry
+_last_update_check_time = 0
+_restart_requested = False
+_last_settings_sync_time = 0
+
+_CLIENT_SETTING_KEYS = {
+    "server_url",
+    "script_download_dir",
+    "output_dir",
+    "default_browser_path",
+    "browser_debug_port",
+    "proxy",
+    "pip_index_url",
+    "github_update_repository",
+    "update_channel",
+    "update_manifest_urls",
+}
 
 OFFLINE_NOTIFY_THRESHOLD_SEC = 30 * 60  # 30 min (design §5.9)
-PENDING_REPORTS_FILE = os.path.join(os.path.dirname(_LOGS_DIR), ".pending_reports.json")
+UPDATE_CHECK_INTERVAL_SEC = 6 * 60 * 60
+PENDING_REPORTS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_reports.json")
+PENDING_LOG_UPLOADS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_log_uploads.json")
+
+
+def _parse_result_literal(raw):
+    try:
+        return ast.literal_eval(raw)
+    except (SyntaxError, ValueError):
+        return raw
+
+
+def _install_downloaded_script(payload, script_dir):
+    """Validate, normalize, and atomically install a downloaded script ZIP."""
+    target = Path(script_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=f".{target.name}-", dir=str(target.parent)))
+    try:
+        archive = work / "script.zip"
+        archive.write_bytes(payload)
+        extracted = work / "content"
+        main_path = extract_script_archive(archive, extracted)
+        source = extracted
+        if main_path.parent != extracted:
+            source = work / "normalized"
+            shutil.copytree(main_path.parent, source)
+        if target.exists():
+            raise FileExistsError(f"脚本目录已存在: {target}")
+        os.replace(source, target)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def _get_venv_pip():
@@ -120,6 +179,27 @@ def ensure_dependencies(script_config, python_executable=None):
         return "Dependency install error: {}".format(str(e))
 
 
+def prepare_script_environment(script_config, offline=False):
+    """Return the fingerprinted venv interpreter or an actionable error."""
+    try:
+        runtime = private_python(_CLIENT_PATHS)
+    except PrivatePythonUnavailable:
+        if getattr(sys, "frozen", False):
+            return None, "私有 Python 3.11.9 缺失，请修复或重新安装客户端"
+        runtime = Path(sys.executable)
+    try:
+        result = ensure_environment(
+            script_config.get("requirements", []),
+            _CLIENT_PATHS,
+            index_url=_client_config.get("pip_index_url") or None,
+            offline=offline,
+            python_executable=runtime,
+        )
+        return str(result.python_executable), None
+    except (EnvironmentUnavailable, RuntimeError, OSError, ValueError) as exc:
+        return None, "脚本环境准备失败: {}".format(exc)
+
+
 def _validate_run_params(param_defs, params):
     """Pre-execution parameter validation (design §5.2).
 
@@ -128,51 +208,20 @@ def _validate_run_params(param_defs, params):
     (auto-creates if auto_create=True), number range, select options.
     Returns list of error strings.
     """
-    errors = []
-    param_map = {p["key"]: p for p in param_defs}
-
-    for key, defn in param_map.items():
-        val = params.get(key)
-        ptype = defn.get("type", "text")
-        label = defn.get("label", key)
-
-        if defn.get("required") and (val is None or val == ""):
-            errors.append("{}: 不能为空".format(label))
+    preflight_errors = []
+    for definition in param_defs:
+        if definition.get("type") != "folder" or not definition.get("auto_create"):
             continue
-
-        if val is None or val == "":
-            continue
-
-        if ptype == "file":
-            if not os.path.isfile(val):
-                errors.append("{}: 文件不存在 - {}".format(label, val))
-        elif ptype == "folder":
-            auto_create = defn.get("auto_create", False)
-            if not os.path.isdir(val):
-                if auto_create:
-                    try:
-                        os.makedirs(val, exist_ok=True)
-                        print("已自动创建目录: {}".format(val))
-                    except OSError as e:
-                        errors.append("{}: 目录自动创建失败 - {}".format(label, e))
-                else:
-                    errors.append("{}: 目录不存在 - {}".format(label, val))
-        elif ptype == "number":
+        value = params.get(definition.get("key"))
+        if value and not os.path.isdir(value):
             try:
-                num = float(val)
-            except (TypeError, ValueError):
-                errors.append("{}: 不是有效数字".format(label))
-                continue
-            if defn.get("min") is not None and num < defn["min"]:
-                errors.append("{}: 值不能小于{}".format(label, defn["min"]))
-            if defn.get("max") is not None and num > defn["max"]:
-                errors.append("{}: 值不能大于{}".format(label, defn["max"]))
-        elif ptype == "select":
-            opts = defn.get("options", [])
-            if opts and val not in opts:
-                errors.append("{}: 无效选项".format(label))
-
-    return errors
+                os.makedirs(value, exist_ok=True)
+                print("已自动创建目录: {}".format(value))
+            except OSError as exc:
+                preflight_errors.append(
+                    "{}: 目录自动创建失败 - {}".format(definition.get("label", value), exc)
+                )
+    return preflight_errors + validate_params(param_defs, params, check_paths=True)
 
 
 def authenticate(username, password):
@@ -195,6 +244,151 @@ def authenticate(username, password):
 
 def _headers():
     return {"Authorization": "Bearer {}".format(_token)}
+
+
+def _upload_log_delta(run_id, log_path, force=False):
+    """Upload only the UTF-8 log bytes not yet acknowledged by the backend."""
+    if not run_id or not log_path or not os.path.isfile(log_path):
+        return True
+
+    offset = int(_log_upload_offsets.get(run_id, 0) or 0)
+    try:
+        size = os.path.getsize(log_path)
+        if offset > size:
+            offset = 0
+        with open(log_path, "rb") as f:
+            f.seek(offset)
+            raw = f.read()
+    except OSError:
+        return False
+
+    if not raw:
+        return True
+
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if not force and e.reason == "unexpected end of data" and e.start > 0:
+            raw = raw[:e.start]
+            content = raw.decode("utf-8")
+        else:
+            content = raw.decode("utf-8", errors="replace")
+    if not raw:
+        return True
+
+    try:
+        resp = requests.post(
+            "{}/api/runs/{}/log/chunk".format(BACKEND_URL, run_id),
+            json={"offset": offset, "content": content},
+            headers=_headers(),
+            timeout=10,
+        )
+        data = resp.json()
+        if resp.status_code == 200:
+            _log_upload_offsets[run_id] = int(data["offset"])
+            return True
+        if resp.status_code == 409:
+            detail = data.get("detail") or {}
+            if "offset" in detail:
+                _log_upload_offsets[run_id] = int(detail["offset"])
+    except (requests.RequestException, OSError, KeyError, TypeError, ValueError):
+        pass
+    return False
+
+
+def _finish_log_upload(run_id, log_path):
+    """Force the final delta and persist a retry when the backend is unavailable."""
+    if _upload_log_delta(run_id, log_path, force=True):
+        _pending_log_uploads.pop(run_id, None)
+        _save_pending_log_uploads()
+        return True
+    _pending_log_uploads[run_id] = log_path
+    _save_pending_log_uploads()
+    return False
+
+
+def _flush_pending_log_uploads():
+    for run_id, path in list(_pending_log_uploads.items()):
+        if _upload_log_delta(run_id, path, force=True):
+            _pending_log_uploads.pop(run_id, None)
+    _save_pending_log_uploads()
+
+
+def _normalize_result_files(value, base_dir=None):
+    """Convert script result paths into metadata without uploading file content."""
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple)) else [value]
+    metadata = []
+    for item in values:
+        path = item.get("path") if isinstance(item, dict) else item
+        if not isinstance(path, str) or not path:
+            continue
+        resolved = path
+        if base_dir and not os.path.isabs(resolved):
+            resolved = os.path.join(base_dir, resolved)
+        absolute = os.path.abspath(resolved)
+        exists = os.path.isfile(absolute)
+        try:
+            size = os.path.getsize(absolute) if exists else None
+        except OSError:
+            size = None
+        metadata.append({
+            "name": os.path.basename(absolute),
+            "path": absolute,
+            "exists": exists,
+            "size": size,
+        })
+    return metadata
+
+
+def open_local_result(path):
+    """Open a result file on the Agent machine that actually executed the script."""
+    if not isinstance(path, str) or not path:
+        return {"success": False, "error": "未提供结果文件路径"}
+    absolute = os.path.abspath(path)
+    if not os.path.isfile(absolute):
+        return {"success": False, "error": "结果文件不存在: {}".format(absolute)}
+    try:
+        os.startfile(absolute)
+        return {"success": True, "path": absolute}
+    except OSError as e:
+        return {"success": False, "error": "打开结果文件失败: {}".format(e)}
+
+
+def _sync_client_settings():
+    """Pull per-user settings and persist allowed fields on this Agent machine."""
+    global _client_config
+    try:
+        resp = requests.get(
+            "{}/api/settings".format(BACKEND_URL),
+            headers=_headers(),
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return False
+        remote = resp.json() or {}
+
+        local = dict(_client_config)
+        if os.path.isfile(_CLIENT_CONFIG_PATH):
+            try:
+                with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    local = json.load(f) or local
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        for key in _CLIENT_SETTING_KEYS:
+            if key in remote and remote[key] is not None:
+                local[key] = remote[key]
+
+        temp_path = _CLIENT_CONFIG_PATH + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(local, f, indent=2, ensure_ascii=False)
+        os.replace(temp_path, _CLIENT_CONFIG_PATH)
+        _client_config = local
+        return True
+    except (requests.RequestException, OSError, TypeError, ValueError):
+        return False
 
 
 def _get_current_run_id():
@@ -272,7 +466,13 @@ def _check_running_process():
             _current_run_id = None
             info = dict(_running_info)
             _running_info = {}
-            return {"status": "failed", "error": "Timeout after {}s".format(info["timeout"]), "result": None}
+            return {
+                "status": "failed",
+                "error": "Timeout after {}s".format(info["timeout"]),
+                "result": None,
+                "run_id": info.get("run_id"),
+                "log_path": info.get("log_path"),
+            }
         return None  # still running
 
     # Process finished
@@ -293,7 +493,7 @@ def _check_running_process():
                 if line.startswith("__RESULT__:"):
                     raw = line[len("__RESULT__:"):].strip()
                     try:
-                        result_value = eval(raw)
+                        result_value = _parse_result_literal(raw)
                     except Exception:
                         result_value = raw
                     break
@@ -314,6 +514,7 @@ def _check_running_process():
         "result": result_value,
         "run_id": run_id,
         "log_path": log_path,
+        "script_dir": info.get("script_dir"),
     }
 
 
@@ -338,7 +539,7 @@ def register_agent():
     """Register this agent with backend (design §4.4). Returns agent_id or None."""
     global _agent_id, _last_online_time
     machine_name, machine_ip = _detect_machine_info()
-    agent_version = _client_config.get("version", "1.0.0")
+    agent_version = get_version()
     try:
         resp = requests.post(
             "{}/api/agents/register".format(BACKEND_URL),
@@ -358,7 +559,7 @@ def register_agent():
 
 def send_heartbeat():
     """Send heartbeat to backend; updates _last_online_time on success (design §5.1)."""
-    global _last_online_time, _offline_notified
+    global _last_online_time, _offline_notified, _token
     if not _agent_id:
         return False
     _, machine_ip = _detect_machine_info()
@@ -373,6 +574,8 @@ def send_heartbeat():
             _last_online_time = time.time()
             _offline_notified = False
             return True
+        if resp.status_code == 401:
+            _token = None
     except (requests.RequestException, OSError):
         pass
     return False
@@ -406,6 +609,33 @@ def _save_pending_reports():
             json.dump(_pending_reports, f, ensure_ascii=False)
     except OSError as e:
         logger.warning("保存待上报记录失败: %s", e)
+
+
+def _save_pending_log_uploads():
+    try:
+        if not _pending_log_uploads:
+            if os.path.isfile(PENDING_LOG_UPLOADS_FILE):
+                os.remove(PENDING_LOG_UPLOADS_FILE)
+            return
+        parent = os.path.dirname(PENDING_LOG_UPLOADS_FILE)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(PENDING_LOG_UPLOADS_FILE, "w", encoding="utf-8") as f:
+            json.dump(_pending_log_uploads, f, ensure_ascii=False)
+    except OSError as e:
+        logger.warning("保存待上传日志失败: %s", e)
+
+
+def _load_pending_log_uploads():
+    global _pending_log_uploads
+    try:
+        if os.path.isfile(PENDING_LOG_UPLOADS_FILE):
+            with open(PENDING_LOG_UPLOADS_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f) or {}
+            _pending_log_uploads = {int(run_id): path for run_id, path in saved.items()}
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
+        logger.warning("加载待上传日志失败: %s", e)
+        _pending_log_uploads = {}
 
 
 def _load_pending_reports():
@@ -467,7 +697,7 @@ def _report_run_status(run_id, update):
 # producing backend run records with the offline result back-filled.
 _local_runs = {}              # local_run_id (e.g. "L1") → record dict
 _local_run_counter = 0
-_local_runs_file = os.path.join(os.path.dirname(_LOGS_DIR), ".local_runs.json")
+_local_runs_file = str(_CLIENT_PATHS.runs_dir / "local_runs.json")
 # Subprocess for the *currently running* local run (one at a time)
 _local_run_proc = None
 _local_run_info = {}
@@ -587,9 +817,12 @@ def start_local_run(req):
     except Exception as e:
         logger.warning("解析脚本配置失败: %s", e)
 
-    # Best-effort dependency install (offline: uses what's already cached in pip)
+    script_python = None
     if script_config:
-        dep_error = ensure_dependencies(script_config)
+        script_python, dep_error = prepare_script_environment(
+            script_config,
+            offline=not get_connection_status().get("online", False),
+        )
         if dep_error:
             return {"error": dep_error}
 
@@ -606,7 +839,7 @@ def start_local_run(req):
 
     proc = _start_script_subprocess(
         run_script_dir, params, log_path, timeout,
-        env_vars=env_vars, python_executable=None,
+        env_vars=env_vars, python_executable=script_python,
     )
     _local_run_proc = proc
     _local_run_info = {
@@ -614,6 +847,7 @@ def start_local_run(req):
         "script_id": script_id,
         "script_version": latest_ver,
         "script_name": script_config.get("name"),
+        "script_dir": run_script_dir,
         "log_path": log_path,
         "timeout": timeout,
         "start_time": time.time(),
@@ -683,7 +917,7 @@ def _check_local_runs():
                 if line.startswith("__RESULT__:"):
                     raw = line[len("__RESULT__:"):].strip()
                     try:
-                        result_value = eval(raw)
+                        result_value = _parse_result_literal(raw)
                     except Exception:
                         result_value = raw
                     break
@@ -711,7 +945,10 @@ def _record_local_run_completion(info, status, error, result):
     rec["finished_at"] = finished
     rec["duration_sec"] = int(finished - rec["started_at"]) if rec.get("started_at") else None
     if result is not None:
-        rec["result_files"] = json.dumps(result) if not isinstance(result, str) else result
+        rec["result_files"] = json.dumps(
+            _normalize_result_files(result, base_dir=info.get("script_dir")),
+            ensure_ascii=False,
+        )
     _save_local_runs()
 
     # System bubble notification (design §5.5)
@@ -799,10 +1036,14 @@ def _sync_local_runs_to_backend():
                 continue
             backend_run_id = create_resp.json()["id"]
 
-            update = {
-                "status": rec["status"],
-                "log_path": "storage/logs/local_{}.log".format(local_run_id),
-            }
+            if rec.get("log_path") and not _upload_log_delta(
+                backend_run_id, rec["log_path"], force=True
+            ):
+                continue
+
+            update = {"status": rec["status"]}
+            if _agent_id:
+                update["agent_id"] = _agent_id
             if rec.get("error_msg"):
                 update["error_msg"] = rec["error_msg"]
             if rec.get("result_files"):
@@ -826,6 +1067,10 @@ def _sync_local_runs_to_backend():
 def poll_and_execute():
     """Non-blocking poll: check running process or start new run."""
     global _running_proc, _running_info, _current_run_id
+
+    # Upload live log bytes before other polling work.
+    if _running_proc is not None and _running_info.get("run_id") and _running_info.get("log_path"):
+        _upload_log_delta(_running_info["run_id"], _running_info["log_path"])
 
     # 0) Cancel propagation (design §5.1): cancel only flips backend status — the Agent
     #    must independently notice and kill its subprocess, otherwise the cancelled run
@@ -860,19 +1105,18 @@ def poll_and_execute():
     if result:
         run_id = result.pop("run_id", None)
         actual_log_path = result.pop("log_path", None)
+        result_script_dir = result.pop("script_dir", None)
         if run_id:
-            update = {"status": result["status"]}
-            # Report the real log path (relative to project root) so backend can find it —
-            # previously hardcoded as "storage/logs/{id}.log" which didn't match reality.
             if actual_log_path:
-                try:
-                    update["log_path"] = os.path.relpath(actual_log_path, _PROJECT_ROOT)
-                except ValueError:
-                    update["log_path"] = actual_log_path
+                _finish_log_upload(run_id, actual_log_path)
+            update = {"status": result["status"]}
             if result.get("error"):
                 update["error_msg"] = result["error"]
             if result.get("result"):
-                update["result_files"] = json.dumps(result["result"])
+                update["result_files"] = json.dumps(
+                    _normalize_result_files(result["result"], base_dir=result_script_dir),
+                    ensure_ascii=False,
+                )
             _report_run_status(run_id, update)
         return  # Don't start new run yet (next poll cycle)
 
@@ -918,9 +1162,7 @@ def poll_and_execute():
                 headers=_headers(), timeout=30, stream=True,
             )
             if dl_resp.status_code == 200:
-                os.makedirs(os.path.dirname(script_dir), exist_ok=True)
-                with zipfile.ZipFile(io.BytesIO(dl_resp.content)) as zf:
-                    zf.extractall(script_dir)
+                _install_downloaded_script(dl_resp.content, script_dir)
                 print("脚本已下载到 {}".format(script_dir))
             else:
                 _report_run_status(run_id, {"status": "failed", "error_msg": "Failed to download script files"})
@@ -970,11 +1212,12 @@ def poll_and_execute():
             logger.warning("解析脚本配置失败: %s", e)
 
         if script_config:
-            dep_error = ensure_dependencies(script_config, python_executable)
+            script_python, dep_error = prepare_script_environment(script_config, offline=False)
             if dep_error:
                 _report_run_status(run_id, {"status": "failed", "error_msg": dep_error})
                 _current_run_id = None
                 return
+            python_executable = script_python
 
             # Pre-execution parameter validation (design §5.2): file/folder existence etc.
             param_defs = script_config.get("params", [])
@@ -992,7 +1235,10 @@ def poll_and_execute():
         timeout = script_config.get("timeout", 600)
 
         # Mark as running
-        _report_run_status(run_id, {"status": "running"})
+        running_update = {"status": "running"}
+        if _agent_id:
+            running_update["agent_id"] = _agent_id
+        _report_run_status(run_id, running_update)
 
         # Start subprocess asynchronously
         params = json.loads(run["params"]) if run.get("params") else {}
@@ -1028,70 +1274,124 @@ def _compare_versions(local_ver, remote_ver):
     return r > l
 
 
-def _check_and_apply_update(username="", password=""):
-    """Check for client update; if available and package is staged, apply it.
-
-    Returns True if update was triggered (process is about to exit and restart).
-    Uses /api/agent/check-update endpoint. Update flow per design §5.8.
-    """
-    from client.agent.updater import check_and_apply_update as do_apply_update
-    local_version = _client_config.get("version", "0.0.0")
-    return do_apply_update(
-        backend_url=BACKEND_URL,
-        headers=_headers(),
+def _check_and_stage_update():
+    """Check public signed sources and stage a verified installer without applying it."""
+    from client.agent.updater import check_and_stage_update
+    local_version = get_version()
+    return check_and_stage_update(
         current_version=local_version,
-        project_root=_PROJECT_ROOT,
-        username=username,
-        password=password,
+        runtime_is_idle=lambda: _running_proc is None and _local_run_proc is None,
     )
 
 
-def run_agent(username, password):
-    # Retry authentication in case backend is still starting
-    for attempt in range(12):
-        if authenticate(username, password):
-            break
-        if attempt < 11:
-            print("后端未就绪,5 秒后重试... (第 {}/{} 次)".format(attempt + 1, 12))
-            time.sleep(5)
-        else:
-            print("认证失败,已重试 12 次")
-            return
+def _get_update_status():
+    from client.agent.updater import get_update_status
+    return get_update_status()
 
-    print("Agent 已认证为 {},每 {} 秒轮询一次".format(username, POLL_INTERVAL))
 
-    # Register this agent with the backend (design §4.4)
-    register_agent()
+def _get_runtime_info():
+    try:
+        info = python_runtime_info(_CLIENT_PATHS)
+        return {
+            "status": "ready" if info["ready"] else "invalid",
+            "managed": True,
+            "version": info["actual_version"],
+            "expected_version": info["expected_version"],
+            "path": info["path"],
+        }
+    except (PrivatePythonUnavailable, OSError, subprocess.SubprocessError) as exc:
+        return {
+            "status": "unavailable",
+            "managed": True,
+            "expected_version": "3.11.9",
+            "error": str(exc),
+        }
 
-    # Load any pending run status reports from a previous run (design §5.9)
+
+def _install_staged_update():
+    global _restart_requested
+    from client.agent.updater import install_staged_update
+    local_version = get_version()
+    result = install_staged_update(
+        current_version=local_version,
+        runtime_is_idle=lambda: _running_proc is None and _local_run_proc is None,
+    )
+    if result.get("state") == "installing":
+        _restart_requested = True
+    return result
+
+
+def initialize_agent_runtime():
+    """Load cached state and start the local API before any backend connection."""
     _load_pending_reports()
-    # Load local (offline) run history (survives restart)
+    _load_pending_log_uploads()
     _load_local_runs()
-
-    # Check and apply auto-update (may exit + restart the process)
-    if _check_and_apply_update(username=username, password=password):
-        return  # process is exiting; updater script will restart us
-
     server_thread = start_local_server(
         LOCAL_PORT,
         _get_current_run_id,
+        get_version_fn=get_version,
         list_local_scripts_fn=list_local_scripts,
         start_local_run_fn=start_local_run,
         list_local_runs_fn=list_local_runs,
         get_local_run_fn=get_local_run,
         get_local_run_log_fn=get_local_run_log,
         get_connection_status_fn=get_connection_status,
+        open_result_fn=open_local_result,
+        get_update_status_fn=_get_update_status,
+        check_update_fn=_check_and_stage_update,
+        install_update_fn=_install_staged_update,
+        get_runtime_info_fn=_get_runtime_info,
     )
     server_thread.daemon = True
     server_thread.start()
+    return server_thread
 
-    while True:
-        _flush_pending_reports()             # retry cached status reports first
-        _check_local_runs()                  # advance offline run subprocess if any
-        poll_and_execute()
-        send_heartbeat()                     # liveness ping (design §5.1)
-        _sync_local_runs_to_backend()        # back-fill offline runs to backend (§5.x offline)
-        _check_offline_notification()        # pop system toast if disconnected (design §5.9)
+
+def agent_iteration(username, password):
+    """Run one online/offline Agent loop iteration without exiting on disconnect."""
+    global _last_update_check_time, _restart_requested, _last_settings_sync_time
+
+    if not _token:
+        if not authenticate(username, password):
+            _check_local_runs()
+            _check_offline_notification()
+            return False
+        print("Agent 已认证为 {},每 {} 秒轮询一次".format(username, POLL_INTERVAL))
+        register_agent()
+
+    now = time.time()
+    if _last_update_check_time == 0 or now - _last_update_check_time >= UPDATE_CHECK_INTERVAL_SEC:
+        _last_update_check_time = now
+        _check_and_stage_update()
+    if now - _last_settings_sync_time >= 60:
+        if _sync_client_settings():
+            _last_settings_sync_time = now
+
+    _flush_pending_reports()
+    _flush_pending_log_uploads()
+    _check_local_runs()
+    if (
+        _get_update_status().get("state") == "waiting-for-idle"
+        and _running_proc is None
+        and _local_run_proc is None
+    ):
+        result = _install_staged_update()
+        if result.get("state") == "installing":
+            return False
+    poll_and_execute()
+    send_heartbeat()
+    _sync_local_runs_to_backend()
+    _check_offline_notification()
+    return True
+
+
+def run_agent(username, password):
+    global _restart_requested
+    _restart_requested = False
+    initialize_agent_runtime()
+
+    while not _restart_requested:
+        agent_iteration(username, password)
         time.sleep(POLL_INTERVAL)
 
 

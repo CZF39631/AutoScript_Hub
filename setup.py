@@ -7,9 +7,12 @@
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 import winreg
+
+from shared.version import RELEASE_VERSION
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(PROJECT_ROOT, "config.json")
@@ -138,6 +141,54 @@ def _install_deps(venv_python, *req_files):
             print("[OK] {}依赖安装完成。".format(label))
 
 
+def _build_frontend_assets():
+    """Install, build, and deploy the React application for server and desktop UI."""
+    frontend_dir = os.path.join(PROJECT_ROOT, "frontend")
+    dist_dir = os.path.join(frontend_dir, "dist")
+    targets = (
+        os.path.join(PROJECT_ROOT, "backend", "static"),
+        os.path.join(PROJECT_ROOT, "client", "ui", "static"),
+    )
+
+    npm_executable = shutil.which("npm")
+    if not npm_executable:
+        print("[错误] 未找到 npm。请先安装 Node.js。")
+        return False
+
+    try:
+        for command, label in (
+            ([npm_executable, "ci"], "前端依赖安装"),
+            ([npm_executable, "run", "build"], "前端构建"),
+        ):
+            proc = subprocess.run(
+                command,
+                cwd=frontend_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                shell=False,
+            )
+            if proc.returncode != 0:
+                print("[错误] {}失败: {}".format(label, (proc.stderr or proc.stdout)[:500]))
+                return False
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("[错误] 前端构建失败: {}".format(e))
+        return False
+
+    if not os.path.isfile(os.path.join(dist_dir, "index.html")):
+        print("[错误] 前端构建完成后未找到 dist/index.html")
+        return False
+
+    for target in targets:
+        if os.path.isdir(target):
+            shutil.rmtree(target)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        shutil.copytree(dist_dir, target)
+
+    print("[OK] 前端已部署到服务端和桌面客户端。")
+    return True
+
+
 # ── 服务端安装 ─────────────────────────────────────────────────────
 
 def setup_server():
@@ -160,35 +211,8 @@ def setup_server():
 
     # 3. 构建前端
     print("\n--- 第3步: 构建前端 ---")
-    frontend_dir = os.path.join(PROJECT_ROOT, "frontend")
-    static_dir = os.path.join(PROJECT_ROOT, "backend", "static")
-    if os.path.isdir(os.path.join(frontend_dir, "node_modules")):
-        print("正在构建前端...")
-        try:
-            proc = subprocess.run(
-                ["npm", "run", "build"],
-                cwd=frontend_dir, capture_output=True, text=True, timeout=120,
-                shell=True,
-            )
-            if proc.returncode != 0:
-                print("[警告] 前端构建失败: {}".format(proc.stderr[:300]))
-                print("  你可以手动构建: cd frontend && npm run build")
-            else:
-                import shutil
-                dist_dir = os.path.join(frontend_dir, "dist")
-                if os.path.isdir(static_dir):
-                    shutil.rmtree(static_dir)
-                if os.path.isdir(dist_dir):
-                    shutil.copytree(dist_dir, static_dir)
-                    print("[OK] 前端构建完成，已复制到 backend/static/")
-                else:
-                    print("[警告] 构建后未找到 dist/ 目录")
-        except FileNotFoundError:
-            print("[警告] 未找到 npm。请安装 Node.js 或手动构建: cd frontend && npm run build")
-        except Exception as e:
-            print("[警告] 前端构建出错: {}".format(e))
-    else:
-        print("[跳过] 未找到 node_modules，请先运行: cd frontend && npm install")
+    if not _build_frontend_assets():
+        sys.exit(1)
 
     # 4. 服务端配置
     print("\n--- 第4步: 服务端配置 ---")
@@ -206,7 +230,7 @@ def setup_server():
         "jwt_secret": _input("JWT 密钥 (回车自动生成)", existing.get("jwt_secret", "")) or secrets.token_hex(32),
         "backend_host": _input("后端地址", existing.get("backend_host", "127.0.0.1")),
         "backend_port": int(_input("后端端口", str(existing.get("backend_port", 8000)))),
-        "client_version": _input("客户端版本号", existing.get("client_version", "1.0.0")),
+        "client_version": _input("客户端版本号", existing.get("client_version", RELEASE_VERSION)),
     }
 
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -281,8 +305,13 @@ def setup_client():
     print("\n--- 第2步: 安装依赖 ---")
     _install_deps(venv_python, os.path.join(PROJECT_ROOT, "client", "requirements.txt"))
 
-    # 3. 客户端配置
-    print("\n--- 第3步: 客户端配置 ---")
+    # 3. 构建桌面 UI
+    print("\n--- 第3步: 构建桌面 UI ---")
+    if not _build_frontend_assets():
+        sys.exit(1)
+
+    # 4. 客户端配置
+    print("\n--- 第4步: 客户端配置 ---")
     existing = {}
     if os.path.isfile(CLIENT_CONFIG_PATH):
         with open(CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -324,7 +353,7 @@ def setup_client():
         "default_browser_path": default_browser_path,
         "browser_debug_port": int(browser_debug_port),
         "proxy": proxy or None,
-        "version": existing.get("version", "1.0.0"),
+        "version": existing.get("version", RELEASE_VERSION),
     }
     config = {k: v for k, v in config.items() if v is not None}
 
@@ -332,7 +361,7 @@ def setup_client():
         json.dump(config, f, indent=2, ensure_ascii=False)
     print("[OK] 配置已保存到 client_config.json")
 
-    # 4. 生成启动脚本
+    # 5. 生成启动脚本
     _generate_client_start_script()
 
     # 总结

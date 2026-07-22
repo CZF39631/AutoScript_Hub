@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -r backend/requirements.txt -r client/requirements.txt pytest==7.4.3 PyYAML==6.0.2
+      - if: runner.os == 'Windows'
+        run: python -m pytest -q
+      - if: runner.os == 'Linux'
+        run: python -m pytest shared/tests backend/tests test/release -q
+      - run: python -m compileall -q backend client shared release skills
+      - run: python -m pip check
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+
+  docker-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg AUTOSCRIPT_VERSION=0.9.0-ci -t autoscript-hub-server:ci .
+      - run: |
+          docker run -d --name autoscript-ci -p 18000:8000 -e JWT_SECRET=ci-only -e ADMIN_PASSWORD=ci-only autoscript-hub-server:ci
+          for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:18000/api/health/ready && exit 0; sleep 2; done
+          docker logs autoscript-ci
+          exit 1

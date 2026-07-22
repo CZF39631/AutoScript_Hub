@@ -16,8 +16,12 @@ from app.models import User
 
 
 @pytest.fixture(autouse=True)
-def fresh_db():
+def fresh_db(request):
     """Create a fresh file-based SQLite DB for each test."""
+    if request.node.get_closest_marker("real_db"):
+        yield None
+        return
+
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
 

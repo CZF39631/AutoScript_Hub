@@ -1,9 +1,11 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { Table, Button, Tag, Upload, Modal, Input, Form, Space, Select, Tabs, message } from 'antd'
 import { UploadOutlined, PlusOutlined, StopOutlined, CheckOutlined, SearchOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useConnection } from '../contexts/ConnectionContext'
 import api from '../api/client'
+import { loadScriptCollections } from '../api/offlineData'
 
 export default function Scripts() {
   const [myScripts, setMyScripts] = useState([])
@@ -17,23 +19,27 @@ export default function Scripts() {
   const [form] = Form.useForm()
   const nav = useNavigate()
   const { user } = useAuth()
+  const { online, localApi } = useConnection()
 
-  const canUpload = user?.role === 'admin' || user?.role === 'developer'
+  const canUpload = online && (user?.role === 'admin' || user?.role === 'developer')
   const isAdmin = user?.role === 'admin'
 
-  const loadMy = useCallback(() => {
+  const loadCollections = useCallback(() => {
     setMyLoading(true)
-    api.get('/api/scripts').then(r => setMyScripts(r.data))
-      .catch(() => message.error('加载失败')).finally(() => setMyLoading(false))
-  }, [])
-
-  const loadMarket = useCallback(() => {
     setMarketLoading(true)
-    api.get('/api/scripts/marketplace').then(r => setMarketScripts(r.data))
-      .catch(() => message.error('加载失败')).finally(() => setMarketLoading(false))
-  }, [])
+    loadScriptCollections({ online, api, localApi })
+      .then(({ mine, marketplace }) => {
+        setMyScripts(mine)
+        setMarketScripts(marketplace)
+      })
+      .catch(() => message.error(online ? '加载失败' : '本地 Agent 不可用'))
+      .finally(() => {
+        setMyLoading(false)
+        setMarketLoading(false)
+      })
+  }, [online, localApi])
 
-  useEffect(loadMy, [loadMy])
+  useEffect(loadCollections, [loadCollections])
 
   const categories = useMemo(() => {
     const all = [...myScripts, ...marketScripts]
@@ -51,8 +57,7 @@ export default function Scripts() {
     try {
       await api.post(`/api/scripts/${script.id}/install`)
       message.success('已安装')
-      loadMy()
-      loadMarket()
+      loadCollections()
     } catch (e) {
       message.error(e.response?.data?.detail || '安装失败')
     }
@@ -62,8 +67,7 @@ export default function Scripts() {
     try {
       await api.post(`/api/scripts/${script.id}/uninstall`)
       message.success('已卸载')
-      loadMy()
-      loadMarket()
+      loadCollections()
     } catch (e) {
       message.error(e.response?.data?.detail || '卸载失败')
     }
@@ -84,8 +88,7 @@ export default function Scripts() {
       message.success('上传成功')
       setUploadOpen(false)
       form.resetFields()
-      loadMy()
-      loadMarket()
+      loadCollections()
     } catch (e) {
       message.error(e.response?.data?.detail || '上传失败')
     } finally {
@@ -98,9 +101,8 @@ export default function Scripts() {
     try {
       await api.post(`/api/scripts/${script.id}/${action}`)
       message.success(action === 'disable' ? '已禁用' : '已启用')
-      loadMy()
-      loadMarket()
-    } catch (e) {
+      loadCollections()
+    } catch {
       message.error('操作失败')
     }
   }
@@ -178,16 +180,16 @@ export default function Scripts() {
               loading={myLoading} size="small" pagination={{ pageSize: 20 }} />
           )
         },
-        {
+        ...(online ? [{
           key: 'market',
           label: `脚本市场`,
           children: (
             <Table dataSource={filterList(marketScripts)} columns={marketColumns} rowKey="id"
               loading={marketLoading} size="small" pagination={{ pageSize: 20 }}
-              onHeaderRow={() => ({ onClick: loadMarket })} />
+              />
           )
-        },
-      ]} onChange={() => { if (!marketScripts.length) loadMarket() }} />
+        }] : []),
+      ]} />
 
       <Modal title="上传脚本" open={uploadOpen} onCancel={() => setUploadOpen(false)}
         confirmLoading={uploading} onOk={() => form.submit()} okText="上传">

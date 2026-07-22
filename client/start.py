@@ -4,15 +4,20 @@ import subprocess
 import sys
 import os
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(ROOT_DIR)
-CLIENT_CONFIG_PATH = os.path.join(PROJECT_ROOT, "client_config.json")
+from client.runtime.paths import ClientPaths
+
+_PATHS = ClientPaths.from_environment()
+_PATHS.ensure()
+PROJECT_ROOT = str(_PATHS.install_dir)
+CLIENT_CONFIG_PATH = str(_PATHS.config_file)
+LEGACY_CLIENT_CONFIG_PATH = os.path.join(PROJECT_ROOT, "client_config.json")
 
 
 def _load_config():
-    if os.path.isfile(CLIENT_CONFIG_PATH):
+    source = CLIENT_CONFIG_PATH if os.path.isfile(CLIENT_CONFIG_PATH) else LEGACY_CLIENT_CONFIG_PATH
+    if os.path.isfile(source):
         try:
-            with open(CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+            with open(source, "r", encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             pass

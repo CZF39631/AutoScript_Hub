@@ -50,3 +50,12 @@ client/ui/static/
 # Temporary backups
 docs/main_script3_backup.py
 docs/test/
+
+# Local release credentials and generated artifacts
+.release-secrets/
+release-output/
+release/windows/cache/
+deploy/.env
+
+# Local agent session state
+.omo/

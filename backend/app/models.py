@@ -190,3 +190,11 @@ class UserPreset(Base):
     values_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class UserSettings(Base):
+    __tablename__ = "user_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    settings_json = Column(Text, nullable=False, default="{}")
