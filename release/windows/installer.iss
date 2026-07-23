@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.9.0-dev"
+  #define MyAppVersion "0.9.1-dev"
 #endif
 #define MyAppName "AutoScript Hub"
 #define MyAppPublisher "AutoScript Hub"
@@ -23,6 +23,11 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\AutoScriptHub.exe
 CloseApplications=yes
 RestartApplications=no
+LanguageDetectionMethod=none
+
+[Languages]
+Name: "chinesesimplified"; MessagesFile: "cache\ChineseSimplified.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Dirs]
 Name: "{localappdata}\AutoScriptHub"

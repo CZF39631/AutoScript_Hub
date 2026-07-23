@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 
 
-RELEASE_VERSION = "0.9.0"
+RELEASE_VERSION = "0.9.1"
 DEV_VERSION = RELEASE_VERSION + "-dev"
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _CHANNELS = {"beta", "stable"}

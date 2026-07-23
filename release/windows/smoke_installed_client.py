@@ -103,6 +103,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--install-dir", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--expected-version", default="0.9.1")
     args = parser.parse_args()
 
     install_dir = args.install_dir.resolve()
@@ -156,7 +157,7 @@ def main() -> int:
         started_pids.add(standalone.pid)
         status = _wait_json("http://127.0.0.1:18080/status")
         runtime = _wait_json("http://127.0.0.1:18080/local/runtime")
-        if status.get("version") != "0.9.0":
+        if status.get("version") != args.expected_version:
             raise RuntimeError(f"unexpected installed Agent version: {status}")
         _assert_runtime(runtime)
         print("standalone_agent_status=" + json.dumps(status, ensure_ascii=False, sort_keys=True))
@@ -179,7 +180,7 @@ def main() -> int:
         started_pids.update(new_agents)
         if b'id="root"' not in html:
             raise RuntimeError("installed UI did not serve the packaged frontend root")
-        if status.get("version") != "0.9.0":
+        if status.get("version") != args.expected_version:
             raise RuntimeError(f"UI-started Agent version mismatch: {status}")
         _assert_runtime(runtime)
         print(f"ui_pid={ui_process.pid}")
@@ -189,7 +190,7 @@ def main() -> int:
         started_pids.discard(ui_process.pid)
         _wait_port_closed("http://127.0.0.1:18081/")
         status_after_ui_close = _wait_json("http://127.0.0.1:18080/status", timeout=10)
-        if status_after_ui_close.get("version") != "0.9.0":
+        if status_after_ui_close.get("version") != args.expected_version:
             raise RuntimeError(f"Agent stopped when the UI closed: {status_after_ui_close}")
         print("agent_after_ui_close=" + json.dumps(status_after_ui_close, ensure_ascii=False, sort_keys=True))
         print(f"isolated_path={environment['PATH']}")
