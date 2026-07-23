@@ -48,6 +48,15 @@ def test_build_injects_version_and_channel_into_all_frozen_entrypoints():
     assert entries.count("from autoscript_build_info import CHANNEL, VERSION") == 3
 
 
+def test_installed_client_smoke_uses_the_expected_release_version_argument():
+    smoke = _read("release/windows/smoke_installed_client.py")
+
+    assert "--expected-version" in smoke
+    assert 'default="0.9.1"' in smoke
+    assert 'status.get("version") != args.expected_version' in smoke
+    assert 'status.get("version") != "0.9.0"' not in smoke
+
+
 def test_runtime_staging_requires_exact_python_3119_and_proves_venv_support():
     stage = _read("release/windows/stage_python_runtime.ps1")
     fetch = _read("release/windows/fetch_python_runtime.ps1")
@@ -64,6 +73,10 @@ def test_runtime_staging_requires_exact_python_3119_and_proves_venv_support():
 def test_inno_installs_per_user_private_runtime_and_preserves_data():
     installer = _read("release/windows/installer.iss")
 
+    assert "[Languages]" in installer
+    assert 'name: "chinesesimplified"' in installer.lower()
+    assert "ChineseSimplified.isl" in installer
+    assert "LanguageDetectionMethod=none" in installer
     assert "PrivilegesRequired=lowest" in installer
     assert "{localappdata}\\Programs\\AutoScript Hub" in installer
     assert "windows-runtime\\python\\*" in installer
@@ -92,6 +105,8 @@ def test_build_enforces_tests_and_95mb_gitee_gate():
     assert "windows-runtime" in build
     assert "95MB" in build
     assert "ISCC" in build
+    assert "ChineseSimplified.isl" in build
+    assert "raw.githubusercontent.com/kira-96/Inno-Setup-Chinese-Simplified-Translation" in build
     assert "LOCALAPPDATA" in build
 
 

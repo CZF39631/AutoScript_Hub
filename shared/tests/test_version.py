@@ -5,7 +5,7 @@ from shared.version import DEV_VERSION, RELEASE_VERSION, get_channel, get_versio
 
 
 def test_release_and_development_versions_share_the_0_9_base():
-    assert RELEASE_VERSION == "0.9.0"
+    assert RELEASE_VERSION == "0.9.1"
     assert DEV_VERSION == RELEASE_VERSION + "-dev"
 
 

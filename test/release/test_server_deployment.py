@@ -35,8 +35,8 @@ def test_compose_is_lan_first_single_instance_with_persistent_data():
     example_env = _read("deploy/.env.example")
 
     assert compose.count("  server:\n") == 1
-    assert "${AUTOSCRIPT_SERVER_IMAGE:-ghcr.io/czf39631/autoscript-hub-server:0.9.0}" in compose
-    assert "AUTOSCRIPT_SERVER_IMAGE=ghcr.io/czf39631/autoscript-hub-server:0.9.0" in example_env
+    assert "${AUTOSCRIPT_SERVER_IMAGE:-ghcr.io/czf39631/autoscript-hub-server:0.9.1}" in compose
+    assert "AUTOSCRIPT_SERVER_IMAGE=ghcr.io/czf39631/autoscript-hub-server:0.9.1" in example_env
     assert "AUTOSCRIPT_IMAGE_TAG=0.9\n" not in example_env
     assert "${AUTOSCRIPT_BIND_ADDRESS:-0.0.0.0}" in compose
     assert "${AUTOSCRIPT_DATA_DIR:-/opt/autoscript-hub/data}:/data" in compose

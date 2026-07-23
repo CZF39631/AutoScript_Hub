@@ -77,6 +77,6 @@ def test_new_development_configs_default_to_the_current_release_version():
     installer = _load_installer()
     source = Path(installer.__file__).read_text(encoding="utf-8")
 
-    assert installer.RELEASE_VERSION == "0.9.0"
+    assert installer.RELEASE_VERSION == "0.9.1"
     assert 'existing.get("client_version", RELEASE_VERSION)' in source
     assert 'existing.get("version", RELEASE_VERSION)' in source

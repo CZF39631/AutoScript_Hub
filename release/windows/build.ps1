@@ -1,5 +1,5 @@
 param(
-    [string]$Version = $(if ($env:AUTOSCRIPT_VERSION) { $env:AUTOSCRIPT_VERSION } else { '0.9.0-dev' }),
+    [string]$Version = $(if ($env:AUTOSCRIPT_VERSION) { $env:AUTOSCRIPT_VERSION } else { '0.9.1-dev' }),
     [string]$PythonExe = 'python'
 )
 $ErrorActionPreference = 'Stop'
@@ -65,6 +65,21 @@ try {
         $ISCC = $Candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     }
     if (-not $ISCC) { throw 'ISCC.exe (Inno Setup 6) was not found' }
+    $ChineseLanguage = Join-Path $PSScriptRoot 'cache\ChineseSimplified.isl'
+    $ChineseLanguageHash = '869E43E7C7B8D20C7E4397C8E98F7D1B7CF0528803ACDF019AD350143EC85469'
+    if (-not (Test-Path -LiteralPath $ChineseLanguage)) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ChineseLanguage) | Out-Null
+        Invoke-WebRequest `
+            -Uri 'https://raw.githubusercontent.com/kira-96/Inno-Setup-Chinese-Simplified-Translation/6da09d23e14443d4cf8f07b1c5fd821bfe459788/ChineseSimplified.isl' `
+            -OutFile $ChineseLanguage
+        if (-not (Test-Path -LiteralPath $ChineseLanguage)) {
+            throw 'ChineseSimplified.isl was not prepared for Inno Setup'
+        }
+    }
+    $ActualChineseLanguageHash = (Get-FileHash -LiteralPath $ChineseLanguage -Algorithm SHA256).Hash
+    if ($ActualChineseLanguageHash -ne $ChineseLanguageHash) {
+        throw "ChineseSimplified.isl hash mismatch: $ActualChineseLanguageHash"
+    }
     & $ISCC "/DMyAppVersion=$Version" (Join-Path $PSScriptRoot 'installer.iss')
     if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
 
