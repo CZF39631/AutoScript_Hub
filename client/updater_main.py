@@ -36,7 +36,7 @@ def wait_for_processes(pids: Iterable[int], timeout_seconds: int = 300) -> bool:
         for pid in remaining:
             try:
                 os.kill(pid, 0)
-            except OSError:
+            except (OSError, SystemError):
                 stopped.add(pid)
         remaining -= stopped
         if remaining:
