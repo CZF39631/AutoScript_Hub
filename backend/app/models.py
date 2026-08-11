@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship, declarative_base  # type: ignore[attr-defined]
@@ -7,6 +8,17 @@ Base = declarative_base()
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _semantic_version(config_json):
+    """Return a script contract SemVer from persisted config JSON when available."""
+    if not config_json:
+        return None
+    try:
+        version = json.loads(config_json).get("version")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return version if isinstance(version, str) and version.strip() else None
 
 
 class User(Base):
@@ -68,6 +80,11 @@ class Script(Base):
     versions = relationship("ScriptVersion", back_populates="script", order_by="ScriptVersion.version.desc()")  # type: ignore[call-arg]
     runs = relationship("Run", back_populates="script")  # type: ignore[call-arg]
 
+    @property
+    def latest_semantic_version(self):
+        """Display version from config while latest_version remains a storage revision."""
+        return _semantic_version(self.config_json)
+
 
 class ScriptVersion(Base):
     __tablename__ = "script_versions"
@@ -82,6 +99,11 @@ class ScriptVersion(Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
     script = relationship("Script", back_populates="versions")  # type: ignore[call-arg]
+
+    @property
+    def semantic_version(self):
+        """Display SemVer from the immutable version config."""
+        return _semantic_version(self.config_json)
 
 
 class Run(Base):

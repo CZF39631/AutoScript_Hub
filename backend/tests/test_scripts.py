@@ -22,6 +22,7 @@ def test_upload_py_script(client, dev_token):
     data = resp.json()
     assert data["name"] == "测试脚本"
     assert data["latest_version"] == 1
+    assert data["latest_semantic_version"] == "1.0.0"
     assert data["status"] == "active"
 
 
@@ -67,6 +68,7 @@ def test_upload_new_version(client, dev_token):
         )
     assert resp.status_code == 200
     assert resp.json()["latest_version"] == 2
+    assert resp.json()["latest_semantic_version"] == "1.0.0"
 
 
 def test_list_versions(client, dev_token):
@@ -75,6 +77,7 @@ def test_list_versions(client, dev_token):
     resp = client.get(f"/api/scripts/{sid}/versions", headers={"Authorization": f"Bearer {dev_token}"})
     assert resp.status_code == 200
     assert len(resp.json()) == 1
+    assert resp.json()[0]["semantic_version"] == "1.0.0"
 
 
 def test_upload_rejects_main_signature_mismatch_with_structured_error(client, dev_token):
