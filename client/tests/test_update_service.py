@@ -86,6 +86,7 @@ def test_download_tries_gitee_then_github_and_persists_verified_state(tmp_path):
     service, attempts = _service(tmp_path, idle=True)
 
     assert service.check().state == "available"
+    assert attempts == []
     result = service.stage()
 
     assert result.state == "verified"

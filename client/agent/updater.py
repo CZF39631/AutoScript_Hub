@@ -93,14 +93,16 @@ def _service(
 
 
 def check_and_stage_update(current_version: str, runtime_is_idle=lambda: True) -> dict:
-    """Check signed public sources and download a verified installer for manual approval."""
+    """Check signed public sources without downloading an installer.
+
+    The name is retained for callers from older Agent builds; scheduled checks
+    and the local check route must only discover an available manifest.
+    """
     global _active_service
     try:
         with _lock:
             service = _service(current_version, runtime_is_idle)
-            checked = service.check()
-            if checked.state == "available":
-                checked = service.stage()
+            service.check()
             _active_service = service
             return service.store.read()
     except Exception:
@@ -115,12 +117,23 @@ def get_update_status() -> dict:
 
 
 def install_staged_update(current_version: str, runtime_is_idle=lambda: True) -> dict:
-    """Install only after an explicit local UI request."""
+    """Download, validate, and install after an explicit local UI request."""
     global _active_service
     try:
         with _lock:
             service = _active_service or _service(current_version, runtime_is_idle)
             service.runtime_is_idle = runtime_is_idle
+            persisted = service.store.read()
+            if persisted.get("state") == "available" and service.manifest is None:
+                checked = service.check()
+                if checked.state != "available":
+                    return service.store.read()
+            if service.manifest is not None and service.installer is None:
+                downloaded = service.download()
+                if downloaded.state != "verified":
+                    return service.store.read() | {
+                        "error": downloaded.error,
+                    }
             result = service.request_install()
             _active_service = service
             return service.store.read() | {"state": result.state}
@@ -138,7 +151,7 @@ def check_and_apply_update(
     password: str = "",
     runtime_is_idle=lambda: True,
 ) -> bool:
-    """Backward-compatible check that now stages only; installation is user-controlled."""
+    """Backward-compatible check-only entrypoint; installation is user-controlled."""
     del backend_url, headers, project_root, username, password
     check_and_stage_update(current_version, runtime_is_idle)
     return False
