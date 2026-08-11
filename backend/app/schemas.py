@@ -51,6 +51,7 @@ class ScriptBrief(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = None
     latest_version: int
+    latest_semantic_version: Optional[str] = None
     status: str
     created_at: datetime
     installed: Optional[bool] = None
@@ -71,6 +72,7 @@ class ScriptDetail(ScriptBrief):
 class ScriptVersionBrief(BaseModel):
     id: int
     version: int
+    semantic_version: Optional[str] = None
     changelog: Optional[str] = None
     created_at: datetime
 
@@ -88,6 +90,7 @@ class RunBrief(BaseModel):
     id: int
     script_id: int
     script_version: int
+    script_semantic_version: Optional[str] = None
     user_id: int
     agent_id: Optional[int] = None
     status: str
