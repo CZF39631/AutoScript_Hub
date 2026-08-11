@@ -5,7 +5,8 @@ $ErrorActionPreference = 'Stop'
 $WebViewUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
 $SecurityModule = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
 
-if (Test-Path -LiteralPath $SecurityModule) {
+if (-not (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue) -and
+    (Test-Path -LiteralPath $SecurityModule)) {
     Import-Module -Name $SecurityModule -ErrorAction Stop
 }
 
