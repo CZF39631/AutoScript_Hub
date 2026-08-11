@@ -1,6 +1,8 @@
+import base64
 import os
 import json
 import logging
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -96,8 +98,49 @@ BACKEND_HOST: str = str(_get("backend_host", "127.0.0.1", env_var="BACKEND_HOST"
 BACKEND_PORT: int = int(_get("backend_port", 8000, env_var="BACKEND_PORT"))
 CORS_ORIGINS: list[str] = _get_csv("cors_origins", "", "CORS_ORIGINS")
 
+# Release cache (LAN release-cache feature)
+# Stores cached client release bundles (manifest, signature, installer) under DATA_DIR.
+RELEASE_CACHE_DIR: str = _get_runtime_path(
+    "release_cache_dir",
+    os.path.join(DATA_DIR, "release-cache"),
+    "RELEASE_CACHE_DIR",
+)
+# Shared secret for authenticated sync uploads. Empty = feature disabled.
+RELEASE_CACHE_SYNC_TOKEN: str = str(_get("", "", env_var="RELEASE_CACHE_SYNC_TOKEN"))
+# Maximum number of cached release versions to retain (oldest pruned on publish).
+RELEASE_CACHE_RETENTION: int = int(_get("release_cache_retention", 3, env_var="RELEASE_CACHE_RETENTION"))
+
+# Ed25519 public key used to verify LAN manifest signatures on upload.
+# Resolution order: UPDATE_PUBLIC_KEY_B64 env var, then the shipped key file.
+def _load_update_public_key() -> Optional[bytes]:
+    env_value = os.environ.get("UPDATE_PUBLIC_KEY_B64", "").strip()
+    if env_value:
+        try:
+            decoded = base64.b64decode(env_value, validate=True)
+            if len(decoded) == 32:
+                return decoded
+        except (ValueError, base64.binascii.Error):
+            logger.warning("UPDATE_PUBLIC_KEY_B64 is set but invalid; ignoring")
+    # Fallback: the public key shipped with the client (also copied into the Docker image).
+    for candidate in (
+        Path(PROJECT_ROOT) / "client" / "update" / "update-public-key.b64",
+        Path(BASE_DIR) / "static" / "update-public-key.b64",
+    ):
+        if candidate.is_file():
+            try:
+                decoded = base64.b64decode(candidate.read_text(encoding="ascii").strip(), validate=True)
+                if len(decoded) == 32:
+                    return decoded
+            except (ValueError, base64.binascii.Error, OSError):
+                continue
+    return None
+
+
+UPDATE_PUBLIC_KEY_BYTES: Optional[bytes] = _load_update_public_key()
+
 # Ensure directories exist
 os.makedirs(SCRIPTS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(LOG_ARCHIVE_DIR, exist_ok=True)
 os.makedirs(BACKUPS_DIR, exist_ok=True)
+os.makedirs(RELEASE_CACHE_DIR, exist_ok=True)
