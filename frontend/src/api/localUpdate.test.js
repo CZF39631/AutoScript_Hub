@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { checkUpdate, installUpdate, loadUpdateStatus } from './localUpdate.js'
+import { checkUpdate, downloadAndInstallUpdate, loadUpdateStatus } from './localUpdate.js'
 
 
 function client() {
@@ -16,7 +16,7 @@ function client() {
       calls.push(['post', path])
       return {
         data: {
-          state: path.endsWith('install') ? 'installing' : 'verified',
+          state: path.endsWith('install') ? 'installing' : 'available',
           current_version: '0.9.0',
         },
       }
@@ -31,8 +31,8 @@ test('desktop update actions use the local Agent and never the server API', asyn
   const status = await loadUpdateStatus(localApi)
   assert.equal(status.state, 'verified')
   assert.equal(status.current_version, '0.9.0')
-  assert.equal((await checkUpdate(localApi)).state, 'verified')
-  assert.equal((await installUpdate(localApi)).state, 'installing')
+  assert.equal((await checkUpdate(localApi)).state, 'available')
+  assert.equal((await downloadAndInstallUpdate(localApi)).state, 'installing')
   assert.deepEqual(localApi.calls, [
     ['get', '/local/update'],
     ['post', '/local/update/check'],
