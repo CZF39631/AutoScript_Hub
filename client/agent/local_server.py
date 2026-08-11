@@ -95,6 +95,13 @@ class AgentHandler(BaseHTTPRequestHandler):
     install_update_fn = None          # () -> durable signed-update state
     get_runtime_info_fn = None        # () -> managed private-Python diagnostics
 
+    def _update_status(self, callback, fallback):
+        result = callback() if callback else fallback
+        payload = dict(result or {})
+        version_callback = type(self).get_version_fn
+        payload["current_version"] = version_callback() if version_callback else None
+        return payload
+
     def do_GET(self):
         if self.path == "/status":
             callback = type(self).get_status_fn
@@ -121,7 +128,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._json(callback() if callback else {"online": False})
         elif self.path == "/local/update":
             callback = type(self).get_update_status_fn
-            self._json(callback() if callback else {"state": "idle"})
+            self._json(self._update_status(callback, {"state": "idle"}))
         elif self.path.startswith("/local/runs/") and self.path.endswith("/log"):
             run_id = self.path[len("/local/runs/"):-len("/log")]
             try:
@@ -176,18 +183,26 @@ class AgentHandler(BaseHTTPRequestHandler):
                 return
             callback = type(self).check_update_fn
             try:
-                self._json(callback() if callback else {"state": "idle"})
+                self._json(self._update_status(callback, {"state": "idle"}))
             except Exception as e:
-                self._json({"state": "idle", "error": str(e)}, 500)
+                self._json(
+                    self._update_status(None, {"state": "idle", "error": str(e)}),
+                    500,
+                )
         elif self.path == "/local/update/install":
             if not self._consume_body():
                 return
             callback = type(self).install_update_fn
             try:
-                result = callback() if callback else {"state": "idle", "error": "更新功能不可用"}
+                result = self._update_status(
+                    callback, {"state": "idle", "error": "更新功能不可用"}
+                )
                 self._json(result, 200 if result.get("state") in {"installing", "waiting-for-idle"} else 409)
             except Exception as e:
-                self._json({"state": "idle", "error": str(e)}, 500)
+                self._json(
+                    self._update_status(None, {"state": "idle", "error": str(e)}),
+                    500,
+                )
         else:
             self._json({"error": "not found"}, 404)
 

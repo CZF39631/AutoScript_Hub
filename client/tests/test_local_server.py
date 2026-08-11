@@ -52,6 +52,7 @@ def test_local_result_open_endpoint_calls_agent_callback():
 
 
 def test_local_update_endpoints_expose_status_check_and_manual_install():
+    AgentHandler.get_version_fn = lambda: "0.9.0"
     AgentHandler.get_update_status_fn = lambda: {"state": "verified", "version": "0.9.1"}
     AgentHandler.check_update_fn = lambda: {"state": "verified", "version": "0.9.1"}
     AgentHandler.install_update_fn = lambda: {"state": "installing", "version": "0.9.1"}
@@ -62,7 +63,11 @@ def test_local_update_endpoints_expose_status_check_and_manual_install():
     try:
         base = "http://127.0.0.1:{}".format(server.server_port)
         with urllib.request.urlopen(base + "/local/update", timeout=3) as response:
-            assert json.loads(response.read()) == {"state": "verified", "version": "0.9.1"}
+            assert json.loads(response.read()) == {
+                "state": "verified",
+                "version": "0.9.1",
+                "current_version": "0.9.0",
+            }
         for action, expected in (("check", "verified"), ("install", "installing")):
             request = urllib.request.Request(
                 base + "/local/update/" + action,
@@ -71,7 +76,9 @@ def test_local_update_endpoints_expose_status_check_and_manual_install():
                 method="POST",
             )
             with urllib.request.urlopen(request, timeout=3) as response:
-                assert json.loads(response.read())["state"] == expected
+                payload = json.loads(response.read())
+                assert payload["state"] == expected
+                assert payload["current_version"] == "0.9.0"
     finally:
         server.shutdown()
         server.server_close()
