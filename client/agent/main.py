@@ -1307,7 +1307,7 @@ def _compare_versions(local_ver, remote_ver):
 
 
 def _check_and_stage_update():
-    """Check public signed sources and stage a verified installer without applying it."""
+    """Check public signed sources for an available update without downloading it."""
     from client.agent.updater import check_and_stage_update
     local_version = get_version()
     return check_and_stage_update(
@@ -1402,14 +1402,6 @@ def agent_iteration(username, password):
     _flush_pending_reports()
     _flush_pending_log_uploads()
     _check_local_runs()
-    if (
-        _get_update_status().get("state") == "waiting-for-idle"
-        and _running_proc is None
-        and _local_run_proc is None
-    ):
-        result = _install_staged_update()
-        if result.get("state") == "installing":
-            return False
     poll_and_execute()
     send_heartbeat()
     _sync_local_runs_to_backend()

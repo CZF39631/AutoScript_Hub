@@ -54,7 +54,7 @@ def test_local_result_open_endpoint_calls_agent_callback():
 def test_local_update_endpoints_expose_status_check_and_manual_install():
     AgentHandler.get_version_fn = lambda: "0.9.0"
     AgentHandler.get_update_status_fn = lambda: {"state": "verified", "version": "0.9.1"}
-    AgentHandler.check_update_fn = lambda: {"state": "verified", "version": "0.9.1"}
+    AgentHandler.check_update_fn = lambda: {"state": "available", "version": "0.9.1"}
     AgentHandler.install_update_fn = lambda: {"state": "installing", "version": "0.9.1"}
     server = HTTPServer(("127.0.0.1", 0), AgentHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -68,7 +68,7 @@ def test_local_update_endpoints_expose_status_check_and_manual_install():
                 "version": "0.9.1",
                 "current_version": "0.9.0",
             }
-        for action, expected in (("check", "verified"), ("install", "installing")):
+        for action, expected in (("check", "available"), ("install", "installing")):
             request = urllib.request.Request(
                 base + "/local/update/" + action,
                 data=b"{}",
