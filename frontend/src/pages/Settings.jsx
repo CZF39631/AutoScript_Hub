@@ -77,13 +77,15 @@ export default function Settings() {
   }
 
   const updateAvailable = ['available', 'verified', 'waiting-for-idle'].includes(updateState.state)
-  const updateSummary = updateAvailable
-    ? '有可用更新'
-    : updateState.error
-      ? '无法确认更新状态'
-      : updateState.version
-        ? '当前已是最新版本'
-        : '尚未检查'
+  const updateSummary = updateState.state === 'installing'
+    ? '正在安装更新'
+    : updateAvailable
+      ? '有可用更新'
+      : updateState.error
+        ? '无法确认更新状态'
+        : updateState.version
+          ? '当前已是最新版本'
+          : '尚未检查'
 
   if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100 }} />
 
@@ -150,7 +152,7 @@ export default function Settings() {
           <Space direction="vertical" style={{ width: '100%' }}>
             <div>
               状态：<Tag>{updateState.state || 'idle'}</Tag>
-              <Tag color={updateAvailable ? 'blue' : updateState.error ? 'orange' : 'green'}>
+              <Tag color={updateState.state === 'installing' ? 'processing' : updateAvailable ? 'blue' : updateState.error ? 'orange' : 'green'}>
                 {updateSummary}
               </Tag>
             </div>
