@@ -76,7 +76,12 @@ try {
             throw 'ChineseSimplified.isl was not prepared for Inno Setup'
         }
     }
-    $ActualChineseLanguageHash = (Get-FileHash -LiteralPath $ChineseLanguage -Algorithm SHA256).Hash
+    $HashAlgorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $ActualChineseLanguageHash = -join ($HashAlgorithm.ComputeHash([System.IO.File]::ReadAllBytes($ChineseLanguage)) | ForEach-Object { $_.ToString('X2') })
+    } finally {
+        $HashAlgorithm.Dispose()
+    }
     if ($ActualChineseLanguageHash -ne $ChineseLanguageHash) {
         throw "ChineseSimplified.isl hash mismatch: $ActualChineseLanguageHash"
     }
