@@ -10,11 +10,16 @@ function client() {
     calls,
     async get(path) {
       calls.push(['get', path])
-      return { data: { state: 'verified', version: '0.9.1' } }
+      return { data: { state: 'verified', version: '0.9.1', current_version: '0.9.0' } }
     },
     async post(path) {
       calls.push(['post', path])
-      return { data: { state: path.endsWith('install') ? 'installing' : 'verified' } }
+      return {
+        data: {
+          state: path.endsWith('install') ? 'installing' : 'verified',
+          current_version: '0.9.0',
+        },
+      }
     },
   }
 }
@@ -23,7 +28,9 @@ function client() {
 test('desktop update actions use the local Agent and never the server API', async () => {
   const localApi = client()
 
-  assert.equal((await loadUpdateStatus(localApi)).state, 'verified')
+  const status = await loadUpdateStatus(localApi)
+  assert.equal(status.state, 'verified')
+  assert.equal(status.current_version, '0.9.0')
   assert.equal((await checkUpdate(localApi)).state, 'verified')
   assert.equal((await installUpdate(localApi)).state, 'installing')
   assert.deepEqual(localApi.calls, [

@@ -76,6 +76,15 @@ export default function Settings() {
     }
   }
 
+  const updateAvailable = ['available', 'verified', 'waiting-for-idle'].includes(updateState.state)
+  const updateSummary = updateAvailable
+    ? '有可用更新'
+    : updateState.error
+      ? '无法确认更新状态'
+      : updateState.version
+        ? '当前已是最新版本'
+        : '尚未检查'
+
   if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100 }} />
 
   return (
@@ -141,8 +150,14 @@ export default function Settings() {
           <Space direction="vertical" style={{ width: '100%' }}>
             <div>
               状态：<Tag>{updateState.state || 'idle'}</Tag>
-              {updateState.version && <span>版本：{updateState.version}</span>}
+              <Tag color={updateAvailable ? 'blue' : updateState.error ? 'orange' : 'green'}>
+                {updateSummary}
+              </Tag>
             </div>
+            <Space size="large" wrap>
+              <span>已安装版本：{updateState.current_version || '-'}</span>
+              <span>最新版本：{updateState.version || '未检查'}</span>
+            </Space>
             {updateState.error && <Alert type="warning" showIcon message={updateState.error} />}
             <Space>
               <Button icon={<ReloadOutlined />} loading={updateBusy} onClick={() => runUpdateAction('check')}>
