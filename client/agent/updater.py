@@ -53,12 +53,13 @@ def _handoff(paths: ClientPaths, installer: Path, version: str) -> None:
             "--pid", str(os.getpid()),
         ]
     )
-    subprocess.Popen(
+    process = subprocess.Popen(
         command,
         cwd=str(working_directory),
         creationflags=_detached_flags(),
         close_fds=True,
     )
+    UpdateStateStore(paths.updates_dir).set_details(updater_pid=process.pid)
 
 
 def _sources(config: dict):

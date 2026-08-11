@@ -1,5 +1,10 @@
 from client.agent import updater
 from client.runtime.paths import ClientPaths
+from client.update.state import UpdateStateStore
+
+
+class _MockProcess:
+    pid = 99999
 
 
 def test_handoff_runs_atomic_updater_copy_outside_install_tree(tmp_path, monkeypatch):
@@ -15,7 +20,7 @@ def test_handoff_runs_atomic_updater_copy_outside_install_tree(tmp_path, monkeyp
     installer = paths.updates_dir / "AutoScript-Hub-Setup-0.9.1.exe"
     installer.write_bytes(b"installer")
     calls = []
-    monkeypatch.setattr(updater.subprocess, "Popen", lambda command, **kwargs: calls.append((command, kwargs)))
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda command, **kwargs: calls.append((command, kwargs)) or _MockProcess())
     monkeypatch.setattr(updater, "_detached_flags", lambda: 0)
 
     updater._handoff(paths, installer, "0.9.1")
@@ -27,3 +32,6 @@ def test_handoff_runs_atomic_updater_copy_outside_install_tree(tmp_path, monkeyp
     assert bootstrap.read_bytes() == source.read_bytes()
     assert paths.install_dir not in bootstrap.parents
     assert kwargs["cwd"] == str(paths.updates_dir)
+    # _handoff persists the spawned updater PID for ownership tracking
+    state = UpdateStateStore(paths.updates_dir).read()
+    assert state.get("updater_pid") == 99999
