@@ -2,8 +2,22 @@ import { useEffect, useState } from 'react'
 import { Alert, Card, Form, Input, InputNumber, Button, message, Spin, Popconfirm, Select, Space, Tag } from 'antd'
 import { DownloadOutlined, ReloadOutlined, SaveOutlined, UndoOutlined, SettingOutlined } from '@ant-design/icons'
 import api from '../api/client'
-import { checkUpdate, installUpdate, loadUpdateStatus } from '../api/localUpdate'
+import { checkUpdate, downloadAndInstallUpdate, loadUpdateStatus } from '../api/localUpdate'
 import { useConnection } from '../contexts/ConnectionContext'
+
+const updateStateSummary = {
+  available: '发现可用更新（尚未下载）',
+  verified: '更新已下载并验证',
+  'waiting-for-idle': '更新已就绪，脚本结束后请再次点击“下载并安装”',
+  installing: '正在安装更新',
+}
+
+const updateStateColor = {
+  available: 'blue',
+  verified: 'green',
+  'waiting-for-idle': 'orange',
+  installing: 'processing',
+}
 
 export default function Settings() {
   const [loading, setLoading] = useState(true)
@@ -33,11 +47,14 @@ export default function Settings() {
     setUpdateBusy(true)
     try {
       const result = action === 'install'
-        ? await installUpdate(localApi)
+        ? await downloadAndInstallUpdate(localApi)
         : await checkUpdate(localApi)
       setUpdateState(result)
-      if (result.state === 'installing') message.success('更新安装已启动，客户端将自动重启')
-      else if (result.state === 'verified') message.success('更新已下载并验证，可选择安装')
+      if (action === 'check') {
+        if (result.state === 'available') message.info('发现可用更新，请点击“下载并安装”')
+        else message.info('更新检查完成')
+      } else if (result.state === 'installing') message.success('更新安装已启动，客户端将自动重启')
+      else if (result.state === 'waiting-for-idle') message.info('更新已就绪。脚本运行结束后，请再次点击“下载并安装”完成安装')
       else message.info('当前没有可用更新')
     } catch (error) {
       const detail = error.response?.data?.error || error.message
@@ -76,16 +93,11 @@ export default function Settings() {
     }
   }
 
-  const updateAvailable = ['available', 'verified', 'waiting-for-idle'].includes(updateState.state)
-  const updateSummary = updateState.state === 'installing'
-    ? '正在安装更新'
-    : updateAvailable
-      ? '有可用更新'
-      : updateState.error
-        ? '无法确认更新状态'
-        : updateState.version
-          ? '当前已是最新版本'
-          : '尚未检查'
+  const canInstallUpdate = ['available', 'verified', 'waiting-for-idle'].includes(updateState.state)
+  const updateSummary = updateState.error
+    ? '无法确认更新状态'
+    : updateStateSummary[updateState.state]
+      || (updateState.version ? '当前已是最新版本' : '尚未检查')
 
   if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100 }} />
 
@@ -152,7 +164,7 @@ export default function Settings() {
           <Space direction="vertical" style={{ width: '100%' }}>
             <div>
               状态：<Tag>{updateState.state || 'idle'}</Tag>
-              <Tag color={updateState.state === 'installing' ? 'processing' : updateAvailable ? 'blue' : updateState.error ? 'orange' : 'green'}>
+              <Tag color={updateStateColor[updateState.state] || (updateState.error ? 'orange' : 'green')}>
                 {updateSummary}
               </Tag>
             </div>
@@ -163,19 +175,19 @@ export default function Settings() {
             {updateState.error && <Alert type="warning" showIcon message={updateState.error} />}
             <Space>
               <Button icon={<ReloadOutlined />} loading={updateBusy} onClick={() => runUpdateAction('check')}>
-                检查并验证更新
+                检查更新
               </Button>
               <Button
                 type="primary"
                 icon={<DownloadOutlined />}
                 loading={updateBusy}
-                disabled={!['verified', 'waiting-for-idle'].includes(updateState.state)}
+                disabled={!canInstallUpdate}
                 onClick={() => runUpdateAction('install')}
               >
-                安装已验证更新
+                下载并安装
               </Button>
             </Space>
-            <div style={{ color: '#888' }}>更新只在用户确认后安装；脚本运行期间会等待至空闲。</div>
+            <div style={{ color: '#888' }}>更新仅在点击“下载并安装”后执行。脚本运行期间点击会暂存已验证的更新包，待脚本结束后需再次点击方可安装。</div>
           </Space>
         )}
       </Card>

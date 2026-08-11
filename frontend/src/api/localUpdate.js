@@ -10,7 +10,7 @@ export async function checkUpdate(localApi) {
 }
 
 
-export async function installUpdate(localApi) {
+export async function downloadAndInstallUpdate(localApi) {
   const response = await localApi.post('/local/update/install')
   return response.data
 }
