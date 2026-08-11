@@ -4,6 +4,7 @@ from client.updater_main import (
     EXIT_ROLLED_BACK,
     installer_command,
     run_update,
+    wait_for_processes,
 )
 from client.update.state import UpdateStateStore
 
@@ -18,6 +19,12 @@ def test_installer_command_is_silent_and_non_restarting(tmp_path):
 
     assert command[0].endswith("setup.exe")
     assert command[1:] == ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"]
+
+
+def test_wait_for_processes_treats_windows_kill_race_as_stopped(monkeypatch):
+    monkeypatch.setattr("client.updater_main.os.kill", lambda pid, signal: (_ for _ in ()).throw(SystemError("kill race")))
+
+    assert wait_for_processes([123], timeout_seconds=1) is True
 
 
 def test_startup_timeout_reinstalls_previous_version(tmp_path):
