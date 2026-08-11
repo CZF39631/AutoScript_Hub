@@ -378,6 +378,28 @@ def test_authenticated_agent_checks_updates_on_start_and_every_six_hours(monkeyp
     assert checks == [1000.0, 1000.0 + agent.UPDATE_CHECK_INTERVAL_SEC]
 
 
+def test_scheduled_check_does_not_install_when_update_waits_for_idle(monkeypatch):
+    checks = []
+    installs = []
+    agent._token = "token"
+    agent._last_update_check_time = 1000.0
+    monkeypatch.setattr(agent.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(agent, "_check_and_stage_update", lambda: checks.append(True) or {"state": "waiting-for-idle"})
+    monkeypatch.setattr(agent, "_install_staged_update", lambda: installs.append(True))
+    monkeypatch.setattr(agent, "_get_update_status", lambda: {"state": "waiting-for-idle"})
+    monkeypatch.setattr(agent, "_sync_client_settings", lambda: False)
+    monkeypatch.setattr(agent, "_flush_pending_reports", lambda: None)
+    monkeypatch.setattr(agent, "_flush_pending_log_uploads", lambda: None)
+    monkeypatch.setattr(agent, "_check_local_runs", lambda: None)
+    monkeypatch.setattr(agent, "poll_and_execute", lambda: None)
+    monkeypatch.setattr(agent, "send_heartbeat", lambda: True)
+    monkeypatch.setattr(agent, "_sync_local_runs_to_backend", lambda: None)
+    monkeypatch.setattr(agent, "_check_offline_notification", lambda: None)
+
+    assert agent.agent_iteration("operator", "secret") is True
+    assert installs == []
+
+
 def test_sync_client_settings_merges_allowed_fields_and_preserves_identity(tmp_path, monkeypatch):
     config_path = tmp_path / "client_config.json"
     config_path.write_text(
