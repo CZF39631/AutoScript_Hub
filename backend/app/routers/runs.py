@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, Script, Run, Agent
+from app.models import User, Script, ScriptVersion, Run, Agent
 from app.schemas import ExecuteRequest, RunBrief, RunDetail
 from app.auth import get_current_user, require_role
 from app.config import LOGS_DIR, PROJECT_ROOT
@@ -62,6 +62,21 @@ def _validate_params(param_defs, params):
     return validate_params(param_defs, params, check_paths=False)
 
 
+def _enrich_run(run, db, detail=False):
+    """Keep numeric revisions for storage while exposing script contract SemVer to clients."""
+    item = RunDetail.from_orm(run) if detail else RunBrief.from_orm(run)
+    user = db.query(User).filter(User.id == run.user_id).first()
+    script = db.query(Script).filter(Script.id == run.script_id).first()
+    version = db.query(ScriptVersion).filter(
+        ScriptVersion.script_id == run.script_id,
+        ScriptVersion.version == run.script_version,
+    ).first()
+    item.username = user.display_name if user else None
+    item.script_name = script.name if script else None
+    item.script_semantic_version = version.semantic_version if version else None
+    return item
+
+
 class RunStatusUpdate(BaseModel):
     status: str  # running / success / failed / cancelled
     error_msg: Optional[str] = None
@@ -69,9 +84,14 @@ class RunStatusUpdate(BaseModel):
     agent_id: Optional[int] = None
 
 
+class RunClaimRequest(BaseModel):
+    agent_id: int
+
+
 class RunLogChunk(BaseModel):
     offset: int = Field(ge=0)
     content: str
+    agent_id: Optional[int] = None
 
 
 @router.post("/execute", response_model=RunBrief)
@@ -129,7 +149,7 @@ def execute_script(
     write_audit(current_user.id, current_user.username, "execute_script",
                 target_type="run", target_id=run.id,
                 detail="script={} v{}".format(script.name, script.latest_version))
-    return run
+    return _enrich_run(run, db)
 
 
 @router.get("", response_model=List[RunBrief])
@@ -168,15 +188,7 @@ def list_runs(
 
     runs = q.order_by(Run.created_at.desc()).offset(offset).limit(limit).all()
 
-    result = []
-    for r in runs:
-        item = RunBrief.from_orm(r)
-        user = db.query(User).filter(User.id == r.user_id).first()
-        item.username = user.display_name if user else None
-        script = db.query(Script).filter(Script.id == r.script_id).first()
-        item.script_name = script.name if script else None
-        result.append(item)
-    return result
+    return [_enrich_run(run, db) for run in runs]
 
 
 @router.get("/filter-options/users")
@@ -201,7 +213,52 @@ def get_run(
         raise HTTPException(status_code=404, detail="执行记录不存在")
     if current_user.role == "operator" and run.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权限访问")
-    return run
+    return _enrich_run(run, db, detail=True)
+
+
+@router.post("/{run_id}/claim", response_model=RunBrief)
+def claim_run(
+    run_id: int,
+    claim: RunClaimRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Atomically bind a pending run to exactly one Agent before execution."""
+    agent = db.query(Agent).filter(
+        Agent.id == claim.agent_id,
+        Agent.user_id == current_user.id,
+        Agent.is_deleted == False,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=400, detail="Agent 与任务用户不匹配")
+
+    now = datetime.now(timezone.utc)
+    claimed = db.query(Run).filter(
+        Run.id == run_id,
+        Run.user_id == current_user.id,
+        Run.is_deleted == False,
+        Run.status == "pending",
+        Run.agent_id.is_(None),
+    ).update(
+        {
+            Run.status: "running",
+            Run.agent_id: agent.id,
+            Run.started_at: now,
+        },
+        synchronize_session=False,
+    )
+    if claimed != 1:
+        db.rollback()
+        run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
+        if not run:
+            raise HTTPException(status_code=404, detail="执行记录不存在")
+        if run.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="无权限领取该任务")
+        raise HTTPException(status_code=409, detail="任务已被领取或不再待执行")
+
+    db.commit()
+    run = db.query(Run).filter(Run.id == run_id).first()
+    return _enrich_run(run, db)
 
 
 @router.patch("/{run_id}/status")
@@ -216,6 +273,11 @@ def update_run_status(
         raise HTTPException(status_code=404, detail="执行记录不存在")
     if run.user_id != current_user.id and current_user.role == "operator":
         raise HTTPException(status_code=403, detail="无权限访问")
+
+    if run.status == "pending" and update.status == "running":
+        raise HTTPException(status_code=409, detail="任务必须先由 Agent 原子领取")
+    if run.agent_id is not None and update.agent_id != run.agent_id:
+        raise HTTPException(status_code=403, detail="仅领取任务的 Agent 可更新状态")
 
     if update.agent_id is not None:
         agent = db.query(Agent).filter(
@@ -295,6 +357,8 @@ def append_run_log_chunk(
         raise HTTPException(status_code=404, detail="执行记录不存在")
     if run.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权限上报该任务日志")
+    if run.agent_id is not None and chunk.agent_id != run.agent_id:
+        raise HTTPException(status_code=403, detail="仅领取任务的 Agent 可上报日志")
 
     os.makedirs(LOGS_DIR, exist_ok=True)
     log_file = os.path.abspath(_default_log_file(run_id))

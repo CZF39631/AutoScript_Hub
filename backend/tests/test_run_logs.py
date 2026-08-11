@@ -1,4 +1,4 @@
-from app.models import Run, Script, User
+from app.models import Agent, Run, Script, User
 from app.routers import runs as runs_router
 
 
@@ -77,3 +77,30 @@ def test_log_chunk_rejects_gap_and_returns_server_offset(
 
     assert response.status_code == 409
     assert response.json()["detail"]["offset"] == 0
+
+
+def test_claimed_run_log_chunk_rejects_a_different_agent(
+    client, op_token, fresh_db, tmp_path, monkeypatch
+):
+    TestSession, _ = fresh_db
+    run_id = _create_run(TestSession)
+    db = TestSession()
+    user = db.query(User).filter(User.username == "operator1").one()
+    owner = Agent(machine_name="log-owner", user_id=user.id, status="online")
+    other = Agent(machine_name="log-other", user_id=user.id, status="online")
+    db.add_all([owner, other])
+    db.flush()
+    run = db.query(Run).filter(Run.id == run_id).one()
+    run.agent_id = owner.id
+    db.commit()
+    other_id = other.id
+    db.close()
+    monkeypatch.setattr(runs_router, "LOGS_DIR", str(tmp_path))
+
+    response = client.post(
+        f"/api/runs/{run_id}/log/chunk",
+        json={"offset": 0, "content": "wrong agent", "agent_id": other_id},
+        headers={"Authorization": f"Bearer {op_token}"},
+    )
+
+    assert response.status_code == 403
