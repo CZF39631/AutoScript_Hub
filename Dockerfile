@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY alembic.ini /app/alembic.ini
 COPY backend/ /app/backend/
 COPY shared/ /app/shared/
+COPY client/update/update-public-key.b64 /app/client/update/update-public-key.b64
 COPY ops/server/backup_sqlite.py /app/ops/backup_sqlite.py
 COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY --from=frontend-build /build/frontend/dist /app/backend/static

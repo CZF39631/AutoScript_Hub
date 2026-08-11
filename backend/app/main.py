@@ -30,6 +30,7 @@ from app.routers import environments as env_router
 from app.routers import settings as settings_router
 from app.routers import agents as agents_router
 from app.routers import presets as presets_router
+from app.routers import release_cache as release_cache_router
 app = FastAPI(title="AutoScript Hub", version=get_version())
 
 app.add_middleware(
@@ -51,6 +52,7 @@ app.include_router(env_router.router)
 app.include_router(settings_router.router)
 app.include_router(agents_router.router)
 app.include_router(presets_router.router)
+app.include_router(release_cache_router.router)
 
 
 def _initialize_app():
