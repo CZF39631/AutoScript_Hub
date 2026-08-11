@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useConnection } from '../contexts/ConnectionContext'
 import api from '../api/client'
 import ParamForm from '../components/ParamForm'
+import { formatScriptVersion } from '../utils/scriptVersion'
 
 const PARAMS_STORAGE_KEY = 'autoscript_saved_params'
 
@@ -59,12 +60,13 @@ export default function ScriptDetail() {
           description: local.description,
           category: local.category,
           latest_version: local.latest_version,
+          latest_semantic_version: local.config?.version,
           status: 'active',
           type: 'local',
           updated_at: null,
           config_json: configJson,
         })
-        setVersions([{ version: local.latest_version, changelog: '(本地缓存版本,离线可用)' }])
+        setVersions([{ version: local.latest_version, semantic_version: local.config?.version, changelog: '(本地缓存版本,离线可用)' }])
         setEnvironments([])
         setOfflineMode(true)
       } else {
@@ -210,7 +212,7 @@ export default function ScriptDetail() {
       <Descriptions bordered size="small" column={1} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="描述">{script.description}</Descriptions.Item>
         <Descriptions.Item label="分类">{script.category}</Descriptions.Item>
-        <Descriptions.Item label="版本">{script.latest_version}</Descriptions.Item>
+        <Descriptions.Item label="版本">{formatScriptVersion(script.latest_semantic_version, script.latest_version)}</Descriptions.Item>
         <Descriptions.Item label="状态">
           <Tag color={script.status === 'active' ? 'green' : 'red'}>{script.status}</Tag>
         </Descriptions.Item>
@@ -249,7 +251,7 @@ export default function ScriptDetail() {
 
       <Collapse items={versions.map(v => ({
         key: v.version,
-        label: `v${v.version} - ${(v.changelog || '').substring(0, 50)}`,
+        label: `${formatScriptVersion(v.semantic_version, v.version)} - ${(v.changelog || '').substring(0, 50)}`,
         children: <p>{v.changelog}</p>,
       }))} />
 
