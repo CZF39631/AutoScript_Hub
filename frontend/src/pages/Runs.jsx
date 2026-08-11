@@ -6,6 +6,7 @@ import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useConnection } from '../contexts/ConnectionContext'
 import { canOpenResultLocally, firstResultPath, loadRunList } from '../api/offlineData'
+import { formatScriptVersion } from '../utils/scriptVersion'
 
 const { RangePicker } = DatePicker
 
@@ -103,7 +104,7 @@ export default function Runs() {
         </Button>
       )
     },
-    { title: '版本', dataIndex: 'script_version', key: 'ver', width: 55 },
+    { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.script_semantic_version, r.script_version) },
     ...(isAdmin ? [{ title: '执行人', dataIndex: 'username', key: 'user', width: 90 }] : []),
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 80,

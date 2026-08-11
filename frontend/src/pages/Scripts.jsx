@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useConnection } from '../contexts/ConnectionContext'
 import api from '../api/client'
 import { loadScriptCollections } from '../api/offlineData'
+import { formatScriptVersion } from '../utils/scriptVersion'
 
 export default function Scripts() {
   const [myScripts, setMyScripts] = useState([])
@@ -111,7 +112,7 @@ export default function Scripts() {
     { title: '名称', dataIndex: 'name', key: 'name',
       render: (name, r) => <Button type="link" style={{ padding: 0 }} onClick={() => nav(`/scripts/${r.id}`)}>{name}</Button> },
     { title: '分类', dataIndex: 'category', key: 'category', width: 120 },
-    { title: '版本', dataIndex: 'latest_version', key: 'ver', width: 70 },
+    { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 70,
       render: (s) => <Tag color={s === 'active' ? 'green' : 'red'}>{s === 'active' ? '启用' : '禁用'}</Tag>
@@ -140,7 +141,7 @@ export default function Scripts() {
     { title: '名称', dataIndex: 'name', key: 'name' },
     { title: '描述', dataIndex: 'description', key: 'desc', ellipsis: true },
     { title: '分类', dataIndex: 'category', key: 'category', width: 120 },
-    { title: '版本', dataIndex: 'latest_version', key: 'ver', width: 70 },
+    { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
     {
       title: '操作', key: 'action', width: 120,
       render: (_, r) => (

@@ -6,6 +6,7 @@ import api from '../api/client'
 import LogViewer from '../components/LogViewer'
 import { useConnection } from '../contexts/ConnectionContext'
 import { canOpenResultLocally, firstResultPath, loadRunDetail } from '../api/offlineData'
+import { formatScriptVersion } from '../utils/scriptVersion'
 
 const statusMap = {
   pending: { color: 'blue', text: '等待中' },
@@ -105,7 +106,7 @@ export default function RunDetail() {
       </div>
       <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="脚本ID">{run.script_id}</Descriptions.Item>
-        <Descriptions.Item label="版本">{run.script_version}</Descriptions.Item>
+        <Descriptions.Item label="版本">{formatScriptVersion(run.script_semantic_version, run.script_version)}</Descriptions.Item>
         <Descriptions.Item label="状态"><Tag color={sm.color}>{sm.text}</Tag></Descriptions.Item>
         <Descriptions.Item label="耗时">{run.duration_sec != null ? `${run.duration_sec}s` : '-'}</Descriptions.Item>
         <Descriptions.Item label="开始时间">{run.started_at ? new Date(run.started_at).toLocaleString() : '-'}</Descriptions.Item>
