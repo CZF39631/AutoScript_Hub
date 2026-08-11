@@ -5,6 +5,7 @@ import zipfile
 import pytest
 
 from client.agent import main as agent
+from client.agent.executor import execute_script
 
 
 class _Response:
@@ -54,6 +55,25 @@ def test_script_result_parser_accepts_literals_without_executing_code(tmp_path):
     assert not marker.exists()
 
 
+def test_executor_result_marker_starts_on_own_line_after_unterminated_stdout(tmp_path):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    (script_dir / "main.py").write_text(
+        "import sys\n\n"
+        "def main():\n"
+        "    sys.stdout.write('progress')\n"
+        "    return ['report.xlsx']\n",
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "run.log"
+
+    result = execute_script(str(script_dir), {}, str(log_path))
+
+    assert result["status"] == "success"
+    assert result["result"] == ["report.xlsx"]
+    assert "\n__RESULT__:['report.xlsx']\n" in log_path.read_text(encoding="utf-8")
+
+
 def test_upload_log_delta_sends_only_new_utf8_bytes(tmp_path, monkeypatch):
     log_path = tmp_path / "run.log"
     log_path.write_bytes("开始\n".encode("utf-8"))
@@ -66,15 +86,15 @@ def test_upload_log_delta_sends_only_new_utf8_bytes(tmp_path, monkeypatch):
     monkeypatch.setattr(agent.requests, "post", fake_post)
     agent._log_upload_offsets.clear()
 
-    assert agent._upload_log_delta(7, str(log_path)) is True
+    assert agent._upload_log_delta(7, str(log_path), agent_id=11) is True
     with log_path.open("ab") as f:
         f.write(b"done\n")
-    assert agent._upload_log_delta(7, str(log_path), force=True) is True
-    assert agent._upload_log_delta(7, str(log_path)) is True
+    assert agent._upload_log_delta(7, str(log_path), force=True, agent_id=11) is True
+    assert agent._upload_log_delta(7, str(log_path), agent_id=11) is True
 
     assert calls == [
-        {"offset": 0, "content": "开始\n"},
-        {"offset": len("开始\n".encode("utf-8")), "content": "done\n"},
+        {"offset": 0, "content": "开始\n", "agent_id": 11},
+        {"offset": len("开始\n".encode("utf-8")), "content": "done\n", "agent_id": 11},
     ]
 
 
@@ -99,6 +119,134 @@ def test_upload_log_delta_uses_server_offset_after_conflict(tmp_path, monkeypatc
     assert agent._upload_log_delta(9, str(log_path)) is True
     assert calls[0]["offset"] == 4
     assert calls[1] == {"offset": 0, "content": "complete"}
+
+
+def test_poll_skips_script_download_when_another_agent_claims_first(monkeypatch):
+    requests_seen = []
+
+    class Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **kwargs):
+        requests_seen.append(("get", url))
+        return Response(200, [{"id": 37, "script_id": 1}])
+
+    def fake_post(url, json, **kwargs):
+        requests_seen.append(("post", url, json))
+        return Response(409, {"detail": "任务已被领取"})
+
+    monkeypatch.setattr(agent.requests, "get", fake_get)
+    monkeypatch.setattr(agent.requests, "post", fake_post)
+    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
+    agent._running_proc = None
+    agent._running_info = {}
+    agent._current_run_id = None
+    agent._agent_id = 11
+
+    agent.poll_and_execute()
+
+    assert requests_seen == [
+        ("get", "{}/api/runs?status=pending&limit=1".format(agent.BACKEND_URL)),
+        ("post", "{}/api/runs/37/claim".format(agent.BACKEND_URL), {"agent_id": 11}),
+    ]
+    assert agent._current_run_id is None
+
+
+def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
+    requests_seen = []
+    started = []
+
+    class Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **kwargs):
+        requests_seen.append(("get", url))
+        if "status=pending" in url:
+            return Response(200, [{"id": 38, "script_id": 1}])
+        if url.endswith("/api/scripts/1"):
+            return Response(200, {"latest_version": 1})
+        raise AssertionError("unexpected GET: {}".format(url))
+
+    def fake_post(url, json, **kwargs):
+        requests_seen.append(("post", url, json))
+        return Response(200, {"id": 38, "script_id": 1, "params": "{}"})
+
+    monkeypatch.setattr(agent.requests, "get", fake_get)
+    monkeypatch.setattr(agent.requests, "post", fake_post)
+    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
+    monkeypatch.setattr(agent.os.path, "isdir", lambda path: True)
+    monkeypatch.setattr(agent, "parse_script_config", lambda path: {})
+    monkeypatch.setattr(agent, "_start_script_subprocess", lambda *args, **kwargs: started.append(args) or object())
+    monkeypatch.setattr(agent, "_LOGS_DIR", str(tmp_path))
+    agent._running_proc = None
+    agent._running_info = {}
+    agent._current_run_id = None
+    agent._agent_id = 12
+
+    agent.poll_and_execute()
+
+    assert requests_seen[:2] == [
+        ("get", "{}/api/runs?status=pending&limit=1".format(agent.BACKEND_URL)),
+        ("post", "{}/api/runs/38/claim".format(agent.BACKEND_URL), {"agent_id": 12}),
+    ]
+    assert requests_seen[2] == ("get", "{}/api/scripts/1".format(agent.BACKEND_URL))
+    assert len(started) == 1
+
+
+def test_poll_fails_a_claimed_run_when_script_metadata_cannot_be_loaded(monkeypatch):
+    status_updates = []
+
+    class Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **kwargs):
+        if "status=pending" in url:
+            return Response(200, [{"id": 39, "script_id": 1}])
+        if url.endswith("/api/scripts/1"):
+            return Response(404, {})
+        raise AssertionError("unexpected GET: {}".format(url))
+
+    def fake_post(url, json, **kwargs):
+        assert url.endswith("/api/runs/39/claim")
+        return Response(200, {"id": 39, "script_id": 1, "params": "{}"})
+
+    def fake_patch(url, json, **kwargs):
+        status_updates.append((url, json))
+        return Response(200, {})
+
+    monkeypatch.setattr(agent.requests, "get", fake_get)
+    monkeypatch.setattr(agent.requests, "post", fake_post)
+    monkeypatch.setattr(agent.requests, "patch", fake_patch)
+    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
+    agent._running_proc = None
+    agent._running_info = {}
+    agent._current_run_id = None
+    agent._agent_id = 13
+
+    agent.poll_and_execute()
+
+    assert status_updates == [
+        (
+            "{}/api/runs/39/status".format(agent.BACKEND_URL),
+            {"status": "failed", "error_msg": "Failed to load script metadata", "agent_id": 13},
+        )
+    ]
+    assert agent._current_run_id is None
 
 
 def test_normalize_result_files_keeps_metadata_only(tmp_path):
@@ -278,7 +426,7 @@ def test_sync_local_run_uploads_final_log_before_marking_synced(monkeypatch):
     monkeypatch.setattr(
         agent,
         "_upload_log_delta",
-        lambda run_id, path, force=False: uploaded.append((run_id, path, force)) or True,
+        lambda run_id, path, force=False, agent_id=None: uploaded.append((run_id, path, force, agent_id)) or True,
     )
     monkeypatch.setattr(agent, "_save_local_runs", lambda: None)
     agent._agent_id = 3
@@ -297,7 +445,7 @@ def test_sync_local_run_uploads_final_log_before_marking_synced(monkeypatch):
 
     agent._sync_local_runs_to_backend()
 
-    assert uploaded == [(88, r"C:\logs\local_L1.log", True)]
+    assert uploaded == [(88, r"C:\logs\local_L1.log", True, 3)]
     assert agent._local_runs["L1"]["synced"] is True
 
 
@@ -306,7 +454,7 @@ def test_failed_final_log_upload_is_retried(monkeypatch):
     monkeypatch.setattr(
         agent,
         "_upload_log_delta",
-        lambda run_id, path, force=False: next(outcomes),
+        lambda run_id, path, force=False, agent_id=None: next(outcomes),
     )
     monkeypatch.setattr(agent, "_save_pending_log_uploads", lambda: None)
     agent._pending_log_uploads.clear()

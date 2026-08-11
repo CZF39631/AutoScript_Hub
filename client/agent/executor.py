@@ -17,7 +17,9 @@ def execute_script(script_dir, params, log_path, timeout=600, env_vars=None, pyt
         "_params = json.load(open(_pf, encoding='utf-8')); "
         "from main import main; "
         "result = main(**_params); "
-        "sys.stdout.buffer.write(('__RESULT__:' + repr(result)).encode('utf-8'))"
+        "sys.stdout.flush(); "
+        "sys.stdout.buffer.write(('\\n__RESULT__:' + repr(result) + '\\n').encode('utf-8')); "
+        "sys.stdout.buffer.flush()"
     )
 
     # Build subprocess env: inherit current + overlay env_vars
@@ -39,6 +41,7 @@ def execute_script(script_dir, params, log_path, timeout=600, env_vars=None, pyt
                 timeout=timeout,
                 cwd=script_dir,
                 env=proc_env,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
 
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:

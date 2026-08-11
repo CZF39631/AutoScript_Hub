@@ -246,7 +246,7 @@ def _headers():
     return {"Authorization": "Bearer {}".format(_token)}
 
 
-def _upload_log_delta(run_id, log_path, force=False):
+def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
     """Upload only the UTF-8 log bytes not yet acknowledged by the backend."""
     if not run_id or not log_path or not os.path.isfile(log_path):
         return True
@@ -277,9 +277,12 @@ def _upload_log_delta(run_id, log_path, force=False):
         return True
 
     try:
+        payload = {"offset": offset, "content": content}
+        if agent_id is not None:
+            payload["agent_id"] = agent_id
         resp = requests.post(
             "{}/api/runs/{}/log/chunk".format(BACKEND_URL, run_id),
-            json={"offset": offset, "content": content},
+            json=payload,
             headers=_headers(),
             timeout=10,
         )
@@ -296,9 +299,9 @@ def _upload_log_delta(run_id, log_path, force=False):
     return False
 
 
-def _finish_log_upload(run_id, log_path):
+def _finish_log_upload(run_id, log_path, agent_id=None):
     """Force the final delta and persist a retry when the backend is unavailable."""
-    if _upload_log_delta(run_id, log_path, force=True):
+    if _upload_log_delta(run_id, log_path, force=True, agent_id=agent_id):
         _pending_log_uploads.pop(run_id, None)
         _save_pending_log_uploads()
         return True
@@ -309,7 +312,7 @@ def _finish_log_upload(run_id, log_path):
 
 def _flush_pending_log_uploads():
     for run_id, path in list(_pending_log_uploads.items()):
-        if _upload_log_delta(run_id, path, force=True):
+        if _upload_log_delta(run_id, path, force=True, agent_id=_agent_id):
             _pending_log_uploads.pop(run_id, None)
     _save_pending_log_uploads()
 
@@ -416,7 +419,9 @@ def _start_script_subprocess(script_dir, params, log_path, timeout, env_vars=Non
         "_params = json.load(open(_pf, encoding='utf-8')); "
         "from main import main; "
         "result = main(**_params); "
-        "sys.stdout.buffer.write(('__RESULT__:' + repr(result)).encode('utf-8'))"
+        "sys.stdout.flush(); "
+        "sys.stdout.buffer.write(('\\n__RESULT__:' + repr(result) + '\\n').encode('utf-8')); "
+        "sys.stdout.buffer.flush()"
     )
 
     proc_env = os.environ.copy()
@@ -437,6 +442,7 @@ def _start_script_subprocess(script_dir, params, log_path, timeout, env_vars=Non
         stderr=subprocess.STDOUT,
         cwd=script_dir,
         env=proc_env,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     # Store log_file so it can be closed later
     proc._log_file = log_file
@@ -675,6 +681,9 @@ def _flush_pending_reports():
 def _report_run_status(run_id, update):
     """Report run status to backend. Cache locally on failure for later retry (design §5.9)."""
     global _last_online_time
+    update = dict(update)
+    if _agent_id is not None:
+        update.setdefault("agent_id", _agent_id)
     try:
         resp = requests.patch(
             "{}/api/runs/{}/status".format(BACKEND_URL, run_id),
@@ -769,6 +778,7 @@ def list_local_scripts():
         result.append({
             "id": script_id,
             "latest_version": latest_ver,
+            "latest_semantic_version": config.get("version"),
             "name": config.get("name", "Script #{}".format(script_id)),
             "description": config.get("description", ""),
             "category": config.get("category", ""),
@@ -846,6 +856,7 @@ def start_local_run(req):
         "local_run_id": local_run_id,
         "script_id": script_id,
         "script_version": latest_ver,
+        "script_semantic_version": script_config.get("version"),
         "script_name": script_config.get("name"),
         "script_dir": run_script_dir,
         "log_path": log_path,
@@ -858,6 +869,7 @@ def start_local_run(req):
         "local_run_id": local_run_id,
         "script_id": script_id,
         "script_version": latest_ver,
+        "script_semantic_version": script_config.get("version"),
         "script_name": script_config.get("name"),
         "params": params,
         "status": "running",
@@ -1036,8 +1048,17 @@ def _sync_local_runs_to_backend():
                 continue
             backend_run_id = create_resp.json()["id"]
 
+            if not _agent_id:
+                continue
+            claim_resp = requests.post(
+                "{}/api/runs/{}/claim".format(BACKEND_URL, backend_run_id),
+                json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
+            )
+            if claim_resp.status_code != 200:
+                continue
+
             if rec.get("log_path") and not _upload_log_delta(
-                backend_run_id, rec["log_path"], force=True
+                backend_run_id, rec["log_path"], force=True, agent_id=_agent_id
             ):
                 continue
 
@@ -1070,7 +1091,9 @@ def poll_and_execute():
 
     # Upload live log bytes before other polling work.
     if _running_proc is not None and _running_info.get("run_id") and _running_info.get("log_path"):
-        _upload_log_delta(_running_info["run_id"], _running_info["log_path"])
+        _upload_log_delta(
+            _running_info["run_id"], _running_info["log_path"], agent_id=_agent_id
+        )
 
     # 0) Cancel propagation (design §5.1): cancel only flips backend status — the Agent
     #    must independently notice and kill its subprocess, otherwise the cancelled run
@@ -1108,7 +1131,7 @@ def poll_and_execute():
         result_script_dir = result.pop("script_dir", None)
         if run_id:
             if actual_log_path:
-                _finish_log_upload(run_id, actual_log_path)
+                _finish_log_upload(run_id, actual_log_path, agent_id=_agent_id)
             update = {"status": result["status"]}
             if result.get("error"):
                 update["error_msg"] = result["error"]
@@ -1137,6 +1160,17 @@ def poll_and_execute():
         run = resp.json()[0]
         run_id = run["id"]
         _current_run_id = run_id
+        if not _agent_id:
+            _current_run_id = None
+            return
+        claim_resp = requests.post(
+            "{}/api/runs/{}/claim".format(BACKEND_URL, run_id),
+            json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
+        )
+        if claim_resp.status_code != 200:
+            _current_run_id = None
+            return
+        run = claim_resp.json()
         script_id = run["script_id"]
 
         # Get script info
@@ -1146,6 +1180,10 @@ def poll_and_execute():
             timeout=10,
         )
         if script_resp.status_code != 200:
+            _report_run_status(
+                run_id,
+                {"status": "failed", "error_msg": "Failed to load script metadata"},
+            )
             _current_run_id = None
             return
 
@@ -1233,12 +1271,6 @@ def poll_and_execute():
                     return
 
         timeout = script_config.get("timeout", 600)
-
-        # Mark as running
-        running_update = {"status": "running"}
-        if _agent_id:
-            running_update["agent_id"] = _agent_id
-        _report_run_status(run_id, running_update)
 
         # Start subprocess asynchronously
         params = json.loads(run["params"]) if run.get("params") else {}
