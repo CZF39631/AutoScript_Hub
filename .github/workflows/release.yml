@@ -112,6 +112,8 @@ jobs:
       GITEE_OWNER: ${{ vars.GITEE_OWNER }}
       GITEE_REPO: ${{ vars.GITEE_REPO }}
       GITEE_ENABLED: ${{ secrets.GITEE_TOKEN != '' && vars.GITEE_OWNER != '' && vars.GITEE_REPO != '' }}
+      LAN_INSTALLER_URL_BASE: ${{ vars.LAN_INSTALLER_URL_BASE }}
+      LAN_ENABLED: ${{ vars.LAN_INSTALLER_URL_BASE != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -152,6 +154,32 @@ jobs:
           if [[ "$GITEE_ENABLED" == "true" ]]; then
             python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "${{ steps.release_hosts.outputs.gitee_release_id }}" --file release-output/autoscript-hub-update.json --file release-output/autoscript-hub-update.json.sig --file release-output/SHA256SUMS.txt
           fi
+      - name: Generate LAN-only signed manifest bundle (optional)
+        if: env.LAN_ENABLED == 'true'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          INSTALLER="release-output/AutoScript-Hub-Setup-$VERSION.exe"
+          INSTALLER_NAME="$(basename "$INSTALLER")"
+          LAN_URL="${LAN_INSTALLER_URL_BASE}/api/release/installer/${INSTALLER_NAME}"
+          mkdir -p release-output/lan
+          python release/scripts/make_update_manifest.py \
+            --version "$VERSION" \
+            --installer "$INSTALLER" \
+            --private-key update-private-key.pem \
+            --url "$LAN_URL" \
+            --output release-output/lan
+          cd release-output
+          zip -j lan-release-bundle.zip \
+            lan/autoscript-hub-update.json \
+            lan/autoscript-hub-update.json.sig \
+            "$INSTALLER_NAME"
+      - name: Upload LAN bundle as private workflow artifact
+        if: env.LAN_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lan-release-bundle
+          path: release-output/lan-release-bundle.zip
+          if-no-files-found: error
       - name: Publish both release hosts
         run: |
           GITEE_PRERELEASE=false
@@ -176,3 +204,24 @@ jobs:
           if [ -n "$GITEE_RELEASE_ID" ]; then
             python release/scripts/gitee_release.py delete --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" || true
           fi
+
+  lan-sync:
+    needs: publish
+    if: vars.LAN_INSTALLER_URL_BASE != '' && vars.LAN_RUNNER_LABEL != ''
+    runs-on: [self-hosted, linux, "${{ vars.LAN_RUNNER_LABEL }}"]
+    env:
+      LAN_SYNC_TOKEN: ${{ secrets.LAN_SYNC_TOKEN }}
+      LAN_INSTALLER_URL_BASE: ${{ vars.LAN_INSTALLER_URL_BASE }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lan-release-bundle
+          path: lan-sync
+      - name: Upload LAN bundle to release-cache server
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${LAN_SYNC_TOKEN}" \
+            -H "Content-Type: application/zip" \
+            --data-binary @lan-sync/lan-release-bundle.zip \
+            "${LAN_INSTALLER_URL_BASE}/api/release/sync"

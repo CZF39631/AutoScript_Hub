@@ -318,3 +318,108 @@ def test_anonymous_mirror_verifier_requires_identical_assets(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# LAN release-cache workflow security isolation
+# ---------------------------------------------------------------------------
+
+def test_lan_sync_job_runs_on_self_hosted_runner():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+
+    assert "lan-sync:" in release
+    assert "runs-on: [self-hosted, linux" in release
+    assert "LAN_RUNNER_LABEL" in release
+
+
+def test_lan_sync_job_is_conditional_on_both_config_items():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+
+    assert "if: vars.LAN_INSTALLER_URL_BASE != '' && vars.LAN_RUNNER_LABEL != ''" in release
+
+
+def test_lan_sync_job_never_references_private_key():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+    # Extract the lan-sync job section.
+    lan_section_start = release.index("lan-sync:")
+    lan_section = release[lan_section_start:]
+
+    assert "UPDATE_PRIVATE_KEY_B64" not in lan_section
+    assert "update-private-key" not in lan_section
+    assert "LAN_SYNC_TOKEN" in lan_section
+
+
+def test_lan_manifest_is_signed_on_github_hosted_publish_job():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+    publish_start = release.index("  publish:")
+    publish_end = release.index("  lan-sync:")
+    publish_section = release[publish_start:publish_end]
+
+    assert "make_update_manifest.py" in publish_section
+    assert "update-private-key.pem" in publish_section
+    assert "lan-release-bundle.zip" in publish_section
+    assert "LAN_INSTALLER_URL_BASE" in publish_section
+
+
+def test_lan_bundle_is_private_workflow_artifact_not_release_asset():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+
+    assert "name: lan-release-bundle" in release
+    assert "actions/upload-artifact@v4" in release
+    # The LAN bundle must NOT be uploaded to gh release.
+    assert "lan-release-bundle.zip" not in release.split("gh release upload")[1].split("\n")[0] if "gh release upload" in release else True
+
+
+def test_lan_sync_job_needs_publish():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+    lan_section = release[release.index("lan-sync:"):]
+
+    assert "needs: publish" in lan_section
+
+
+def test_lan_sync_job_downloads_artifact_and_uploads_to_server():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+    lan_section = release[release.index("lan-sync:"):]
+
+    assert "actions/download-artifact@v4" in lan_section
+    assert "name: lan-release-bundle" in lan_section
+    assert "/api/release/sync" in lan_section
+    assert "Bearer" in lan_section
+
+
+def test_dockerfile_copies_update_public_key_for_manifest_verification():
+    dockerfile = (ROOT / "Dockerfile").read_text("utf-8")
+
+    assert "update-public-key.b64" in dockerfile
+
+
+def test_env_template_documents_release_cache_sync_token():
+    env_example = (ROOT / "deploy/.env.example").read_text("utf-8")
+
+    assert "RELEASE_CACHE_SYNC_TOKEN" in env_example
+
+
+def test_deployment_runbook_documents_lan_release_cache():
+    runbook = (ROOT / "docs/0.9-deployment-runbook.md").read_text("utf-8")
+
+    assert "局域网发布缓存" in runbook
+    assert "RELEASE_CACHE_SYNC_TOKEN" in runbook
+    assert "LAN_RUNNER_LABEL" in runbook
+    assert "LAN_SYNC_TOKEN" in runbook
+    assert "self-hosted" in runbook.lower() or "自托管" in runbook
+    assert "/api/release/manifest" in runbook
+    assert "/api/release/versions" in runbook
+
+
+def test_release_guide_documents_lan_cache_configuration():
+    guide = (ROOT / "docs/0.9-release-guide.md").read_text("utf-8")
+
+    assert "LAN_SYNC_TOKEN" in guide
+    assert "LAN_INSTALLER_URL_BASE" in guide
+    assert "LAN_RUNNER_LABEL" in guide
+
+
+def test_release_cache_module_uses_constant_time_comparison():
+    """The router source must use hmac.compare_digest for token verification."""
+    router_source = (ROOT / "backend/app/routers/release_cache.py").read_text("utf-8")
+    assert "hmac.compare_digest" in router_source
