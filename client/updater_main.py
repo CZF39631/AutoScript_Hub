@@ -89,6 +89,7 @@ def run_update(
     wait_for_startup: Callable = wait_for_startup_marker,
 ) -> int:
     store = UpdateStateStore(updates_dir)
+    store.set_details(updater_pid=os.getpid())
     marker = updates_dir / "startup-ok.json"
     try:
         marker.unlink()
