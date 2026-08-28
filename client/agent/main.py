@@ -43,6 +43,7 @@ BACKEND_URL = os.environ.get(
     _client_config.get("server_url", "http://127.0.0.1:8000"),
 )
 POLL_INTERVAL = 5
+LIVE_POLL_INTERVAL = 1
 LOCAL_PORT = 18080
 
 # Local paths for script storage and logs (decoupled from backend)
@@ -1434,6 +1435,10 @@ def agent_iteration(username, password):
     return True
 
 
+def _next_poll_interval():
+    return LIVE_POLL_INTERVAL if not _runtime_is_idle() else POLL_INTERVAL
+
+
 def run_agent(username, password):
     global _restart_requested, _shutdown_when_idle
     _restart_requested = False
@@ -1445,7 +1450,7 @@ def run_agent(username, password):
         if _shutdown_when_idle and _runtime_is_idle():
             print("GUI 已关闭，Agent 已完成当前任务并退出")
             break
-        time.sleep(POLL_INTERVAL)
+        time.sleep(_next_poll_interval())
 
 
 if __name__ == "__main__":
