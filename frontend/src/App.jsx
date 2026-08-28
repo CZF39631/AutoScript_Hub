@@ -47,6 +47,7 @@ function OfflineBanner() {
 
 function AppLayout() {
   const { user, logout } = useAuth()
+  const { agentOnline } = useConnection()
   const nav = useNavigate()
   const loc = useLocation()
 
@@ -90,6 +91,14 @@ function AppLayout() {
         </div>
         <Menu className="app-menu" mode="inline" selectedKeys={[selectedKey]} items={menuItems}
           onClick={({ key }) => nav(key)} />
+        <div className={`agent-status ${agentOnline ? 'agent-status--online' : 'agent-status--offline'}`}
+          title={agentOnline ? '本地 Agent 连接正常' : '本地 Agent 未启动或连接失败'}>
+          <span className="agent-status__light" aria-hidden="true" />
+          <span>
+            <strong>Agent</strong>
+            <small>{agentOnline ? '连接正常' : '未启动或连接失败'}</small>
+          </span>
+        </div>
         <div className="app-account">
           <div className="app-account__avatar">{(user?.display_name || user?.username || 'U').slice(0, 1).toUpperCase()}</div>
           <div className="app-account__meta">

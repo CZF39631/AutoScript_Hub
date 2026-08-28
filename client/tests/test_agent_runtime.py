@@ -26,6 +26,34 @@ def _zip_bytes(entries):
     return stream.getvalue()
 
 
+def test_shutdown_request_enters_drain_mode_and_rejects_new_local_runs():
+    agent._shutdown_when_idle = False
+    try:
+        agent.request_shutdown_when_idle()
+        assert agent._shutdown_when_idle is True
+        assert agent.start_local_run({"script_id": 1}) == {
+            "error": "Agent 正在退出，不能启动新任务"
+        }
+    finally:
+        agent._shutdown_when_idle = False
+
+
+def test_poll_does_not_claim_new_backend_work_while_draining(monkeypatch):
+    agent._shutdown_when_idle = True
+    agent._running_proc = None
+    agent._running_info = {}
+    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
+    monkeypatch.setattr(
+        agent.requests,
+        "get",
+        lambda *args, **kwargs: pytest.fail("排空期间不应领取新任务"),
+    )
+    try:
+        agent.poll_and_execute()
+    finally:
+        agent._shutdown_when_idle = False
+
+
 def test_script_subprocess_streams_stdout_before_process_exit(tmp_path):
     script_dir = tmp_path / "script"
     script_dir.mkdir()

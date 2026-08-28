@@ -72,6 +72,7 @@ _log_upload_offsets = {}  # run_id -> server-acknowledged UTF-8 byte offset
 _pending_log_uploads = {}  # run_id -> local log path requiring a final retry
 _last_update_check_time = 0
 _restart_requested = False
+_shutdown_when_idle = False
 _last_settings_sync_time = 0
 
 _CLIENT_SETTING_KEYS = {
@@ -800,6 +801,8 @@ def start_local_run(req):
     Returns the local run record. Mutates state to track the subprocess.
     """
     global _local_run_counter, _local_run_proc, _local_run_info
+    if _shutdown_when_idle:
+        return {"error": "Agent 正在退出，不能启动新任务"}
     # Same one-at-a-time rule as backend-triggered runs
     if _local_run_proc is not None or _running_proc is not None:
         return {"error": "another task is running"}
@@ -1151,6 +1154,10 @@ def poll_and_execute():
     if _running_proc is not None:
         return
 
+    # GUI 已关闭时只排空当前任务，不再领取新任务。
+    if _shutdown_when_idle:
+        return
+
     # 3) Look for pending run
     try:
         resp = requests.get(
@@ -1357,6 +1364,16 @@ def _install_staged_update():
     return result
 
 
+def request_shutdown_when_idle():
+    """Stop accepting work and exit after all current scripts finish."""
+    global _shutdown_when_idle
+    _shutdown_when_idle = True
+
+
+def _runtime_is_idle():
+    return _running_proc is None and _local_run_proc is None
+
+
 def initialize_agent_runtime():
     """Load cached state and start the local API before any backend connection."""
     _load_pending_reports()
@@ -1378,6 +1395,7 @@ def initialize_agent_runtime():
         check_update_fn=_check_and_stage_update,
         install_update_fn=_install_staged_update,
         get_runtime_info_fn=_get_runtime_info,
+        request_shutdown_fn=request_shutdown_when_idle,
     )
     server_thread.daemon = True
     server_thread.start()
@@ -1415,12 +1433,16 @@ def agent_iteration(username, password):
 
 
 def run_agent(username, password):
-    global _restart_requested
+    global _restart_requested, _shutdown_when_idle
     _restart_requested = False
+    _shutdown_when_idle = False
     initialize_agent_runtime()
 
     while not _restart_requested:
         agent_iteration(username, password)
+        if _shutdown_when_idle and _runtime_is_idle():
+            print("GUI 已关闭，Agent 已完成当前任务并退出")
+            break
         time.sleep(POLL_INTERVAL)
 
 

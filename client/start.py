@@ -3,7 +3,9 @@ import json
 import subprocess
 import sys
 import os
+import urllib.request
 
+from client.runtime.local_auth import get_or_create_agent_token
 from client.runtime.paths import ClientPaths
 
 _PATHS = ClientPaths.from_environment()
@@ -22,6 +24,17 @@ def _load_config():
         except (json.JSONDecodeError, OSError):
             pass
     return {}
+
+
+def _request_agent_shutdown():
+    request = urllib.request.Request(
+        "http://127.0.0.1:18080/lifecycle/shutdown",
+        data=b"{}",
+        method="POST",
+        headers={"Authorization": "Bearer " + get_or_create_agent_token()},
+    )
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return response.status == 202
 
 
 def main():
@@ -53,7 +66,13 @@ def main():
             cwd=PROJECT_ROOT,
         )
     finally:
-        agent_proc.terminate()
+        try:
+            _request_agent_shutdown()
+            print("已通知 Agent 完成当前任务后退出")
+            agent_proc.wait()
+        except Exception:
+            agent_proc.terminate()
+            agent_proc.wait(timeout=5)
         print("Agent 已停止")
 
 

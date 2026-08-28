@@ -15,6 +15,6 @@ export function startConnectionPolling(
   { setIntervalFn = setInterval, clearIntervalFn = clearInterval } = {},
 ) {
   refresh()
-  const interval = setIntervalFn(refresh, 30000)
+  const interval = setIntervalFn(refresh, 5000)
   return () => clearIntervalFn(interval)
 }
