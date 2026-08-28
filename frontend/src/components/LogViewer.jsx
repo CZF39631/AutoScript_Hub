@@ -82,13 +82,12 @@ export default function LogViewer({ runId, status, onComplete, localOnly = false
   if (loading) return <Spin />
 
   return (
-    <div>
-      <h3>执行日志{streaming ? ' (实时推送中...)' : ''}</h3>
-      <pre ref={preRef} style={{
-        background: '#1e1e1e', color: '#d4d4d4', padding: 16,
-        borderRadius: 4, maxHeight: 400, overflow: 'auto',
-        fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap',
-      }}>
+    <div className="log-viewer">
+      <h3 className="log-viewer__header">
+        执行日志
+        {streaming && <span className="log-viewer__status">● 实时推送中</span>}
+      </h3>
+      <pre ref={preRef} className="log-viewer__terminal">
         {log || '(暂无日志)'}
       </pre>
     </div>

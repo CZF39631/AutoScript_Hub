@@ -429,6 +429,9 @@ def _start_script_subprocess(script_dir, params, log_path, timeout, env_vars=Non
     # Force child process to encode stdout/stderr as UTF-8 — Windows defaults to cp936 (GBK)
     # which produces mojibake when the backend reads the log as UTF-8.
     proc_env["PYTHONIOENCODING"] = "utf-8"
+    # Redirected stdout is block-buffered by default, which makes live logs appear
+    # empty until the script exits. Force every child script to stream output.
+    proc_env["PYTHONUNBUFFERED"] = "1"
     if env_vars:
         proc_env.update(env_vars)
 

@@ -5,7 +5,7 @@ import {
   UserOutlined, LogoutOutlined, AuditOutlined, BugOutlined, GlobalOutlined,
   SettingOutlined
 } from '@ant-design/icons'
-import { ConfigProvider } from 'antd'
+import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ConnectionProvider, useConnection } from './contexts/ConnectionContext'
@@ -31,13 +31,8 @@ function PrivateRoute({ children }) {
 function OfflineBanner() {
   const { online, agentOnline, pendingSync } = useConnection()
   if (online) return null
-  const bg = agentOnline ? '#fffbe6' : '#fff1f0'
-  const border = agentOnline ? '#ffe58f' : '#ffa39e'
   return (
-    <div style={{
-      background: bg, padding: '8px 24px', borderBottom: `1px solid ${border}`,
-      fontSize: 13,
-    }}>
+    <div className={`offline-banner ${agentOnline ? 'offline-banner--agent' : 'offline-banner--error'}`}>
       {agentOnline ? (
         <>
           ⚠️ 与服务器断开,已切换到 <strong>离线模式</strong>。可执行已下载的脚本,结果会在恢复连接后自动同步
@@ -84,21 +79,30 @@ function AppLayout() {
     : '/dashboard'
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider width={200} theme="light">
-        <div style={{ padding: '16px', fontSize: 16, fontWeight: 'bold', borderBottom: '1px solid #f0f0f0' }}>
-          AutoScript Hub
+    <Layout className="app-shell">
+      <Sider width={224} theme="light" className="app-sidebar">
+        <div className="app-brand">
+          <span className="app-brand__mark">A</span>
+          <span>
+            <strong>AutoScript</strong>
+            <small>Hub</small>
+          </span>
         </div>
-        <Menu mode="inline" selectedKeys={[selectedKey]} items={menuItems}
-          onClick={({ key }) => nav(key)} style={{ borderRight: 0 }} />
-        <div style={{ position: 'absolute', bottom: 0, width: '100%', padding: 16, borderTop: '1px solid #f0f0f0' }}>
-          <div style={{ fontSize: 12, marginBottom: 8, color: '#999' }}>{user?.display_name} ({user?.role})</div>
-          <Button icon={<LogoutOutlined />} block size="small" onClick={() => { logout(); nav('/login') }}>退出</Button>
+        <Menu className="app-menu" mode="inline" selectedKeys={[selectedKey]} items={menuItems}
+          onClick={({ key }) => nav(key)} />
+        <div className="app-account">
+          <div className="app-account__avatar">{(user?.display_name || user?.username || 'U').slice(0, 1).toUpperCase()}</div>
+          <div className="app-account__meta">
+            <strong>{user?.display_name}</strong>
+            <span>{user?.role}</span>
+          </div>
+          <Button className="app-account__logout" type="text" icon={<LogoutOutlined />} title="退出登录"
+            onClick={() => { logout(); nav('/login') }} />
         </div>
       </Sider>
-      <Layout>
+      <Layout className="app-workspace">
         <OfflineBanner />
-        <Content style={{ padding: 24, background: '#f5f5f5', minHeight: 'auto' }}>
+        <Content className="app-content">
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/scripts" element={<Scripts />} />
@@ -118,9 +122,36 @@ function AppLayout() {
   )
 }
 
+const appleTheme = {
+  algorithm: theme.defaultAlgorithm,
+  token: {
+    colorPrimary: '#007aff',
+    colorInfo: '#007aff',
+    colorSuccess: '#34c759',
+    colorWarning: '#ff9f0a',
+    colorError: '#ff3b30',
+    colorText: '#1d1d1f',
+    colorTextSecondary: '#6e6e73',
+    colorBgLayout: '#f5f5f7',
+    colorBgContainer: 'rgba(255, 255, 255, 0.86)',
+    borderRadius: 10,
+    borderRadiusLG: 16,
+    controlHeight: 38,
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Segoe UI', sans-serif",
+    boxShadowSecondary: '0 12px 40px rgba(0, 0, 0, 0.08)',
+  },
+  components: {
+    Button: { borderRadius: 10, primaryShadow: '0 4px 14px rgba(0, 122, 255, 0.24)' },
+    Card: { borderRadiusLG: 18, boxShadowTertiary: '0 8px 30px rgba(0, 0, 0, 0.055)' },
+    Menu: { itemBorderRadius: 10, itemMarginInline: 10, itemHeight: 42 },
+    Table: { headerBg: 'rgba(245, 245, 247, 0.78)', headerColor: '#6e6e73' },
+    Modal: { borderRadiusLG: 18 },
+  },
+}
+
 export default function App() {
   return (
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider locale={zhCN} theme={appleTheme}>
       <ConnectionProvider>
         <AuthProvider>
           <Routes>

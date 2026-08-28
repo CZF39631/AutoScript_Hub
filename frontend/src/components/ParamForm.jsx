@@ -166,7 +166,7 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
   return (
     <>
       {showPresetBar && (
-        <div style={{ marginBottom: 16, padding: 12, background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 4 }}>
+        <div className="preset-bar">
           <Space wrap>
             <span style={{ fontWeight: 500 }}>参数预设:</span>
             <Select
