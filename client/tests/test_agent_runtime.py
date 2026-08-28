@@ -26,6 +26,20 @@ def _zip_bytes(entries):
     return stream.getvalue()
 
 
+def test_agent_uses_fast_polling_while_a_script_is_running():
+    original_running = agent._running_proc
+    original_local = agent._local_run_proc
+    try:
+        agent._running_proc = None
+        agent._local_run_proc = None
+        assert agent._next_poll_interval() == agent.POLL_INTERVAL
+        agent._running_proc = object()
+        assert agent._next_poll_interval() == agent.LIVE_POLL_INTERVAL
+    finally:
+        agent._running_proc = original_running
+        agent._local_run_proc = original_local
+
+
 def test_shutdown_request_enters_drain_mode_and_rejects_new_local_runs():
     agent._shutdown_when_idle = False
     try:

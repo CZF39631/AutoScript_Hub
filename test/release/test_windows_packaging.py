@@ -52,7 +52,7 @@ def test_installed_client_smoke_uses_the_expected_release_version_argument():
     smoke = _read("release/windows/smoke_installed_client.py")
 
     assert "--expected-version" in smoke
-    assert 'default="0.9.1"' in smoke
+    assert 'default="1.0.0"' in smoke
     assert 'status.get("version") != args.expected_version' in smoke
     assert 'status.get("version") != "0.9.0"' not in smoke
 

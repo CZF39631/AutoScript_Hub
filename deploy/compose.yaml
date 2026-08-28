@@ -1,6 +1,6 @@
 services:
   server:
-    image: ${AUTOSCRIPT_SERVER_IMAGE:-ghcr.io/czf39631/autoscript-hub-server:0.9.1}
+    image: ${AUTOSCRIPT_SERVER_IMAGE:-ghcr.io/czf39631/autoscript-hub-server:1.0.0}
     ports:
       - "${AUTOSCRIPT_BIND_ADDRESS:-0.0.0.0}:${AUTOSCRIPT_PORT:-8000}:8000"
     volumes:

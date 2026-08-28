@@ -5,6 +5,7 @@ import {
   CodeOutlined, TeamOutlined, HistoryOutlined,
 } from '@ant-design/icons'
 import api from '../api/client'
+import { formatServerTime } from '../utils/dateTime'
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
@@ -23,7 +24,7 @@ export default function Dashboard() {
     { title: '用户', dataIndex: 'username', key: 'user', width: 90 },
     { title: '错误', dataIndex: 'error_msg', key: 'err', ellipsis: true },
     { title: '时间', dataIndex: 'created_at', key: 'time', width: 160,
-      render: (t) => t ? new Date(t).toLocaleString() : '-' },
+      render: formatServerTime },
   ]
   const rankColumns = [
     { title: '脚本', dataIndex: 'script_name', key: 'name', ellipsis: true },
