@@ -134,7 +134,8 @@ export default function Scripts() {
   ]
 
   const marketColumns = [
-    { title: '名称', dataIndex: 'name', key: 'name' },
+    { title: '名称', dataIndex: 'name', key: 'name',
+      render: (name, r) => <Button type="link" style={{ padding: 0 }} onClick={() => nav(`/scripts/${r.id}`)}>{name}</Button> },
     { title: '描述', dataIndex: 'description', key: 'desc', ellipsis: true },
     { title: '分类', dataIndex: 'category', key: 'category', width: 120 },
     { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
@@ -142,10 +143,9 @@ export default function Scripts() {
       title: '操作', key: 'action', width: 120,
       render: (_, r) => (
         <Space>
-          {(canUpload || r.installed) && (
+          {r.installed ? (
             <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>查看</Button>
-          )}
-          {!r.installed && (
+          ) : (
             <Button type="primary" size="small" icon={<DownloadOutlined />} onClick={() => onInstall(r)}>安装</Button>
           )}
         </Space>
