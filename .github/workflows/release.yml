@@ -93,7 +93,7 @@ jobs:
             port="${entry##*:}"
             name="autoscript-smoke-${platform##*/}"
             docker run --platform "$platform" -d --name "$name" -p "127.0.0.1:${port}:8000" \
-              -e JWT_SECRET=release-smoke-only -e ADMIN_PASSWORD=release-smoke-only "$IMAGE"
+              -e JWT_SECRET=release-smoke-secret-with-at-least-32-characters -e ADMIN_PASSWORD=release-smoke-admin-password "$IMAGE"
             ready=0
             for attempt in $(seq 1 60); do
               if curl -fsS "http://127.0.0.1:${port}/api/health/ready"; then ready=1; break; fi

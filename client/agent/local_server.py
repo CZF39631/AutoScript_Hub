@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import os
@@ -80,6 +81,8 @@ def _detect_browsers():
 
 
 class AgentHandler(BaseHTTPRequestHandler):
+    api_token = None
+    allowed_origin = "http://127.0.0.1:18081"
     get_status_fn = None
     get_version_fn = None
     # Offline execution callbacks (design §5.x offline mode): UI calls /local/* when backend unreachable
@@ -102,7 +105,28 @@ class AgentHandler(BaseHTTPRequestHandler):
         payload["current_version"] = version_callback() if version_callback else None
         return payload
 
+    def _authorized(self):
+        expected = type(self).api_token or ""
+        supplied = self.headers.get("Authorization", "")
+        if supplied.startswith("Bearer "):
+            supplied = supplied[7:]
+        else:
+            supplied = ""
+        if expected and hmac.compare_digest(supplied, expected):
+            return True
+        self._json({"error": "unauthorized"}, 401)
+        return False
+
+    def _origin_allowed(self):
+        origin = self.headers.get("Origin")
+        return origin is None or origin == type(self).allowed_origin
+
     def do_GET(self):
+        if not self._origin_allowed():
+            self._json({"error": "forbidden origin"}, 403)
+            return
+        if not self._authorized():
+            return
         if self.path == "/status":
             callback = type(self).get_status_fn
             run_id = callback() if callback else None
@@ -152,6 +176,11 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        if not self._origin_allowed():
+            self._json({"error": "forbidden origin"}, 403)
+            return
+        if not self._authorized():
+            return
         if self.path == "/local/execute":
             data = self._read_json()
             if not data:
@@ -228,15 +257,23 @@ class AgentHandler(BaseHTTPRequestHandler):
     def _json(self, data, code=200):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin")
+        if origin == type(self).allowed_origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
     def do_OPTIONS(self):
+        if not self._origin_allowed() or self.headers.get("Origin") is None:
+            self._json({"error": "forbidden origin"}, 403)
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", type(self).allowed_origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Vary", "Origin")
         self.end_headers()
 
     def log_message(self, format, *args):
@@ -247,6 +284,7 @@ def start_local_server(
     port,
     get_status_fn,
     get_version_fn=None,
+    api_token=None,
     list_local_scripts_fn=None,
     start_local_run_fn=None,
     list_local_runs_fn=None,
@@ -259,6 +297,9 @@ def start_local_server(
     install_update_fn=None,
     get_runtime_info_fn=None,
 ):
+    if not api_token:
+        raise ValueError("Agent API token is required")
+    AgentHandler.api_token = api_token
     AgentHandler.get_status_fn = get_status_fn
     AgentHandler.get_version_fn = get_version_fn
     AgentHandler.list_local_scripts_fn = list_local_scripts_fn

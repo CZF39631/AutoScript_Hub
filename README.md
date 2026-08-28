@@ -51,6 +51,9 @@ npm ci
 npm test
 npm run build
 cd ..
+# 首次启动必须设置强凭据；JWT_SECRET 至少 32 字符，管理员密码至少 12 字符
+$env:JWT_SECRET = python -c "import secrets; print(secrets.token_urlsafe(48))"
+$env:ADMIN_PASSWORD = Read-Host "设置管理员密码"
 .\.venv\Scripts\python.exe backend\init_db.py
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
 ```

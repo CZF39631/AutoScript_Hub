@@ -4,7 +4,8 @@ from typing import Optional
 import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from sqlalchemy.orm import Session
 
 from app.config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRE_MINUTES
@@ -43,7 +44,7 @@ def get_current_user(
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user_id = int(payload.get("sub"))
-    except (JWTError, ValueError):
+    except (InvalidTokenError, ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的令牌")
     user = db.query(User).filter(
         User.id == user_id, User.status == "active", User.is_deleted == False

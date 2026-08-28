@@ -2,7 +2,7 @@ import json
 from typing import Any, Dict, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -58,13 +58,12 @@ class EnvItem(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 def _parse_extra(env):
     """Parse extra_env JSON string to dict for response."""
-    item = EnvItem.from_orm(env)
+    item = EnvItem.model_validate(env)
     if isinstance(env.extra_env, str):
         try:
             item.extra_env = json.loads(env.extra_env)

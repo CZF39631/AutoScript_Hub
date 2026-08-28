@@ -2,6 +2,8 @@ import os
 import io
 import zipfile
 
+import pytest
+
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
 
@@ -97,6 +99,34 @@ def main():
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "main.signature"
+
+
+@pytest.mark.parametrize("filename", ["../escaped.py", "..\\escaped.py", "/tmp/escaped.py"])
+def test_upload_rejects_multipart_filename_paths(client, dev_token, filename):
+    source = b"def config(): return {'name':'safe'}\ndef main(params, context): return None\n"
+
+    response = client.post(
+        "/api/scripts/upload",
+        files={"file": (filename, source, "text/x-python")},
+        headers={"Authorization": f"Bearer {dev_token}"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "文件名不能包含路径"
+
+
+def test_upload_version_rejects_multipart_filename_path(client, dev_token):
+    script_id = _upload(client, dev_token).json()["id"]
+    source = b"def config(): return {'name':'safe'}\ndef main(params, context): return None\n"
+
+    response = client.post(
+        f"/api/scripts/{script_id}/upload-version",
+        files={"file": ("../escaped.py", source, "text/x-python")},
+        headers={"Authorization": f"Bearer {dev_token}"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "文件名不能包含路径"
 
 
 def test_upload_rejects_zip_path_traversal(client, dev_token):

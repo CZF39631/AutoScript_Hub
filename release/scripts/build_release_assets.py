@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 from pathlib import Path
+import re
 import zipfile
 
 
@@ -17,7 +18,8 @@ def _zip(output, entries):
             info = zipfile.ZipInfo(archive_name, date_time=FIXED_TIME)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
-            bundle.writestr(info, source.read_bytes(), compresslevel=9)
+            content = source if isinstance(source, bytes) else source.read_bytes()
+            bundle.writestr(info, content, compresslevel=9)
 
 
 def _tree_entries(source, prefix):
@@ -36,6 +38,18 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def _versioned_deploy_file(path, version):
+    content = path.read_text(encoding="utf-8")
+    content, count = re.subn(
+        r"ghcr\.io/czf39631/autoscript-hub-server:[^}\s]+",
+        "ghcr.io/czf39631/autoscript-hub-server:" + version,
+        content,
+    )
+    if path.name in {"compose.yaml", ".env.example"} and count == 0:
+        raise RuntimeError("Missing server image tag in {}".format(path))
+    return content.encode("utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
@@ -45,11 +59,17 @@ def main():
 
     skill_source = ROOT / "skills" / "autoscript-script-authoring"
     skill_zip = args.output / f"autoscript-script-authoring-{args.version}.zip"
-    _zip(skill_zip, _tree_entries(skill_source, "autoscript-script-authoring"))
+    skill_entries = _tree_entries(skill_source, "autoscript-script-authoring")
+    skill_entries.append((ROOT / "LICENSE", "autoscript-script-authoring/LICENSE"))
+    _zip(skill_zip, skill_entries)
 
-    deployment_entries = []
+    deployment_entries = [(ROOT / "LICENSE", "autoscript-hub-server/LICENSE")]
     for relative in ["deploy/compose.yaml", "deploy/compose.local.yaml", "deploy/.env.example", "README.md"]:
-        deployment_entries.append((ROOT / relative, f"autoscript-hub-server/{relative}"))
+        source = ROOT / relative
+        content = _versioned_deploy_file(source, args.version) if relative in {
+            "deploy/compose.yaml", "deploy/.env.example"
+        } else source
+        deployment_entries.append((content, f"autoscript-hub-server/{relative}"))
     deployment_entries.extend(_tree_entries(ROOT / "ops" / "server", "autoscript-hub-server/ops/server"))
     for document in (ROOT / "docs").glob("*deployment*.md"):
         deployment_entries.append((document, f"autoscript-hub-server/docs/{document.name}"))

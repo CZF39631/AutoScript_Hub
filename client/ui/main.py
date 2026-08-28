@@ -8,6 +8,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 import webview
 
 from client.ui.config_manager import load_config, is_setup_complete
+from client.runtime.local_auth import get_or_create_agent_token
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 LOCAL_PORT = 18081
@@ -17,6 +18,7 @@ class LocalUIHandler(SimpleHTTPRequestHandler):
     """Serve frontend static files + proxy /api/* to the backend."""
 
     backend_url = "http://127.0.0.1:8000"
+    agent_api_token = ""
 
     def do_GET(self):
         if self.path.startswith("/api/"):
@@ -70,7 +72,10 @@ class LocalUIHandler(SimpleHTTPRequestHandler):
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
-                inject = '<script>window._BACKEND_URL="{}"</script>\n'.format(self.backend_url)
+                import json
+                inject = '<script>window._BACKEND_URL={};window._AGENT_API_TOKEN={}</script>\n'.format(
+                    json.dumps(self.backend_url), json.dumps(self.agent_api_token)
+                )
                 content = content.replace("</head>", inject + "</head>")
                 data = content.encode("utf-8")
                 self.send_response(200)
@@ -155,6 +160,7 @@ class Api:
 def start_local_server(backend_url):
     """Start the local HTTP server that serves frontend + proxies API."""
     LocalUIHandler.backend_url = backend_url
+    LocalUIHandler.agent_api_token = get_or_create_agent_token()
     server = HTTPServer(("127.0.0.1", LOCAL_PORT), LocalUIHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()

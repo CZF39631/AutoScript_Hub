@@ -98,6 +98,28 @@ BACKEND_HOST: str = str(_get("backend_host", "127.0.0.1", env_var="BACKEND_HOST"
 BACKEND_PORT: int = int(_get("backend_port", 8000, env_var="BACKEND_PORT"))
 CORS_ORIGINS: list[str] = _get_csv("cors_origins", "", "CORS_ORIGINS")
 
+
+_INSECURE_JWT_SECRETS = {"", "autoscript-dev-secret-change-in-prod", "change_me", "changeme"}
+_INSECURE_ADMIN_PASSWORDS = {"", "admin", "admin123", "change_me", "change_me_before_first_start"}
+
+
+def validate_security_config() -> None:
+    """Refuse known/default credentials at startup in every deployment mode."""
+    normalized_jwt = JWT_SECRET.strip().lower()
+    normalized_password = ADMIN_PASSWORD.strip().lower()
+    if (
+        normalized_jwt in _INSECURE_JWT_SECRETS
+        or normalized_jwt.startswith("change_me")
+        or len(JWT_SECRET) < 32
+    ):
+        raise RuntimeError("JWT_SECRET must be a unique secret of at least 32 characters")
+    if (
+        normalized_password in _INSECURE_ADMIN_PASSWORDS
+        or normalized_password.startswith("change_me")
+        or len(ADMIN_PASSWORD) < 12
+    ):
+        raise RuntimeError("ADMIN_PASSWORD must be changed and contain at least 12 characters")
+
 # Release cache (LAN release-cache feature)
 # Stores cached client release bundles (manifest, signature, installer) under DATA_DIR.
 RELEASE_CACHE_DIR: str = _get_runtime_path(
