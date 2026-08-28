@@ -105,7 +105,7 @@ export default function RunDetail() {
           )}
         </Space>
       </div>
-      <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
+      <Descriptions bordered size="small" column={2} className="run-detail__descriptions" style={{ marginBottom: 16 }}>
         <Descriptions.Item label="脚本ID">{run.script_id}</Descriptions.Item>
         <Descriptions.Item label="版本">{formatScriptVersion(run.script_semantic_version, run.script_version)}</Descriptions.Item>
         <Descriptions.Item label="状态"><Tag color={sm.color}>{sm.text}</Tag></Descriptions.Item>
@@ -120,7 +120,11 @@ export default function RunDetail() {
             ) : '结果文件保存在执行客户端'}
           </Descriptions.Item>
         )}
-        {run.params && <Descriptions.Item label="参数" span={2}><pre style={{ margin: 0 }}>{JSON.stringify(JSON.parse(run.params), null, 2)}</pre></Descriptions.Item>}
+        {run.params && (
+          <Descriptions.Item label="参数" span={2}>
+            <pre className="run-detail__params">{JSON.stringify(JSON.parse(run.params), null, 2)}</pre>
+          </Descriptions.Item>
+        )}
       </Descriptions>
       <LogViewer
         runId={run.id}
