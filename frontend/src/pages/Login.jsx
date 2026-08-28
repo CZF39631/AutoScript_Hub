@@ -32,9 +32,14 @@ export default function Login() {
   }
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
-      <Card title="AutoScript Hub" style={{ width: 360 }}>
-        <Form onFinish={onFinish} onValuesChange={() => setError('')}>
+    <div className="login-page">
+      <Card className="login-card" bordered={false}>
+        <div className="login-brand">
+          <div className="login-brand__icon">A</div>
+          <h1>AutoScript Hub</h1>
+          <p>安全、清晰地管理自动化脚本</p>
+        </div>
+        <Form layout="vertical" onFinish={onFinish} onValuesChange={() => setError('')}>
           {error && (
             <Alert
               type="error"
@@ -44,10 +49,10 @@ export default function Login() {
               role="alert"
             />
           )}
-          <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
+          <Form.Item name="username" label="账号" rules={[{ required: true, message: '请输入用户名' }]}>
             <Input prefix={<UserOutlined />} placeholder="用户名" />
           </Form.Item>
-          <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
+          <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
             <Input.Password prefix={<LockOutlined />} placeholder="密码" />
           </Form.Item>
           <Form.Item>
