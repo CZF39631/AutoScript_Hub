@@ -44,5 +44,14 @@ def test_configured_client_starts_one_main_webview(monkeypatch):
 
     monkeypatch.setattr(ui.webview, "start", start_webview)
 
-    assert ui.start_ui(on_started=lambda: events.append("loaded")) is True
-    assert events == [("server", "http://lan:8000"), "window", "main-webview", "loaded"]
+    assert ui.start_ui(
+        on_started=lambda: events.append("loaded"),
+        on_closed=lambda: events.append("closed"),
+    ) is True
+    assert events == [
+        ("server", "http://lan:8000"),
+        "window",
+        "main-webview",
+        "loaded",
+        "closed",
+    ]

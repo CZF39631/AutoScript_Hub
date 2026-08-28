@@ -46,7 +46,14 @@ button, input, select, textarea { font: inherit; }
 .app-menu .ant-menu-item .anticon { font-size: 17px; }
 .app-menu .ant-menu-item-selected { color: #006ee6 !important; background: rgba(0, 122, 255, 0.11) !important; }
 .app-menu .ant-menu-item-selected::after { display: none; }
-.app-account { margin: 12px; padding: 12px; display: flex; align-items: center; gap: 10px; border-radius: 14px; background: rgba(255,255,255,.64); border: 1px solid var(--apple-border); }
+.agent-status { margin: auto 12px 0; padding: 10px 12px; display: flex; align-items: center; gap: 10px; border-radius: 12px; background: rgba(255,255,255,.56); border: 1px solid var(--apple-border); }
+.agent-status__light { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; }
+.agent-status--online .agent-status__light { background: #34c759; box-shadow: 0 0 0 4px rgba(52,199,89,.13); }
+.agent-status--offline .agent-status__light { background: #ff3b30; box-shadow: 0 0 0 4px rgba(255,59,48,.12); }
+.agent-status > span:last-child { min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.agent-status strong { color: var(--apple-text); font-size: 12px; font-weight: 650; }
+.agent-status small { overflow: hidden; color: var(--apple-secondary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.app-account { margin: 8px 12px 12px; padding: 12px; display: flex; align-items: center; gap: 10px; border-radius: 14px; background: rgba(255,255,255,.64); border: 1px solid var(--apple-border); }
 .app-account__avatar { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: #fff; font-weight: 650; background: linear-gradient(145deg, #8e8e93, #636366); }
 .app-account__meta { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .app-account__meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }

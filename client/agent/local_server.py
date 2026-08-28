@@ -97,6 +97,7 @@ class AgentHandler(BaseHTTPRequestHandler):
     check_update_fn = None            # () -> durable signed-update state
     install_update_fn = None          # () -> durable signed-update state
     get_runtime_info_fn = None        # () -> managed private-Python diagnostics
+    request_shutdown_fn = None        # () -> request drain-then-exit
 
     def _update_status(self, callback, fallback):
         result = callback() if callback else fallback
@@ -181,7 +182,16 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
         if not self._authorized():
             return
-        if self.path == "/local/execute":
+        if self.path == "/lifecycle/shutdown":
+            if not self._consume_body():
+                return
+            callback = type(self).request_shutdown_fn
+            if not callback:
+                self._json({"error": "shutdown not available"}, 503)
+                return
+            callback()
+            self._json({"status": "draining"}, 202)
+        elif self.path == "/local/execute":
             data = self._read_json()
             if not data:
                 return
@@ -296,6 +306,7 @@ def start_local_server(
     check_update_fn=None,
     install_update_fn=None,
     get_runtime_info_fn=None,
+    request_shutdown_fn=None,
 ):
     if not api_token:
         raise ValueError("Agent API token is required")
@@ -313,6 +324,7 @@ def start_local_server(
     AgentHandler.check_update_fn = check_update_fn
     AgentHandler.install_update_fn = install_update_fn
     AgentHandler.get_runtime_info_fn = get_runtime_info_fn
+    AgentHandler.request_shutdown_fn = request_shutdown_fn
     server = HTTPServer(("127.0.0.1", port), AgentHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     return t
