@@ -23,8 +23,6 @@ export default function Scripts() {
   const { online, localApi } = useConnection()
 
   const canUpload = online && (user?.role === 'admin' || user?.role === 'developer')
-  const isAdmin = user?.role === 'admin'
-
   const loadCollections = useCallback(() => {
     setMyLoading(true)
     setMarketLoading(true)
@@ -122,9 +120,7 @@ export default function Scripts() {
       render: (_, r) => (
         <Space>
           <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>执行</Button>
-          {!isAdmin && (
-            <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => onUninstall(r)}>卸载</Button>
-          )}
+          <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => onUninstall(r)}>卸载</Button>
           {canUpload && (
             <Button type="link" size="small"
               icon={r.status === 'active' ? <StopOutlined /> : <CheckOutlined />}
@@ -138,7 +134,8 @@ export default function Scripts() {
   ]
 
   const marketColumns = [
-    { title: '名称', dataIndex: 'name', key: 'name' },
+    { title: '名称', dataIndex: 'name', key: 'name',
+      render: (name, r) => <Button type="link" style={{ padding: 0 }} onClick={() => nav(`/scripts/${r.id}`)}>{name}</Button> },
     { title: '描述', dataIndex: 'description', key: 'desc', ellipsis: true },
     { title: '分类', dataIndex: 'category', key: 'category', width: 120 },
     { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
@@ -146,7 +143,7 @@ export default function Scripts() {
       title: '操作', key: 'action', width: 120,
       render: (_, r) => (
         <Space>
-          {isAdmin || r.installed ? (
+          {r.installed ? (
             <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>查看</Button>
           ) : (
             <Button type="primary" size="small" icon={<DownloadOutlined />} onClick={() => onInstall(r)}>安装</Button>

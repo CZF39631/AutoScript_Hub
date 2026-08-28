@@ -95,6 +95,24 @@ def test_local_result_open_endpoint_calls_agent_callback():
         server.shutdown(); server.server_close()
 
 
+def test_lifecycle_shutdown_endpoint_requests_drain_and_exit():
+    requested = []
+    AgentHandler.request_shutdown_fn = lambda: requested.append(True)
+    server = _server()
+    try:
+        request = urllib.request.Request(
+            "http://127.0.0.1:{}/lifecycle/shutdown".format(server.server_port),
+            data=b"{}", headers=_headers(), method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read())
+        assert response.status == 202
+        assert payload == {"status": "draining"}
+        assert requested == [True]
+    finally:
+        server.shutdown(); server.server_close()
+
+
 def test_local_update_endpoints_expose_status_check_and_manual_install():
     AgentHandler.get_version_fn = lambda: "0.9.0"
     AgentHandler.get_update_status_fn = lambda: {"state": "verified", "version": "0.9.1"}

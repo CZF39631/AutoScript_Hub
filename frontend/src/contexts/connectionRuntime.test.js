@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { startConnectionPolling } from './connectionRuntime.js'
 
 
-test('connection polling runs once immediately and then every 30 seconds', () => {
+test('connection polling runs once immediately and then every 5 seconds', () => {
   let refreshCount = 0
   let scheduled = null
   let cleared = null
@@ -23,7 +23,7 @@ test('connection polling runs once immediately and then every 30 seconds', () =>
   )
 
   assert.equal(refreshCount, 1)
-  assert.equal(scheduled.delay, 30000)
+  assert.equal(scheduled.delay, 5000)
   scheduled.callback()
   assert.equal(refreshCount, 2)
   stop()

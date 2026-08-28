@@ -15,6 +15,7 @@ from autoscript_build_info import CHANNEL, VERSION
 os.environ["AUTOSCRIPT_VERSION"] = VERSION
 os.environ["AUTOSCRIPT_CHANNEL"] = CHANNEL
 
+from client.runtime.local_auth import get_or_create_agent_token
 from client.runtime.paths import ClientPaths
 from client.ui.config_manager import is_setup_complete
 from client.ui.main import start_ui
@@ -25,9 +26,19 @@ from shared.version import get_version
 logger = logging.getLogger(__name__)
 
 
+def _agent_request(path: str, *, method: str = "GET", data=None):
+    request = urllib.request.Request(
+        "http://127.0.0.1:18080" + path,
+        data=data,
+        method=method,
+        headers={"Authorization": "Bearer " + get_or_create_agent_token()},
+    )
+    return urllib.request.urlopen(request, timeout=2)
+
+
 def _agent_is_running() -> bool:
     try:
-        with urllib.request.urlopen("http://127.0.0.1:18080/status", timeout=1) as response:
+        with _agent_request("/status") as response:
             return response.status == 200
     except Exception:
         return False
@@ -35,7 +46,7 @@ def _agent_is_running() -> bool:
 
 def _agent_has_version(expected_version: str) -> bool:
     try:
-        with urllib.request.urlopen("http://127.0.0.1:18080/status", timeout=1) as response:
+        with _agent_request("/status") as response:
             payload = json.loads(response.read().decode("utf-8"))
         return response.status == 200 and payload.get("version") == expected_version
     except (OSError, ValueError, json.JSONDecodeError):
@@ -64,6 +75,15 @@ def _start_agent(paths: ClientPaths) -> None:
         creationflags=flags,
         close_fds=True,
     )
+
+
+def _request_agent_shutdown() -> bool:
+    try:
+        with _agent_request("/lifecycle/shutdown", method="POST", data=b"{}") as response:
+            return response.status == 202
+    except Exception:
+        logger.exception("Failed to request Agent shutdown")
+        return False
 
 
 def _confirm_startup(
@@ -95,7 +115,7 @@ def main():
             daemon=True,
         ).start()
 
-    if not start_ui(on_started=started) and is_setup_complete():
+    if not start_ui(on_started=started, on_closed=_request_agent_shutdown) and is_setup_complete():
         subprocess.Popen([sys.executable], cwd=str(paths.install_dir), close_fds=True)
 
 

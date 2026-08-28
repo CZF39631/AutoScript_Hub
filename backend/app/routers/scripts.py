@@ -42,12 +42,14 @@ def _validated_upload(path):
     return report.config
 
 
-def _is_admin(current_user):
-    return current_user.role == "admin"
+def _script_brief_from_orm(script):
+    if hasattr(ScriptBrief, "model_validate"):
+        return ScriptBrief.model_validate(script)
+    return ScriptBrief.from_orm(script)
 
 
 def _can_manage_scripts(current_user):
-    """Admin and developer can both see all scripts (design §1.3: developer uploads/manages scripts)."""
+    """Admin and developer can upload and manage marketplace scripts."""
     return current_user.role in ("admin", "developer")
 
 
@@ -61,11 +63,7 @@ def list_scripts(
     if category:
         q = q.filter(Script.category == category)
 
-    # Admin and developer see all scripts (design §1.3: developer manages scripts)
-    if _can_manage_scripts(current_user):
-        return q.order_by(Script.updated_at.desc()).all()
-
-    # Non-admin: only installed scripts
+    # “我的脚本”只表示当前用户主动安装的脚本。管理权限与安装归属分离。
     installed_ids = [us.script_id for us in
                      db.query(UserScript).filter(UserScript.user_id == current_user.id).all()]
     if not installed_ids:
@@ -85,18 +83,13 @@ def list_marketplace(
         q = q.filter(Script.category == category)
     scripts = q.order_by(Script.updated_at.desc()).all()
 
-    installed_ids = set()
-    if not _is_admin(current_user):
-        installed_ids = {us.script_id for us in
-                        db.query(UserScript).filter(UserScript.user_id == current_user.id).all()}
+    installed_ids = {us.script_id for us in
+                     db.query(UserScript).filter(UserScript.user_id == current_user.id).all()}
 
     result = []
     for s in scripts:
-        item = ScriptBrief.model_validate(s)
-        if _is_admin(current_user):
-            item.installed = True
-        else:
-            item.installed = s.id in installed_ids
+        item = _script_brief_from_orm(s)
+        item.installed = s.id in installed_ids
         result.append(item)
     return result
 
@@ -107,9 +100,6 @@ def install_script(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if _is_admin(current_user):
-        return {"message": "管理员拥有所有脚本权限"}
-
     script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False, Script.status == "active").first()
     if not script:
         raise HTTPException(status_code=404, detail="脚本不存在")
@@ -133,9 +123,6 @@ def uninstall_script(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if _is_admin(current_user):
-        return {"message": "管理员无法卸载"}
-
     existing = db.query(UserScript).filter(
         UserScript.user_id == current_user.id, UserScript.script_id == script_id
     ).first()

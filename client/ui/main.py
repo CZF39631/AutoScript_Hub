@@ -167,7 +167,7 @@ def start_local_server(backend_url):
     return t
 
 
-def start_ui(on_started=None):
+def start_ui(on_started=None, on_closed=None):
     config = load_config()
     backend_url = config.get("server_url", "http://127.0.0.1:8000")
 
@@ -196,6 +196,8 @@ def start_ui(on_started=None):
     if on_started:
         window.events.loaded += on_started
     webview.start()
+    if on_closed:
+        on_closed()
     return True
 
 
