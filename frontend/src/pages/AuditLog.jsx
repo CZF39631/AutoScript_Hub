@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Table, Input, Select, Space } from 'antd'
 import api from '../api/client'
+import { formatServerTime } from '../utils/dateTime'
 
 const actionLabels = {
   login: '登录',
@@ -37,7 +38,7 @@ export default function AuditLog() {
 
   const columns = [
     { title: '时间', dataIndex: 'created_at', key: 'time', width: 170,
-      render: (t) => t ? new Date(t).toLocaleString() : '-' },
+      render: formatServerTime },
     { title: '用户', dataIndex: 'username', key: 'user', width: 100 },
     { title: '操作', dataIndex: 'action', key: 'action', width: 110,
       render: (a) => actionLabels[a] || a },

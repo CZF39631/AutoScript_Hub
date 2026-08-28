@@ -7,6 +7,7 @@ import LogViewer from '../components/LogViewer'
 import { useConnection } from '../contexts/ConnectionContext'
 import { canOpenResultLocally, firstResultPath, loadRunDetail } from '../api/offlineData'
 import { formatScriptVersion } from '../utils/scriptVersion'
+import { formatServerTime } from '../utils/dateTime'
 
 const statusMap = {
   pending: { color: 'blue', text: '等待中' },
@@ -109,8 +110,8 @@ export default function RunDetail() {
         <Descriptions.Item label="版本">{formatScriptVersion(run.script_semantic_version, run.script_version)}</Descriptions.Item>
         <Descriptions.Item label="状态"><Tag color={sm.color}>{sm.text}</Tag></Descriptions.Item>
         <Descriptions.Item label="耗时">{run.duration_sec != null ? `${run.duration_sec}s` : '-'}</Descriptions.Item>
-        <Descriptions.Item label="开始时间">{run.started_at ? new Date(run.started_at).toLocaleString() : '-'}</Descriptions.Item>
-        <Descriptions.Item label="结束时间">{run.finished_at ? new Date(run.finished_at).toLocaleString() : '-'}</Descriptions.Item>
+        <Descriptions.Item label="开始时间">{formatServerTime(run.started_at)}</Descriptions.Item>
+        <Descriptions.Item label="结束时间">{formatServerTime(run.finished_at)}</Descriptions.Item>
         {run.error_msg && <Descriptions.Item label="错误信息" span={2}>{run.error_msg}</Descriptions.Item>}
         {run.result_files && (
           <Descriptions.Item label="结果文件" span={2}>
