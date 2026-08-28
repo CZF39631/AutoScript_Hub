@@ -137,6 +137,7 @@ def _get_installed_packages(python_executable=None):
         result = subprocess.run(
             [python_bin, "-m", "pip", "list", "--format=json"],
             capture_output=True, timeout=30, text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if result.returncode == 0:
             pkgs = json.loads(result.stdout)
@@ -170,6 +171,7 @@ def ensure_dependencies(script_config, python_executable=None):
         result = subprocess.run(
             [python_bin, "-m", "pip", "install"] + missing,
             capture_output=True, timeout=300, text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if result.returncode != 0:
             return "Dependency install failed: {}".format(result.stderr[:500])
