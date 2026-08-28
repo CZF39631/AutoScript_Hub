@@ -64,7 +64,7 @@ def _validate_params(param_defs, params):
 
 def _enrich_run(run, db, detail=False):
     """Keep numeric revisions for storage while exposing script contract SemVer to clients."""
-    item = RunDetail.from_orm(run) if detail else RunBrief.from_orm(run)
+    item = RunDetail.model_validate(run) if detail else RunBrief.model_validate(run)
     user = db.query(User).filter(User.id == run.user_id).first()
     script = db.query(Script).filter(Script.id == run.script_id).first()
     version = db.query(ScriptVersion).filter(
@@ -271,8 +271,8 @@ def update_run_status(
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
         raise HTTPException(status_code=404, detail="执行记录不存在")
-    if run.user_id != current_user.id and current_user.role == "operator":
-        raise HTTPException(status_code=403, detail="无权限访问")
+    if run.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="仅任务所属用户可更新状态")
 
     if run.status == "pending" and update.status == "running":
         raise HTTPException(status_code=409, detail="任务必须先由 Agent 原子领取")
@@ -313,6 +313,8 @@ def cancel_run(
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
         raise HTTPException(status_code=404, detail="执行记录不存在")
+    if run.user_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="无权限取消该任务")
     if run.status not in ("pending", "running"):
         raise HTTPException(status_code=400, detail="该任务无法取消")
     run.status = "cancelled"
@@ -401,12 +403,13 @@ def stream_run_log(
     token: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    from jose import JWTError, jwt
+    import jwt
+    from jwt import InvalidTokenError
     from app.config import JWT_SECRET, JWT_ALGORITHM
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user_id = int(payload.get("sub"))
-    except (JWTError, ValueError):
+    except (InvalidTokenError, ValueError, TypeError):
         raise HTTPException(status_code=401, detail="无效的令牌")
     current_user = db.query(User).filter(
         User.id == user_id, User.status == "active", User.is_deleted == False

@@ -1,0 +1,60 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "后端：FastAPI（本地测试）",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--app-dir",
+        "backend",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--reload"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder};${workspaceFolder}/backend",
+        "DATA_DIR": "${workspaceFolder}/tmp/vscode-data",
+        "DATABASE_URL": "sqlite:///${workspaceFolder}/tmp/vscode-data/autoscript.db",
+        "JWT_SECRET": "vscode-local-test-secret-change-before-sharing-2026",
+        "ADMIN_USERNAME": "admin",
+        "ADMIN_PASSWORD": "vscode-local-admin-2026",
+        "BACKEND_HOST": "127.0.0.1",
+        "BACKEND_PORT": "8000",
+        "CORS_ORIGINS": "http://127.0.0.1:3000,http://localhost:3000"
+      }
+    },
+    {
+      "name": "前端：Vite（本地测试）",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev -- --host 127.0.0.1",
+      "cwd": "${workspaceFolder}/frontend"
+    },
+    {
+      "name": "浏览器：打开本地前端",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://127.0.0.1:3000",
+      "webRoot": "${workspaceFolder}/frontend/src"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "完整本地环境：前端 + 后端",
+      "configurations": [
+        "后端：FastAPI（本地测试）",
+        "前端：Vite（本地测试）"
+      ],
+      "stopAll": true
+    }
+  ]
+}

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
-from app.models import User, Script, Run, AuditLog
+from app.models import User, Script, Run, AuditLog, UserScript
 from app.auth import get_current_user, require_role
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -19,33 +19,43 @@ def get_stats(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
-    # Total counts
-    total_runs = db.query(func.count(Run.id)).filter(Run.is_deleted == False).scalar()
-    total_scripts = db.query(func.count(Script.id)).filter(Script.is_deleted == False, Script.status == "active").scalar()
-    total_users = db.query(func.count(User.id)).filter(User.is_deleted == False).scalar()
+    own_run_filter = (Run.user_id == current_user.id) if current_user.role == "operator" else True
+
+    # Operators only receive statistics derived from their own records.
+    total_runs = db.query(func.count(Run.id)).filter(Run.is_deleted == False, own_run_filter).scalar()
+    if current_user.role == "operator":
+        total_scripts = db.query(func.count(UserScript.id)).filter(
+            UserScript.user_id == current_user.id
+        ).scalar()
+        total_users = 1
+    else:
+        total_scripts = db.query(func.count(Script.id)).filter(
+            Script.is_deleted == False, Script.status == "active"
+        ).scalar()
+        total_users = db.query(func.count(User.id)).filter(User.is_deleted == False).scalar()
 
     # Today
     today_runs = db.query(func.count(Run.id)).filter(
-        Run.is_deleted == False, Run.created_at >= today_start
+        Run.is_deleted == False, own_run_filter, Run.created_at >= today_start
     ).scalar()
     today_success = db.query(func.count(Run.id)).filter(
-        Run.is_deleted == False, Run.created_at >= today_start, Run.status == "success"
+        Run.is_deleted == False, own_run_filter, Run.created_at >= today_start, Run.status == "success"
     ).scalar()
     today_failed = db.query(func.count(Run.id)).filter(
-        Run.is_deleted == False, Run.created_at >= today_start, Run.status == "failed"
+        Run.is_deleted == False, own_run_filter, Run.created_at >= today_start, Run.status == "failed"
     ).scalar()
 
     # This week
     week_runs = db.query(func.count(Run.id)).filter(
-        Run.is_deleted == False, Run.created_at >= week_start
+        Run.is_deleted == False, own_run_filter, Run.created_at >= week_start
     ).scalar()
     week_success = db.query(func.count(Run.id)).filter(
-        Run.is_deleted == False, Run.created_at >= week_start, Run.status == "success"
+        Run.is_deleted == False, own_run_filter, Run.created_at >= week_start, Run.status == "success"
     ).scalar()
 
     # Recent failed runs
     recent_failed = db.query(Run).filter(
-        Run.is_deleted == False, Run.status == "failed"
+        Run.is_deleted == False, own_run_filter, Run.status == "failed"
     ).order_by(Run.created_at.desc()).limit(5).all()
 
     failed_list = []
@@ -64,7 +74,7 @@ def get_stats(
     script_stats = db.query(
         Run.script_id, func.count(Run.id).label("cnt")
     ).filter(
-        Run.is_deleted == False, Run.created_at >= week_start
+        Run.is_deleted == False, own_run_filter, Run.created_at >= week_start
     ).group_by(Run.script_id).order_by(func.count(Run.id).desc()).limit(5).all()
 
     ranking = []
@@ -74,10 +84,20 @@ def get_stats(
 
     # Online users (logged in within 30 min)
     online_threshold = now - timedelta(minutes=30)
-    online_users = db.query(func.count(User.id)).filter(
-        User.is_deleted == False, User.status == "active",
-        User.last_login_at >= online_threshold
-    ).scalar()
+    if current_user.role == "operator":
+        last_login = current_user.last_login_at
+        if last_login is not None and last_login.tzinfo is None:
+            last_login = last_login.replace(tzinfo=timezone.utc)
+        online_users = int(
+            current_user.status == "active"
+            and last_login is not None
+            and last_login >= online_threshold
+        )
+    else:
+        online_users = db.query(func.count(User.id)).filter(
+            User.is_deleted == False, User.status == "active",
+            User.last_login_at >= online_threshold
+        ).scalar()
 
     return {
         "total_runs": total_runs,

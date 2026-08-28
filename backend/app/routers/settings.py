@@ -45,7 +45,7 @@ def update_settings(
     db: Session = Depends(get_db),
 ):
     row = db.query(UserSettings).filter(UserSettings.user_id == current_user.id).first()
-    data = json.dumps(req.dict(exclude_none=True), ensure_ascii=False)
+    data = json.dumps(req.model_dump(exclude_none=True), ensure_ascii=False)
     if row:
         row.settings_json = data
     else:

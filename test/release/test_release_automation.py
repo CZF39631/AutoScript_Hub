@@ -119,6 +119,11 @@ def test_asset_builder_outputs_standalone_skill_and_deploy_bundles(tmp_path):
     with zipfile.ZipFile(deploy) as bundle:
         assert "autoscript-hub-server/deploy/compose.yaml" in bundle.namelist()
         assert "autoscript-hub-server/ops/server/backup.sh" in bundle.namelist()
+        compose = bundle.read("autoscript-hub-server/deploy/compose.yaml").decode("utf-8")
+        env_example = bundle.read("autoscript-hub-server/deploy/.env.example").decode("utf-8")
+        assert "autoscript-hub-server:0.9.0" in compose
+        assert "autoscript-hub-server:0.9.0" in env_example
+        assert "autoscript-hub-server:0.9.1" not in compose
     assert "autoscript-script-authoring-0.9.0.zip" in (tmp_path / "SHA256SUMS.txt").read_text("utf-8")
 
 

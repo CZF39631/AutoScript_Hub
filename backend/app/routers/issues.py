@@ -1,7 +1,7 @@
 from typing import Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -39,8 +39,7 @@ class IssueItem(BaseModel):
     run_params: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.post("", response_model=IssueItem)
@@ -54,6 +53,8 @@ def create_issue(
         run = db.query(Run).filter(Run.id == req.run_id).first()
         if not run:
             raise HTTPException(status_code=404, detail="执行记录不存在")
+        if run.user_id != current_user.id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="无权限为该执行记录创建工单")
         script_id = run.script_id
 
     issue = Issue(
@@ -136,7 +137,7 @@ def _enrich_issue(issue, db):
     user = db.query(User).filter(User.id == issue.user_id).first()
     script = db.query(Script).filter(Script.id == issue.script_id).first() if issue.script_id else None
 
-    item = IssueItem.from_orm(issue)
+    item = IssueItem.model_validate(issue)
     item.username = user.display_name if user else "Unknown"
     item.script_name = script.name if script else None
 

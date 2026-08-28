@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 
@@ -9,13 +9,11 @@ class LoginRequest(BaseModel):
 
 
 class UserBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
     display_name: str
     role: str
-
-    class Config:
-        orm_mode = True
 
 
 class LoginResponse(BaseModel):
@@ -41,11 +39,9 @@ class UserDetail(UserBrief):
     last_login_at: Optional[datetime] = None
     created_at: datetime
 
-    class Config:
-        orm_mode = True
-
 
 class ScriptBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
     description: Optional[str] = None
@@ -56,28 +52,20 @@ class ScriptBrief(BaseModel):
     created_at: datetime
     installed: Optional[bool] = None
 
-    class Config:
-        orm_mode = True
-
 
 class ScriptDetail(ScriptBrief):
     config_json: Optional[str] = None
     type: str
     updated_at: datetime
 
-    class Config:
-        orm_mode = True
-
 
 class ScriptVersionBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     version: int
     semantic_version: Optional[str] = None
     changelog: Optional[str] = None
     created_at: datetime
-
-    class Config:
-        orm_mode = True
 
 
 class ExecuteRequest(BaseModel):
@@ -87,6 +75,7 @@ class ExecuteRequest(BaseModel):
 
 
 class RunBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     script_id: int
     script_version: int
@@ -102,9 +91,6 @@ class RunBrief(BaseModel):
     created_at: datetime
     username: Optional[str] = None
     script_name: Optional[str] = None
-
-    class Config:
-        orm_mode = True
 
 
 class RunDetail(RunBrief):

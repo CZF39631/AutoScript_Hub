@@ -20,6 +20,15 @@ router = APIRouter(prefix="/api/scripts", tags=["scripts"])
 logger = logging.getLogger(__name__)
 
 
+def _safe_upload_name(filename: str) -> str:
+    """Return a plain filename and reject paths supplied by multipart clients."""
+    normalized = filename.replace("\\", "/")
+    safe_name = normalized.rsplit("/", 1)[-1]
+    if not safe_name or safe_name in (".", "..") or normalized != safe_name:
+        raise HTTPException(status_code=400, detail="文件名不能包含路径")
+    return safe_name
+
+
 def _validated_upload(path):
     report = validate_script(path, strict=False)
     if report.errors:
@@ -83,7 +92,7 @@ def list_marketplace(
 
     result = []
     for s in scripts:
-        item = ScriptBrief.from_orm(s)
+        item = ScriptBrief.model_validate(s)
         if _is_admin(current_user):
             item.installed = True
         else:
@@ -149,14 +158,15 @@ def upload_script(
     if not file.filename:
         raise HTTPException(status_code=400, detail="未提供文件")
 
-    ext = os.path.splitext(file.filename)[1].lower()
+    safe_name = _safe_upload_name(file.filename)
+    ext = os.path.splitext(safe_name)[1].lower()
     if ext not in (".py", ".zip"):
         raise HTTPException(status_code=400, detail="仅支持 .py 和 .zip 文件")
 
     script_type = "zip" if ext == ".zip" else "py"
 
     tmp_dir = tempfile.mkdtemp()
-    tmp_path = os.path.join(tmp_dir, file.filename)
+    tmp_path = os.path.join(tmp_dir, "upload" + ext)
     with open(tmp_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -164,7 +174,7 @@ def upload_script(
         config = _validated_upload(tmp_path)
 
         script = Script(
-            name=config.get("name", file.filename),
+            name=config.get("name", safe_name),
             description=config.get("description", ""),
             category=config.get("category", ""),
             type=script_type,
@@ -213,7 +223,8 @@ def upload_version(
     if not file.filename:
         raise HTTPException(status_code=400, detail="未提供文件")
 
-    ext = os.path.splitext(file.filename)[1].lower()
+    safe_name = _safe_upload_name(file.filename)
+    ext = os.path.splitext(safe_name)[1].lower()
     if ext not in (".py", ".zip"):
         raise HTTPException(status_code=400, detail="仅支持 .py 和 .zip 文件")
 
@@ -221,7 +232,7 @@ def upload_version(
     new_version = script.latest_version + 1
 
     tmp_dir = tempfile.mkdtemp()
-    tmp_path = os.path.join(tmp_dir, file.filename)
+    tmp_path = os.path.join(tmp_dir, "upload" + ext)
     with open(tmp_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 

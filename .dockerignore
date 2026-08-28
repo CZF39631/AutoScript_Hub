@@ -9,7 +9,9 @@ frontend/node_modules
 frontend/dist
 backend/static
 backend/storage
-backend/*.db
+backend/*.db*
+backend/*-wal
+backend/*-shm
 storage
 logs
 config.json

@@ -24,6 +24,7 @@ UninstallDisplayIcon={app}\AutoScriptHub.exe
 CloseApplications=yes
 RestartApplications=no
 LanguageDetectionMethod=none
+LicenseFile=..\..\LICENSE
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "cache\ChineseSimplified.isl"
@@ -40,6 +41,7 @@ Name: "{localappdata}\AutoScriptHub\updates"
 Name: "{localappdata}\AutoScriptHub\output"
 
 [Files]
+Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\release-output\windows\AutoScriptHub\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\release-output\windows-runtime\python\*"; DestDir: "{app}\runtime\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "cache\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall

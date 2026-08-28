@@ -21,13 +21,15 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: python -m pip install -r backend/requirements.txt -r client/requirements.txt pytest==7.4.3 PyYAML==6.0.2
+      - run: python -m pip install -r backend/requirements.txt -r client/requirements.txt pytest==7.4.3 PyYAML==6.0.2 pip-audit
       - if: runner.os == 'Windows'
         run: python -m pytest -q
       - if: runner.os == 'Linux'
         run: python -m pytest shared/tests backend/tests test/release -q
       - run: python -m compileall -q backend client shared release skills
       - run: python -m pip check
+      - run: python -m pip_audit -r backend/requirements.txt --progress-spinner off
+      - run: python -m pip_audit -r client/requirements.txt --progress-spinner off
 
   frontend:
     runs-on: ubuntu-latest
@@ -45,6 +47,7 @@ jobs:
       - run: npm test
       - run: npm run lint
       - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
 
   docker-amd64:
     runs-on: ubuntu-latest
@@ -52,7 +55,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build --build-arg AUTOSCRIPT_VERSION=0.9.0-ci -t autoscript-hub-server:ci .
       - run: |
-          docker run -d --name autoscript-ci -p 18000:8000 -e JWT_SECRET=ci-only -e ADMIN_PASSWORD=ci-only autoscript-hub-server:ci
+          docker run -d --name autoscript-ci -p 18000:8000 -e JWT_SECRET=ci-only-secret-with-at-least-32-characters -e ADMIN_PASSWORD=ci-only-admin-password autoscript-hub-server:ci
           for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:18000/api/health/ready && exit 0; sleep 2; done
           docker logs autoscript-ci
           exit 1

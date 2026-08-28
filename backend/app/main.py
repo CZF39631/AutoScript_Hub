@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from shared.version import get_channel, get_version
-from app.config import CORS_ORIGINS, DATA_DIR
+from app.config import CORS_ORIGINS, DATA_DIR, validate_security_config
 from app.database import engine
 from app.config import DATABASE_URL
 from app.migrations import migration_status
@@ -56,6 +56,7 @@ app.include_router(release_cache_router.router)
 
 
 def _initialize_app():
+    validate_security_config()
     from init_db import init
     init()
 

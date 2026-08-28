@@ -141,7 +141,7 @@ def test_pending_run_cannot_be_marked_running_without_an_atomic_claim(client, de
 def test_result_files_are_client_local_and_server_has_no_open_or_download_routes():
     from app.main import app
 
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
     assert "/api/runs/{run_id}/open-result" not in paths
     assert "/api/runs/{run_id}/download" not in paths
 

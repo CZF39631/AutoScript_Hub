@@ -4,6 +4,7 @@
   python setup.py --server   # 配置并安装服务端（后端 + 前端）
   python setup.py --client   # 配置并安装客户端（Agent + 桌面UI）
 """
+import getpass
 import json
 import os
 import secrets
@@ -28,6 +29,17 @@ def _input(prompt, default=None):
     else:
         line = input("{}: ".format(prompt)).strip()
     return line if line else default
+
+
+def _password(prompt, existing=""):
+    while True:
+        suffix = "（回车保留现有密码）" if existing else "（至少 12 个字符）"
+        value = getpass.getpass("{}{}: ".format(prompt, suffix)).strip()
+        if not value and existing:
+            value = existing
+        if len(value) >= 12 and not value.lower().startswith("change_me") and value.lower() not in {"admin123", "password"}:
+            return value
+        print("[ERROR] 密码至少需要 12 个字符，且不能使用默认或占位密码")
 
 
 def _detect_python_versions():
@@ -226,7 +238,7 @@ def setup_server():
         "scripts_dir": _input("脚本目录", existing.get("scripts_dir", "backend/storage/scripts")),
         "logs_dir": _input("日志目录", existing.get("logs_dir", "backend/storage/logs")),
         "admin_username": _input("管理员用户名", existing.get("admin_username", "admin")),
-        "admin_password": _input("管理员密码", existing.get("admin_password", "admin123")),
+        "admin_password": _password("管理员密码", existing.get("admin_password", "")),
         "jwt_secret": _input("JWT 密钥 (回车自动生成)", existing.get("jwt_secret", "")) or secrets.token_hex(32),
         "backend_host": _input("后端地址", existing.get("backend_host", "127.0.0.1")),
         "backend_port": int(_input("后端端口", str(existing.get("backend_port", 8000)))),

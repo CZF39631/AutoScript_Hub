@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 def test_startup_seeds_admin_user_for_login(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
     from app import database as database_module
+    from app import config as config_module
     from app import scheduler as scheduler_module
     from app import main as main_module
     import init_db as init_db_module
@@ -20,6 +21,8 @@ def test_startup_seeds_admin_user_for_login(monkeypatch, tmp_path):
     monkeypatch.setattr(init_db_module, "engine", engine)
     monkeypatch.setattr(init_db_module, "SessionLocal", SessionLocal)
     monkeypatch.setattr(scheduler_module, "start_scheduler", lambda: None)
+    monkeypatch.setattr(config_module, "JWT_SECRET", "test-secret-that-is-longer-than-thirty-two-characters")
+    monkeypatch.setattr(config_module, "ADMIN_PASSWORD", "test-admin-password")
 
     try:
         with TestClient(main_module.app) as client:
@@ -60,6 +63,17 @@ def test_login_disabled_user(client, fresh_db):
 def test_protected_endpoint_no_token(client):
     resp = client.post("/api/auth/logout")
     assert resp.status_code == 401
+
+
+def test_login_rate_limit_blocks_repeated_failures(client):
+    from app.routers import auth as auth_router
+    auth_router._login_failures.clear()
+    for _ in range(5):
+        response = client.post("/api/auth/login", json={"username": "bruteforce", "password": "wrong"})
+        assert response.status_code == 401
+    response = client.post("/api/auth/login", json={"username": "bruteforce", "password": "wrong"})
+    assert response.status_code == 429
+    auth_router._login_failures.clear()
 
 
 def test_protected_endpoint_with_token(client, admin_token):

@@ -13,6 +13,7 @@ from datetime import datetime
 import requests
 
 from client.agent.local_server import start_local_server
+from client.runtime.local_auth import get_or_create_agent_token
 from client.agent.script_parser import parse_script_config
 from shared.script_contract import extract_script_archive, validate_params
 from shared.version import get_version
@@ -1362,6 +1363,7 @@ def initialize_agent_runtime():
         LOCAL_PORT,
         _get_current_run_id,
         get_version_fn=get_version,
+        api_token=get_or_create_agent_token(),
         list_local_scripts_fn=list_local_scripts,
         start_local_run_fn=start_local_run,
         list_local_runs_fn=list_local_runs,

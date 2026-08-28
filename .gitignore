@@ -22,7 +22,9 @@ bash.exe.stackdump
 
 # Storage (runtime data)
 backend/storage/
-backend/*.db
+backend/*.db*
+backend/*-wal
+backend/*-shm
 storage/
 
 # Config with secrets
