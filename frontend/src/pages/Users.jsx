@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, Select, Tag, message, Space } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import api from '../api/client'
+import { formatServerTime } from '../utils/dateTime'
 
 export default function Users() {
   const [users, setUsers] = useState([])
@@ -56,7 +57,7 @@ export default function Users() {
     },
     {
       title: '最后登录', dataIndex: 'last_login_at', key: 'login', width: 180,
-      render: (t) => t ? new Date(t).toLocaleString() : '-'
+      render: formatServerTime
     },
     {
       title: '操作', key: 'action', width: 120,

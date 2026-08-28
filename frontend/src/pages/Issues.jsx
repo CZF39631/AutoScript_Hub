@@ -3,6 +3,7 @@ import { Table, Tag, Button, Modal, Input, Form, Select, Space, Descriptions, me
 import { EyeOutlined } from '@ant-design/icons'
 import { useAuth } from '../contexts/AuthContext'
 import api from '../api/client'
+import { formatServerTime } from '../utils/dateTime'
 
 const statusMap = {
   open: { color: 'red', text: '待处理' },
@@ -67,7 +68,7 @@ export default function Issues() {
     { title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (s) => { const m = statusMap[s] || { color: 'default', text: s }; return <Tag color={m.color}>{m.text}</Tag> } },
     { title: '上报时间', dataIndex: 'created_at', key: 'time', width: 160,
-      render: (t) => t ? new Date(t).toLocaleString() : '-' },
+      render: formatServerTime },
     {
       title: '操作', key: 'action', width: 160,
       render: (_, r) => (

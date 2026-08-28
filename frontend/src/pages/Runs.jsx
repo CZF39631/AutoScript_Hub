@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useConnection } from '../contexts/ConnectionContext'
 import { canOpenResultLocally, firstResultPath, loadRunList } from '../api/offlineData'
 import { formatScriptVersion } from '../utils/scriptVersion'
+import { formatServerTime } from '../utils/dateTime'
 
 const { RangePicker } = DatePicker
 
@@ -116,7 +117,7 @@ export default function Runs() {
     },
     {
       title: '创建时间', dataIndex: 'created_at', key: 'time', width: 160,
-      render: (t) => t ? new Date(t).toLocaleString() : '-'
+      render: formatServerTime
     },
     {
       title: '操作', key: 'action', width: 110,
