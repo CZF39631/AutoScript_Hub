@@ -3,6 +3,7 @@ import json
 import os
 import sys
 
+import requests
 import webview
 
 from client.ui.config_manager import save_config
@@ -166,19 +167,20 @@ async function testLogin() {
   button.textContent = '正在验证…';
   showMsg('m2', '正在连接服务端并验证账号…', true);
   try {
-    var resp = await fetch(url + '/api/auth/login', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({username: user, password: pass})
-    });
-    var data = {};
-    try { data = await resp.json(); } catch (_) {}
-    if (resp.ok) {
+    if (!window.pywebview || !window.pywebview.api) {
+      throw new Error('本地功能接口不可用');
+    }
+    var result = await window.pywebview.api.testLogin(url, user, pass);
+    if (result.ok) {
       loginVerified = true;
       showMsg('m2', '登录验证成功', true);
       return true;
     }
-    var detail = typeof data.detail === 'string' ? data.detail : '';
-    showMsg('m2', detail || ('登录失败（HTTP ' + resp.status + '）'), false);
+    if (result.status) {
+      showMsg('m2', result.detail || ('登录失败（HTTP ' + result.status + '）'), false);
+    } else {
+      showMsg('m2', '无法连接服务端，请检查地址和网络。错误：' + (result.detail || '未知错误'), false);
+    }
     return false;
   } catch(e) {
     showMsg('m2', '无法连接服务端，请检查地址和网络。错误：' + e.message, false);
@@ -262,6 +264,24 @@ class WizardApi:
     def detectBrowsers(self):
         from client.agent.local_server import _detect_browsers
         return _detect_browsers()
+
+    def testLogin(self, server_url, username, password):
+        try:
+            response = requests.post(
+                server_url.rstrip("/") + "/api/auth/login",
+                json={"username": username, "password": password},
+                timeout=10,
+            )
+            if response.ok:
+                return {"ok": True, "status": response.status_code, "detail": ""}
+            try:
+                payload = response.json()
+                detail = payload.get("detail", "") if isinstance(payload, dict) else ""
+            except ValueError:
+                detail = ""
+            return {"ok": False, "status": response.status_code, "detail": detail}
+        except requests.RequestException as exc:
+            return {"ok": False, "status": 0, "detail": str(exc)}
 
     def saveAndFinish(self, config_json):
         config = json.loads(config_json)
