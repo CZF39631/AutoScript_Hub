@@ -103,7 +103,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--install-dir", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--expected-version", default="0.9.1")
+    parser.add_argument("--expected-version", default="1.0.0")
     args = parser.parse_args()
 
     install_dir = args.install_dir.resolve()

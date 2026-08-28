@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.9.1-dev"
+  #define MyAppVersion "1.0.0"
 #endif
 #define MyAppName "AutoScript Hub"
 #define MyAppPublisher "AutoScript Hub"

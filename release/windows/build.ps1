@@ -1,5 +1,5 @@
 param(
-    [string]$Version = $(if ($env:AUTOSCRIPT_VERSION) { $env:AUTOSCRIPT_VERSION } else { '0.9.1-dev' }),
+    [string]$Version = $(if ($env:AUTOSCRIPT_VERSION) { $env:AUTOSCRIPT_VERSION } else { '1.0.0' }),
     [string]$PythonExe = 'python'
 )
 $ErrorActionPreference = 'Stop'
