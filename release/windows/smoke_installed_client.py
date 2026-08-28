@@ -13,8 +13,8 @@ import signal
 import subprocess
 import sys
 import time
-from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 def _image_pids(image_name: str) -> set[int]:
@@ -36,12 +36,14 @@ def _image_pids(image_name: str) -> set[int]:
     return pids
 
 
-def _wait_json(url: str, timeout: float = 30) -> dict:
+def _wait_json(url: str, token_path: Path, timeout: float = 30) -> dict:
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            with urlopen(url, timeout=2) as response:
+            token = token_path.read_text(encoding="utf-8").strip()
+            request = Request(url, headers={"Authorization": f"Bearer {token}"})
+            with urlopen(request, timeout=2) as response:
                 if response.status == 200:
                     return json.loads(response.read().decode("utf-8"))
         except (OSError, URLError, ValueError, json.JSONDecodeError) as exc:
@@ -64,12 +66,18 @@ def _wait_http(url: str, timeout: float = 30) -> bytes:
     raise RuntimeError(f"timed out waiting for {url}: {last_error}")
 
 
-def _wait_port_closed(url: str, timeout: float = 10) -> None:
+def _wait_port_closed(url: str, token_path: Path | None = None, timeout: float = 10) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urlopen(url, timeout=1):
+            headers = {}
+            if token_path is not None:
+                token = token_path.read_text(encoding="utf-8").strip()
+                headers["Authorization"] = f"Bearer {token}"
+            with urlopen(Request(url, headers=headers), timeout=1):
                 time.sleep(0.2)
+        except HTTPError:
+            time.sleep(0.2)
         except (OSError, URLError):
             return
     raise RuntimeError(f"process stopped but endpoint is still serving: {url}")
@@ -103,7 +111,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--install-dir", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--expected-version", default="0.9.1")
+    parser.add_argument("--expected-version", default="1.0.0")
     args = parser.parse_args()
 
     install_dir = args.install_dir.resolve()
@@ -136,6 +144,7 @@ def main() -> int:
         ),
         encoding="utf-8",
     )
+    token_path = config_dir / "agent-api.token"
     environment = os.environ.copy()
     environment["AUTOSCRIPT_CLIENT_DATA_DIR"] = str(data_dir)
     system_root = environment.get("SystemRoot", r"C:\Windows")
@@ -155,8 +164,8 @@ def main() -> int:
             startupinfo=startup,
         )
         started_pids.add(standalone.pid)
-        status = _wait_json("http://127.0.0.1:18080/status")
-        runtime = _wait_json("http://127.0.0.1:18080/local/runtime")
+        status = _wait_json("http://127.0.0.1:18080/status", token_path)
+        runtime = _wait_json("http://127.0.0.1:18080/local/runtime", token_path)
         if status.get("version") != args.expected_version:
             raise RuntimeError(f"unexpected installed Agent version: {status}")
         _assert_runtime(runtime)
@@ -174,8 +183,8 @@ def main() -> int:
         )
         started_pids.add(ui_process.pid)
         html = _wait_http("http://127.0.0.1:18081/")
-        status = _wait_json("http://127.0.0.1:18080/status")
-        runtime = _wait_json("http://127.0.0.1:18080/local/runtime")
+        status = _wait_json("http://127.0.0.1:18080/status", token_path)
+        runtime = _wait_json("http://127.0.0.1:18080/local/runtime", token_path)
         new_agents = _image_pids(agent.name) - baseline
         started_pids.update(new_agents)
         if b'id="root"' not in html:
@@ -189,10 +198,10 @@ def main() -> int:
         _terminate_pid(ui_process.pid)
         started_pids.discard(ui_process.pid)
         _wait_port_closed("http://127.0.0.1:18081/")
-        status_after_ui_close = _wait_json("http://127.0.0.1:18080/status", timeout=10)
+        status_after_ui_close = _wait_json("http://127.0.0.1:18080/status", token_path, timeout=10)
         if status_after_ui_close.get("version") != args.expected_version:
-            raise RuntimeError(f"Agent stopped when the UI closed: {status_after_ui_close}")
-        print("agent_after_ui_close=" + json.dumps(status_after_ui_close, ensure_ascii=False, sort_keys=True))
+            raise RuntimeError(f"Agent stopped after forced UI termination: {status_after_ui_close}")
+        print("agent_after_forced_ui_close=" + json.dumps(status_after_ui_close, ensure_ascii=False, sort_keys=True))
         print(f"isolated_path={environment['PATH']}")
         print("installed_ui_agent_smoke=true")
         return 0

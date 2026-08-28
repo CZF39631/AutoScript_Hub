@@ -1,4 +1,5 @@
-from client.ui.wizard import WIZARD_HTML
+from client.ui import wizard
+from client.ui.wizard import WIZARD_HTML, WizardApi
 
 
 def test_wizard_is_localized_in_chinese():
@@ -25,3 +26,29 @@ def test_wizard_displays_login_and_save_errors_and_requires_verification():
     assert "保存设置失败" in WIZARD_HTML
     assert "if (loginVerified || await testLogin())" in WIZARD_HTML
     assert "if (!loginVerified)" in WIZARD_HTML
+    assert "window.pywebview.api.testLogin" in WIZARD_HTML
+    assert "fetch(url + '/api/auth/login'" not in WIZARD_HTML
+
+
+def test_wizard_login_uses_native_bridge_to_avoid_browser_cors(monkeypatch):
+    class Response:
+        ok = True
+        status_code = 200
+
+    calls = []
+    monkeypatch.setattr(
+        wizard.requests,
+        "post",
+        lambda url, json, timeout: calls.append((url, json, timeout)) or Response(),
+    )
+
+    result = WizardApi().testLogin("http://192.168.1.106:8123/", "employee", "secret")
+
+    assert result == {"ok": True, "status": 200, "detail": ""}
+    assert calls == [
+        (
+            "http://192.168.1.106:8123/api/auth/login",
+            {"username": "employee", "password": "secret"},
+            10,
+        )
+    ]
