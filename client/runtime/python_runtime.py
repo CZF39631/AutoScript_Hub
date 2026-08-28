@@ -28,6 +28,7 @@ def python_runtime_info(paths: ClientPaths) -> dict:
         text=True,
         timeout=10,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     output = (completed.stdout or completed.stderr).strip()
     actual = output.removeprefix("Python ")

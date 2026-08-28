@@ -1,5 +1,6 @@
 import io
 import os
+import time
 import zipfile
 
 import pytest
@@ -23,6 +24,61 @@ def _zip_bytes(entries):
         for name, content in entries.items():
             bundle.writestr(name, content)
     return stream.getvalue()
+
+
+def test_shutdown_request_enters_drain_mode_and_rejects_new_local_runs():
+    agent._shutdown_when_idle = False
+    try:
+        agent.request_shutdown_when_idle()
+        assert agent._shutdown_when_idle is True
+        assert agent.start_local_run({"script_id": 1}) == {
+            "error": "Agent 正在退出，不能启动新任务"
+        }
+    finally:
+        agent._shutdown_when_idle = False
+
+
+def test_poll_does_not_claim_new_backend_work_while_draining(monkeypatch):
+    agent._shutdown_when_idle = True
+    agent._running_proc = None
+    agent._running_info = {}
+    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
+    monkeypatch.setattr(
+        agent.requests,
+        "get",
+        lambda *args, **kwargs: pytest.fail("排空期间不应领取新任务"),
+    )
+    try:
+        agent.poll_and_execute()
+    finally:
+        agent._shutdown_when_idle = False
+
+
+def test_script_subprocess_streams_stdout_before_process_exit(tmp_path):
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    (script_dir / "main.py").write_text(
+        "import time\ndef main():\n    print('live-line')\n    time.sleep(3)\n",
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "logs" / "live.log"
+    proc = agent._start_script_subprocess(
+        str(script_dir), {}, str(log_path), timeout=10, python_executable=os.sys.executable
+    )
+    try:
+        deadline = time.time() + 2
+        content = b""
+        while time.time() < deadline:
+            content = log_path.read_bytes() if log_path.exists() else b""
+            if b"live-line" in content:
+                break
+            time.sleep(0.05)
+        assert b"live-line" in content
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+        proc._log_file.close()
 
 
 def test_downloaded_script_is_safely_extracted_and_legacy_root_is_normalized(tmp_path):

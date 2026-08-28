@@ -68,6 +68,22 @@ begin
     (RegQueryStringValue(HKCU, ClientKey, 'pv', Version) and (Version <> ''));
 end;
 
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  { Agent is detached from the GUI, so Inno Setup cannot discover it through
+    CloseApplications. Stop its process tree before replacing installed files.
+    Exit code 128 simply means no matching process exists. }
+  Exec(
+    ExpandConstant('{sys}\taskkill.exe'),
+    '/F /T /IM AutoScriptAgent.exe',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode
+  );
+  Sleep(500);
+  Result := '';
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   PreviousInstaller: String;

@@ -33,10 +33,15 @@ from app.routers import presets as presets_router
 from app.routers import release_cache as release_cache_router
 app = FastAPI(title="AutoScript Hub", version=get_version())
 
+# The packaged desktop UI is served from this fixed loopback origin and opens
+# the log SSE endpoint directly so events are not buffered by its HTTP proxy.
+_DESKTOP_UI_ORIGINS = ["http://127.0.0.1:18081", "http://localhost:18081"]
+_allowed_origins = list(dict.fromkeys([*CORS_ORIGINS, *_DESKTOP_UI_ORIGINS]))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_credentials=bool(CORS_ORIGINS),
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

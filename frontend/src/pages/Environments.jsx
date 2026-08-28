@@ -4,8 +4,6 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, DesktopOutlined } from '@an
 import api from '../api/client'
 import { useConnection } from '../contexts/ConnectionContext'
 
-const AGENT_URL = 'http://127.0.0.1:18080'
-
 const emptyForm = {
   name: '', browser_port: null, browser_path: null,
   python_version: null, venv_path: null, venv_status: 'none', python_executable: null,
@@ -47,9 +45,8 @@ export default function Environments() {
   const detectBrowsers = async () => {
     setDetectingBrowser(true)
     try {
-      const resp = await fetch(`${AGENT_URL}/detect-browsers`)
-      if (!resp.ok) throw new Error()
-      const data = await resp.json()
+      const resp = await localApi.get('/detect-browsers')
+      const data = resp.data || []
       setBrowsers(data)
       if (data.length === 0) message.info('未检测到浏览器')
     } catch {
