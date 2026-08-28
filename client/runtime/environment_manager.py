@@ -110,7 +110,14 @@ def _fingerprint_lock(lock_path: Path, timeout_seconds: int = 300):
 
 
 def _run(command: list[str], timeout: int) -> None:
-    completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[-1000:]
         raise RuntimeError(f"环境命令失败 ({completed.returncode}): {detail}")
