@@ -42,6 +42,12 @@ def _validated_upload(path):
     return report.config
 
 
+def _script_brief_from_orm(script):
+    if hasattr(ScriptBrief, "model_validate"):
+        return ScriptBrief.model_validate(script)
+    return ScriptBrief.from_orm(script)
+
+
 def _can_manage_scripts(current_user):
     """Admin and developer can upload and manage marketplace scripts."""
     return current_user.role in ("admin", "developer")
@@ -82,7 +88,7 @@ def list_marketplace(
 
     result = []
     for s in scripts:
-        item = ScriptBrief.model_validate(s)
+        item = _script_brief_from_orm(s)
         item.installed = s.id in installed_ids
         result.append(item)
     return result
