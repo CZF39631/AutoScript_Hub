@@ -23,8 +23,6 @@ export default function Scripts() {
   const { online, localApi } = useConnection()
 
   const canUpload = online && (user?.role === 'admin' || user?.role === 'developer')
-  const isAdmin = user?.role === 'admin'
-
   const loadCollections = useCallback(() => {
     setMyLoading(true)
     setMarketLoading(true)
@@ -122,9 +120,7 @@ export default function Scripts() {
       render: (_, r) => (
         <Space>
           <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>执行</Button>
-          {!isAdmin && (
-            <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => onUninstall(r)}>卸载</Button>
-          )}
+          <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => onUninstall(r)}>卸载</Button>
           {canUpload && (
             <Button type="link" size="small"
               icon={r.status === 'active' ? <StopOutlined /> : <CheckOutlined />}
@@ -146,9 +142,10 @@ export default function Scripts() {
       title: '操作', key: 'action', width: 120,
       render: (_, r) => (
         <Space>
-          {isAdmin || r.installed ? (
+          {(canUpload || r.installed) && (
             <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>查看</Button>
-          ) : (
+          )}
+          {!r.installed && (
             <Button type="primary" size="small" icon={<DownloadOutlined />} onClick={() => onInstall(r)}>安装</Button>
           )}
         </Space>

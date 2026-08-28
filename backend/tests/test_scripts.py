@@ -33,11 +33,35 @@ def test_upload_requires_dev_role(client, op_token):
     assert resp.status_code == 403
 
 
-def test_list_scripts(client, dev_token):
-    _upload(client, dev_token)
-    resp = client.get("/api/scripts", headers={"Authorization": f"Bearer {dev_token}"})
-    assert resp.status_code == 200
-    assert len(resp.json()) >= 1
+def test_uploaded_script_stays_in_marketplace_until_developer_installs_it(client, dev_token):
+    script_id = _upload(client, dev_token).json()["id"]
+    headers = {"Authorization": f"Bearer {dev_token}"}
+
+    mine = client.get("/api/scripts", headers=headers)
+    marketplace = client.get("/api/scripts/marketplace", headers=headers)
+    assert mine.status_code == 200
+    assert all(item["id"] != script_id for item in mine.json())
+    market_item = next(item for item in marketplace.json() if item["id"] == script_id)
+    assert market_item["installed"] is False
+
+    assert client.post(f"/api/scripts/{script_id}/install", headers=headers).status_code == 200
+    mine = client.get("/api/scripts", headers=headers)
+    assert any(item["id"] == script_id for item in mine.json())
+
+
+def test_admin_also_chooses_which_marketplace_scripts_belong_to_mine(client, admin_token):
+    script_id = _upload(client, admin_token).json()["id"]
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    mine = client.get("/api/scripts", headers=headers)
+    marketplace = client.get("/api/scripts/marketplace", headers=headers)
+    assert all(item["id"] != script_id for item in mine.json())
+    assert next(item for item in marketplace.json() if item["id"] == script_id)["installed"] is False
+
+    assert client.post(f"/api/scripts/{script_id}/install", headers=headers).status_code == 200
+    assert any(item["id"] == script_id for item in client.get("/api/scripts", headers=headers).json())
+    assert client.post(f"/api/scripts/{script_id}/uninstall", headers=headers).status_code == 200
+    assert all(item["id"] != script_id for item in client.get("/api/scripts", headers=headers).json())
 
 
 def test_get_script_detail(client, dev_token):
