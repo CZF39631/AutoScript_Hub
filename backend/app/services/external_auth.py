@@ -103,7 +103,8 @@ def resolve_local_user(db: Session, identity: ExternalIdentity) -> User:
     ).first()
     if user:
         user.display_name = identity.display_name
-        user.role = identity.role
+        # Authentication is external, but authorization is managed locally.
+        # Keep administrator-assigned roles stable across later logins.
         return user
 
     # Never bind an external identity to an existing local/same-name account.
