@@ -13,7 +13,7 @@ $RuntimePython = Join-Path $RuntimeRoot 'python'
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
     throw "Version must be SemVer without a leading v: $Version"
 }
-$Channel = if ($Version.StartsWith('1.')) { 'stable' } else { 'beta' }
+$Channel = if ($Version.Contains('-')) { 'beta' } elseif ($Version.StartsWith('1.')) { 'stable' } else { 'beta' }
 
 Push-Location $RepoRoot
 try {
