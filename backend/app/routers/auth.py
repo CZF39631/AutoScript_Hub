@@ -6,11 +6,20 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app import config
 from app.database import get_db
 from app.models import User
 from app.schemas import LoginRequest, LoginResponse, UserBrief
 from app.auth import verify_password, create_access_token, get_current_user
 from app.services.audit import write_audit
+from app.services.external_auth import (
+    ExternalAuthUnavailable,
+    ExternalIdentityNotAuthorized,
+    InvalidExternalCredentials,
+    InvalidExternalResponse,
+    authenticate as authenticate_external,
+    resolve_local_user,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 _LOGIN_WINDOW_SECONDS = 300
@@ -48,12 +57,29 @@ def _clear_login_failures(key):
 def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     login_key = _login_key(request, req.username)
     _check_login_limit(login_key)
-    user = db.query(User).filter(User.username == req.username, User.is_deleted == False).first()
-    if not user or not verify_password(req.password, user.password_hash):
-        _record_login_failure(login_key)
-        write_audit(None, req.username, "login_failed", detail="用户名或密码错误",
-                    ip_address=request.client.host if request.client else None)
-        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if config.EXTERNAL_AUTH_ENABLED:
+        try:
+            identity = authenticate_external(req.username, req.password)
+            user = resolve_local_user(db, identity)
+        except InvalidExternalCredentials:
+            _record_login_failure(login_key)
+            write_audit(None, req.username, "login_failed", detail="用户名或密码错误",
+                        ip_address=request.client.host if request.client else None)
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        except ExternalIdentityNotAuthorized:
+            _record_login_failure(login_key)
+            raise HTTPException(status_code=403, detail="账号未获授权")
+        except InvalidExternalResponse:
+            raise HTTPException(status_code=502, detail="外部认证响应格式错误")
+        except ExternalAuthUnavailable:
+            raise HTTPException(status_code=503, detail="外部认证服务暂时不可用")
+    else:
+        user = db.query(User).filter(User.username == req.username, User.is_deleted == False).first()
+        if not user or not verify_password(req.password, user.password_hash):
+            _record_login_failure(login_key)
+            write_audit(None, req.username, "login_failed", detail="用户名或密码错误",
+                        ip_address=request.client.host if request.client else None)
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
     if user.status != "active":
         raise HTTPException(status_code=403, detail="账号已被禁用")
 
@@ -61,7 +87,9 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
 
-    write_audit(user.id, user.username, "login", ip_address=request.client.host if request.client else None)
+    provider = "external" if config.EXTERNAL_AUTH_ENABLED else "local"
+    write_audit(user.id, user.username, "login", detail=f"provider={provider}",
+                ip_address=request.client.host if request.client else None)
 
     token = create_access_token(user.id, user.role)
     return LoginResponse(token=token, user=UserBrief.model_validate(user))

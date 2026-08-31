@@ -24,6 +24,7 @@ KNOWN_LEGACY_TABLES = {
     "issues",
 }
 LEGACY_ADDED_COLUMNS = {
+    "users": {"auth_source", "external_subject"},
     "runs": {"environment_id", "agent_id"},
     "environments": {"python_version", "venv_path", "venv_status", "python_executable"},
     "issues": {"script_version", "log_snapshot", "resolved_version"},
