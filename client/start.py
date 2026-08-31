@@ -1,29 +1,15 @@
 """Start both Agent and UI processes."""
-import json
 import subprocess
 import sys
-import os
 import urllib.request
 
 from client.runtime.local_auth import get_or_create_agent_token
 from client.runtime.paths import ClientPaths
+from client.ui.config_manager import load_config
 
 _PATHS = ClientPaths.from_environment()
 _PATHS.ensure()
 PROJECT_ROOT = str(_PATHS.install_dir)
-CLIENT_CONFIG_PATH = str(_PATHS.config_file)
-LEGACY_CLIENT_CONFIG_PATH = os.path.join(PROJECT_ROOT, "client_config.json")
-
-
-def _load_config():
-    source = CLIENT_CONFIG_PATH if os.path.isfile(CLIENT_CONFIG_PATH) else LEGACY_CLIENT_CONFIG_PATH
-    if os.path.isfile(source):
-        try:
-            with open(source, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
 
 
 def _request_agent_shutdown():
@@ -38,7 +24,7 @@ def _request_agent_shutdown():
 
 
 def main():
-    config = _load_config()
+    config = load_config()
 
     if len(sys.argv) >= 3:
         username = sys.argv[1]

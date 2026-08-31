@@ -7,7 +7,8 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 import webview
 
-from client.ui.config_manager import load_config, is_setup_complete
+from client.ui.config_manager import load_config, save_config, is_setup_complete
+from client.runtime.credentials import delete_credentials
 from client.runtime.local_auth import get_or_create_agent_token
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -155,6 +156,28 @@ class Api:
             webview.FOLDER_DIALOG
         )
         return result[0] if result else None
+
+    def getSavedCredentials(self):
+        config = load_config()
+        return {
+            "username": config.get("username", ""),
+            "password": config.get("password", ""),
+            "remember": bool(config.get("remember_credentials")),
+        }
+
+    def saveCredentials(self, username, password, remember):
+        config = load_config()
+        previous_username = str(config.get("username", ""))
+        new_username = str(username).strip()
+        if previous_username and previous_username.lower() != new_username.lower():
+            delete_credentials(config.get("server_url", ""), previous_username)
+        config.update({
+            "username": new_username,
+            "password": str(password),
+            "remember_credentials": bool(remember),
+        })
+        save_config(config)
+        return {"ok": True}
 
 
 def start_local_server(backend_url):
