@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
@@ -21,21 +21,26 @@ class LoginResponse(BaseModel):
     user: UserBrief
 
 
+UserRole = Literal["admin", "developer", "operator"]
+UserStatus = Literal["active", "disabled"]
+
+
 class UserCreate(BaseModel):
-    username: str
-    password: str
-    display_name: str
-    role: str = "operator"
+    username: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=4, max_length=200)
+    display_name: str = Field(min_length=1, max_length=100)
+    role: UserRole = "operator"
 
 
 class UserUpdate(BaseModel):
-    display_name: Optional[str] = None
-    role: Optional[str] = None
-    status: Optional[str] = None
+    display_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    role: Optional[UserRole] = None
+    status: Optional[UserStatus] = None
 
 
 class UserDetail(UserBrief):
     status: str
+    auth_source: str
     last_login_at: Optional[datetime] = None
     created_at: datetime
 

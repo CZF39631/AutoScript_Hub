@@ -33,4 +33,5 @@ def get_channel() -> str:
     explicit = (_baked_value("channel") or os.getenv("AUTOSCRIPT_CHANNEL", "")).strip().lower()
     if explicit in _CHANNELS:
         return explicit
-    return "stable" if get_version().startswith("1.") else "beta"
+    version = get_version()
+    return "stable" if version.startswith("1.") and "-" not in version else "beta"

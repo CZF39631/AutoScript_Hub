@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--release-notes-url", default="https://github.com/CZF39631/AutoScript_Hub/releases")
     args = parser.parse_args()
     installer_bytes = args.installer.read_bytes()
-    channel = "stable" if args.version.startswith("1.") else "beta"
+    channel = "stable" if args.version.startswith("1.") and "-" not in args.version else "beta"
     manifest = {
         "schema_version": 1,
         "product": "autoscript-hub-client",
