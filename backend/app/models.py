@@ -23,10 +23,13 @@ def _semantic_version(config_json):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("auth_source", "external_subject", name="uq_user_external_identity"),)
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False)
     password_hash = Column(Text, nullable=False)
+    auth_source = Column(String(50), nullable=False, default="local")
+    external_subject = Column(String(255), nullable=True)
     display_name = Column(String(100), nullable=False)
     role = Column(String(20), nullable=False, default="operator")
     status = Column(String(20), nullable=False, default="active")
