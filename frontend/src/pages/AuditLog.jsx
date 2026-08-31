@@ -15,6 +15,7 @@ const actionLabels = {
   cancel_run: '取消执行',
   create_user: '创建用户',
   update_user: '修改用户',
+  delete_user: '删除用户',
 }
 
 const actionOptions = Object.entries(actionLabels).map(([k, v]) => ({ label: v, value: k }))

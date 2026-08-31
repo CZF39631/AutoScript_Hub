@@ -32,6 +32,9 @@ def test_channel_can_be_explicit_or_derived(monkeypatch):
     monkeypatch.setenv("AUTOSCRIPT_CHANNEL", "nightly")
     assert get_channel() == "stable"
 
+    monkeypatch.setenv("AUTOSCRIPT_VERSION", "1.1.0-beta1")
+    assert get_channel() == "beta"
+
 
 def test_baked_server_build_identity_wins_over_runtime_environment(monkeypatch, tmp_path):
     build_info = tmp_path / "autoscript-build.json"
