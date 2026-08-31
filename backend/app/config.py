@@ -56,6 +56,31 @@ def _get_csv(key: str, default: str, env_var: str) -> list[str]:
     return [item.strip() for item in str(value).split(",") if item.strip()]
 
 
+def _get_bool(key: str, default: bool, env_var: str) -> bool:
+    value = _get(key, default, env_var=env_var)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{env_var} must be a boolean")
+
+
+def _get_json_object(key: str, default: Dict[str, Any], env_var: str) -> Dict[str, Any]:
+    value = _get(key, default, env_var=env_var)
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{env_var} must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{env_var} must be a JSON object")
+    return parsed
+
+
 # Runtime data root. Release containers set this to /data.
 DATA_DIR: str = _get_path("data_dir", BASE_DIR, "DATA_DIR")
 
@@ -98,6 +123,44 @@ BACKEND_HOST: str = str(_get("backend_host", "127.0.0.1", env_var="BACKEND_HOST"
 BACKEND_PORT: int = int(_get("backend_port", 8000, env_var="BACKEND_PORT"))
 CORS_ORIGINS: list[str] = _get_csv("cors_origins", "", "CORS_ORIGINS")
 
+# Optional pluggable authentication. Disabled by default so public deployments
+# retain the built-in username/password flow.
+EXTERNAL_AUTH_ENABLED: bool = _get_bool("external_auth_enabled", False, "EXTERNAL_AUTH_ENABLED")
+EXTERNAL_AUTH_METHOD: str = str(_get(
+    "external_auth_method", "http_form", env_var="EXTERNAL_AUTH_METHOD"
+)).strip().lower()
+EXTERNAL_AUTH_URL: str = str(_get("external_auth_url", "", env_var="EXTERNAL_AUTH_URL")).strip()
+EXTERNAL_AUTH_TIMEOUT_SECONDS: float = float(_get(
+    "external_auth_timeout_seconds", 10, env_var="EXTERNAL_AUTH_TIMEOUT_SECONDS"
+))
+EXTERNAL_AUTH_VERIFY_TLS: bool = _get_bool(
+    "external_auth_verify_tls", True, "EXTERNAL_AUTH_VERIFY_TLS"
+)
+EXTERNAL_AUTH_USERNAME_FIELD: str = str(_get(
+    "external_auth_username_field", "username", env_var="EXTERNAL_AUTH_USERNAME_FIELD"
+))
+EXTERNAL_AUTH_PASSWORD_FIELD: str = str(_get(
+    "external_auth_password_field", "password", env_var="EXTERNAL_AUTH_PASSWORD_FIELD"
+))
+EXTERNAL_AUTH_SUCCESS_PATH: str = str(_get(
+    "external_auth_success_path", "success", env_var="EXTERNAL_AUTH_SUCCESS_PATH"
+))
+EXTERNAL_AUTH_SUBJECT_PATH: str = str(_get(
+    "external_auth_subject_path", "data.user.id", env_var="EXTERNAL_AUTH_SUBJECT_PATH"
+))
+EXTERNAL_AUTH_USERNAME_PATH: str = str(_get(
+    "external_auth_username_path", "data.user.username", env_var="EXTERNAL_AUTH_USERNAME_PATH"
+))
+EXTERNAL_AUTH_DISPLAY_NAME_PATH: str = str(_get(
+    "external_auth_display_name_path", "data.user.display_name", env_var="EXTERNAL_AUTH_DISPLAY_NAME_PATH"
+))
+EXTERNAL_AUTH_ROLE_PATH: str = str(_get(
+    "external_auth_role_path", "data.user.role", env_var="EXTERNAL_AUTH_ROLE_PATH"
+))
+EXTERNAL_AUTH_ROLE_MAP: Dict[str, Any] = _get_json_object(
+    "external_auth_role_map", {}, "EXTERNAL_AUTH_ROLE_MAP"
+)
+
 
 _INSECURE_JWT_SECRETS = {"", "autoscript-dev-secret-change-in-prod", "change_me", "changeme"}
 _INSECURE_ADMIN_PASSWORDS = {"", "admin", "admin123", "change_me", "change_me_before_first_start"}
@@ -119,6 +182,32 @@ def validate_security_config() -> None:
         or len(ADMIN_PASSWORD) < 12
     ):
         raise RuntimeError("ADMIN_PASSWORD must be changed and contain at least 12 characters")
+    validate_external_auth_config()
+
+
+def validate_external_auth_config() -> None:
+    if not EXTERNAL_AUTH_ENABLED:
+        return
+    if EXTERNAL_AUTH_METHOD not in {"http_form", "http_json"}:
+        raise RuntimeError("EXTERNAL_AUTH_METHOD must be http_form or http_json")
+    if not EXTERNAL_AUTH_URL.startswith(("https://", "http://")):
+        raise RuntimeError("EXTERNAL_AUTH_URL must be an http(s) URL")
+    if EXTERNAL_AUTH_TIMEOUT_SECONDS <= 0 or EXTERNAL_AUTH_TIMEOUT_SECONDS > 60:
+        raise RuntimeError("EXTERNAL_AUTH_TIMEOUT_SECONDS must be between 0 and 60")
+    if not EXTERNAL_AUTH_USERNAME_FIELD or not EXTERNAL_AUTH_PASSWORD_FIELD:
+        raise RuntimeError("External authentication credential fields cannot be empty")
+    paths = (
+        EXTERNAL_AUTH_SUBJECT_PATH,
+        EXTERNAL_AUTH_USERNAME_PATH,
+        EXTERNAL_AUTH_DISPLAY_NAME_PATH,
+        EXTERNAL_AUTH_ROLE_PATH,
+    )
+    if any(not path.strip() for path in paths):
+        raise RuntimeError("External authentication response paths cannot be empty")
+    valid_roles = {"operator", "developer", "admin"}
+    invalid_roles = set(map(str, EXTERNAL_AUTH_ROLE_MAP.values())) - valid_roles
+    if invalid_roles:
+        raise RuntimeError("EXTERNAL_AUTH_ROLE_MAP contains invalid local roles")
 
 # Release cache (LAN release-cache feature)
 # Stores cached client release bundles (manifest, signature, installer) under DATA_DIR.
