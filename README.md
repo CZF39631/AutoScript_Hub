@@ -1,14 +1,39 @@
 # AutoScript Hub
 
-AutoScript Hub 是面向局域网的 Python 自动化脚本管理与执行平台。0.9 由 Linux Docker 服务端和 Windows x86-64 桌面客户端组成；脚本结果文件始终留在实际执行的客户端。
+AutoScript Hub 是面向团队和企业局域网的 Python 自动化脚本管理与执行平台。它把散落在个人电脑上的脚本变成可发布、可授权、可追踪的团队能力，同时让脚本和结果文件继续在实际执行的 Windows 客户端运行和保存。
 
-## 0.9 交付形态
+服务端负责脚本版本、用户权限、任务调度、执行历史和审计；客户端负责隔离环境、真实执行、实时日志和结果文件。团队获得集中治理能力，又不必把业务文件集中上传到服务器。
 
-- 服务端：同一镜像支持 `linux/arm64` 与 `linux/amd64`，FastAPI、React 和 SQLite 单实例运行。
-- 客户端：`AutoScript-Hub-Setup-<version>.exe`，不要求用户预装 Python、Node.js 或 Git。
-- 脚本运行时：安装器提供私有 Python 3.11.9，依赖按指纹创建并复用隔离环境。
-- 更新：从公开 GitHub Release、公开 Gitee/Git Raw URL 或局域网 HTTP 清单检查；清单使用 Ed25519 签名，安装包校验长度和 SHA-256，并且由用户确认安装。
-- AI Skill：仓库内 [skills/autoscript-script-authoring](skills/autoscript-script-authoring/SKILL.md)，Release 同时提供独立 ZIP；0.9 客户端不内置在线 AI。
+## 核心优势
+
+| 优势 | 带来的价值 |
+|---|---|
+| **安装后即可运行** | Windows 安装包自带私有 Python 3.11.9，使用者无需配置 Python、Node.js、Git 或全局依赖。 |
+| **集中管理，数据留在本机** | 脚本、版本和权限由服务端统一管理；输入和结果文件留在执行客户端，减少文件搬运和集中泄露风险。 |
+| **依赖隔离且可复用** | 根据脚本依赖指纹创建独立环境，相同依赖自动复用，既避免脚本互相污染，又减少重复安装时间。 |
+| **执行过程可靠可见** | UI 关闭后 Agent 仍可继续任务；支持实时日志、取消任务、执行历史、失败工单和结果文件快速打开。 |
+| **弱网场景更有韧性** | 已缓存脚本可在服务短暂不可用时继续执行，本地完成的记录在恢复连接后同步，降低网络波动影响。 |
+| **企业身份与本地权限解耦** | 可使用内置账号，也可选接企业外部认证；身份验证与平台角色分开管理，支持管理员、开发者和操作员权限。 |
+| **用户全生命周期管理** | 支持搜索、启禁用、角色调整和软删除，历史执行与审计记录不会因删除用户而丢失。 |
+| **版本发布可追溯** | 脚本市场保存平台版本、语义版本和变更说明，可明确知道每次执行使用了哪一份代码。 |
+| **更新链路可验证** | 支持 GitHub、Git Raw 和局域网更新源；更新清单使用 Ed25519 签名，并校验安装包长度与 SHA-256。 |
+| **适合 AI 辅助开发** | 内置脚本契约、严格验证器和独立 AI Skill，让 AI 生成的脚本也遵循统一配置、参数、依赖和输出规范。 |
+| **部署轻量且跨架构** | 单个 Docker 服务支持 `linux/amd64` 与 `linux/arm64`，适合普通服务器、NAS 和小型局域网环境。 |
+
+## 典型使用场景
+
+- 运营、数据和业务团队共享批处理脚本，而不要求每位使用者搭建开发环境。
+- 开发者统一发布脚本版本，操作员只填写参数并执行，避免误改源码。
+- 企业保留现有认证体系，同时在 AutoScript Hub 内独立控制脚本权限。
+- 输入文件较大或较敏感，需要在员工电脑本地处理，只集中管理任务和审计信息。
+- 脚本依赖复杂、版本冲突频繁，希望每个脚本拥有可复用的隔离环境。
+
+## 正式交付形态
+
+- 服务端：FastAPI、React 和 SQLite 单实例镜像，同一镜像支持 `linux/arm64` 与 `linux/amd64`。
+- 客户端：`AutoScript-Hub-Setup-<version>.exe`，包含桌面 UI、后台 Agent、Updater 和私有 Python 运行时。
+- 脚本开发：仓库提供 [autoscript-script-authoring Skill](skills/autoscript-script-authoring/SKILL.md) 和严格契约验证工具，Release 可同时分发独立开发包。
+- 安全边界：客户端凭据使用 Windows DPAPI 保存；外部认证、私有服务地址和角色映射通过服务端私有环境变量配置。
 
 ## 局域网 Docker 启动
 
@@ -22,7 +47,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml up -d
 curl http://127.0.0.1:8000/api/health/ready
 ```
 
-同一局域网设备访问 `http://192.168.1.106:8000`；请替换为真实服务器 IP 和端口。若在完整源码仓库中验证镜像：
+同一局域网设备访问 `http://<服务器IP>:8000`。若在完整源码仓库中验证镜像：
 
 ```bash
 docker compose --env-file deploy/.env \
@@ -76,8 +101,8 @@ npm run build
 
 ## 发布与 Skill
 
-- 发布流程、所需 Secret、资产和 0.9 → 1.0 晋级规则：[docs/0.9-release-guide.md](docs/0.9-release-guide.md)
-- 0.9 验收证据清单：[docs/0.9-acceptance-checklist.md](docs/0.9-acceptance-checklist.md)
+- 历史发布流程、所需 Secret、资产和 0.9 → 1.0 晋级规则：[docs/0.9-release-guide.md](docs/0.9-release-guide.md)
+- 历史 0.9 验收证据清单：[docs/0.9-acceptance-checklist.md](docs/0.9-acceptance-checklist.md)
 - Skill 验证：`python skills/autoscript-script-authoring/scripts/validate_script.py <script.py|script.zip>`
 - Skill 打包：`python skills/autoscript-script-authoring/scripts/package_script.py <source> <output.zip>`
 
