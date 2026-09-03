@@ -12,8 +12,9 @@ def _base_url(owner: str, repo: str) -> str:
 
 def request(method, url, token, **kwargs):
     data = kwargs.pop("data", {})
+    timeout = kwargs.pop("timeout", 120)
     data["access_token"] = token
-    response = requests.request(method, url, data=data, timeout=120, **kwargs)
+    response = requests.request(method, url, data=data, timeout=timeout, **kwargs)
     response.raise_for_status()
     return response.json() if response.content else {}
 
@@ -54,6 +55,7 @@ def upload_files(owner: str, repo: str, token: str, release_id: str, files) -> N
                 f"{_base_url(owner, repo)}/{release_id}/attach_files",
                 token,
                 files={"file": (path.name, stream)},
+                timeout=(30, 900),
             )
 
 
