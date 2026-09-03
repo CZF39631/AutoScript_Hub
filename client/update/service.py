@@ -4,11 +4,13 @@ import base64
 import hashlib
 import os
 from pathlib import Path
+import time
 from typing import Callable, Iterable
 
 from packaging.version import InvalidVersion, Version
 
 from client.runtime.paths import ClientPaths
+from client.update.download import download_verified_file, sha256_file
 from client.update.sources import http_get_bytes
 from client.update.state import UpdateResult, UpdateStateStore
 from shared.update_manifest import UpdateManifest
@@ -48,6 +50,7 @@ class UpdateService:
         runtime_is_idle: Callable[[], bool] = lambda: True,
         handoff: Callable[[Path, str], None] | None = None,
         is_pid_alive: Callable[[int], bool] | None = None,
+        http_download: Callable[[str, Path, int, str], None] | None = None,
     ):
         paths.ensure()
         self.paths = paths
@@ -58,6 +61,9 @@ class UpdateService:
             raise ValueError("更新通道必须是 beta 或 stable")
         self.expected_channel = expected_channel
         self.http_get = http_get
+        self.http_download = http_download or (
+            download_verified_file if http_get is http_get_bytes else self._download_with_legacy_get
+        )
         self.runtime_is_idle = runtime_is_idle
         self.handoff = handoff
         self.is_pid_alive = is_pid_alive or _default_is_pid_alive
@@ -65,12 +71,14 @@ class UpdateService:
         self.manifest = None
         self.installer = None
         self.pending_version = None
+        self._manifest_payload: bytes | None = None
+        self._manifest_signature: bytes | None = None
         self._recover_discovered_update()
         self._recover_staged_update()
 
     def _recover_discovered_update(self) -> None:
         state = self.store.read()
-        if state.get("state") != "available":
+        if state.get("state") not in {"available", "downloading"}:
             return
         try:
             payload = base64.b64decode(state["manifest_payload_b64"], validate=True)
@@ -87,8 +95,41 @@ class UpdateService:
             manifest.asset_for("windows-x86_64")
             self.manifest = manifest
             self.pending_version = manifest.version
+            self._manifest_payload = payload
+            self._manifest_signature = signature
+            if state.get("state") == "downloading":
+                self.store.transition(
+                    "available",
+                    version=manifest.version,
+                    error="上次下载被中断，可继续复用已校验的分卷",
+                    **self._manifest_cache(payload, signature),
+                )
         except (KeyError, ValueError, TypeError):
             self.store.transition("idle", error="无法恢复已发现的更新，请重新检查")
+
+    def _download_with_legacy_get(self, url: str, destination: Path, size: int, digest: str) -> None:
+        """Compatibility adapter for callers that inject the former bytes API."""
+        temporary = destination.with_name(destination.name + ".download")
+        last_error = None
+        for attempt in range(3):
+            try:
+                payload = self.http_get(url)
+                if len(payload) != size or hashlib.sha256(payload).hexdigest() != digest:
+                    raise ValueError("下载文件长度或 SHA-256 不匹配")
+                with temporary.open("wb") as output:
+                    for offset in range(0, len(payload), 1024 * 1024):
+                        output.write(payload[offset:offset + 1024 * 1024])
+                os.replace(temporary, destination)
+                return
+            except Exception as exc:
+                last_error = exc
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
+                if attempt < 2:
+                    time.sleep(0.01)
+        raise RuntimeError(f"下载失败（已重试 3 次）: {last_error}") from last_error
 
     @staticmethod
     def _manifest_cache(payload: bytes, signature: bytes) -> dict:
@@ -107,7 +148,7 @@ class UpdateService:
             expected_hash = state["sha256"]
             if not installer.is_file() or installer.stat().st_size != expected_size:
                 raise ValueError("已暂存安装包缺失或长度不匹配")
-            if hashlib.sha256(installer.read_bytes()).hexdigest() != expected_hash:
+            if sha256_file(installer) != expected_hash:
                 raise ValueError("已暂存安装包哈希不匹配")
             self.installer = installer
             self.pending_version = state["version"]
@@ -203,6 +244,8 @@ class UpdateService:
             )
             self.manifest = manifest
             self.pending_version = manifest.version
+            self._manifest_payload = payload
+            self._manifest_signature = signature
             self.store.transition(
                 "available",
                 version=manifest.version,
@@ -228,41 +271,119 @@ class UpdateService:
         self.store.transition("idle", error=error)
         return UpdateResult("idle", version=version, error=error)
 
+    def _cached_manifest_details(self) -> dict:
+        if self._manifest_payload is None or self._manifest_signature is None:
+            raise RuntimeError("缺少已验证的更新清单缓存")
+        return self._manifest_cache(self._manifest_payload, self._manifest_signature)
+
+    @staticmethod
+    def _valid_file(path: Path, size: int, digest: str) -> bool:
+        try:
+            return path.is_file() and path.stat().st_size == size and sha256_file(path) == digest
+        except OSError:
+            return False
+
+    def _download_from_urls(self, urls, destination: Path, size: int, digest: str) -> None:
+        errors = []
+        for url in urls:
+            try:
+                self.http_download(url, destination, size, digest)
+                if not self._valid_file(destination, size, digest):
+                    try:
+                        destination.unlink()
+                    except FileNotFoundError:
+                        pass
+                    raise ValueError("下载器返回的文件长度或 SHA-256 不匹配")
+                return
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
+        raise RuntimeError("; ".join(errors))
+
+    def _download_parts(self, asset) -> Path:
+        cache = self.paths.updates_dir / f"parts-{asset.sha256[:16]}"
+        cache.mkdir(parents=True, exist_ok=True)
+        completed = []
+        for part in asset.parts:
+            path = cache / part.filename
+            if not self._valid_file(path, part.size, part.sha256):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                self._download_from_urls(part.urls, path, part.size, part.sha256)
+            completed.append(path)
+
+        installer = self.paths.updates_dir / asset.filename
+        temporary = installer.with_name(installer.name + ".merge")
+        digest = hashlib.sha256()
+        total = 0
+        try:
+            with temporary.open("wb") as output:
+                for path in completed:
+                    with path.open("rb") as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            output.write(chunk)
+                            digest.update(chunk)
+                            total += len(chunk)
+            if total != asset.size or digest.hexdigest() != asset.sha256:
+                raise ValueError("分卷合并后的安装包长度或 SHA-256 不匹配")
+            os.replace(temporary, installer)
+            return installer
+        except Exception:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+
     def download(self) -> UpdateResult:
         if self.manifest is None:
             raise RuntimeError("尚未检查到可用更新")
-        self.store.transition("downloading", version=self.manifest.version)
+        cache_details = self._cached_manifest_details()
+        self.store.transition(
+            "downloading",
+            version=self.manifest.version,
+            **cache_details,
+        )
         asset = self.manifest.asset_for("windows-x86_64")
         errors = []
-        for url in asset.urls:
-            part = self.paths.updates_dir / (asset.filename + ".part")
+        installer = None
+        if asset.parts:
             try:
-                payload = self.http_get(url)
-                if len(payload) != asset.size:
-                    raise ValueError("安装包长度不匹配")
-                if hashlib.sha256(payload).hexdigest() != asset.sha256:
-                    raise ValueError("安装包 SHA-256 不匹配")
-                part.write_bytes(payload)
-                installer = self.paths.updates_dir / asset.filename
-                os.replace(part, installer)
-                self.installer = installer
-                self.pending_version = self.manifest.version
-                self.store.transition(
-                    "verified",
-                    version=self.manifest.version,
-                    installer=str(installer),
-                    size=asset.size,
-                    sha256=asset.sha256,
-                )
-                return UpdateResult("verified", installer=installer, version=self.manifest.version)
+                installer = self._download_parts(asset)
             except Exception as exc:
-                errors.append(f"{url}: {exc}")
-                try:
-                    part.unlink()
-                except FileNotFoundError:
-                    pass
-        self.store.transition("idle", error="; ".join(errors))
-        return UpdateResult("idle", error="; ".join(errors))
+                errors.append(f"分卷下载失败: {exc}")
+        if installer is None:
+            try:
+                self._download_from_urls(
+                    asset.urls,
+                    self.paths.updates_dir / asset.filename,
+                    asset.size,
+                    asset.sha256,
+                )
+                installer = self.paths.updates_dir / asset.filename
+            except Exception as exc:
+                errors.append(f"完整安装包下载失败: {exc}")
+        if installer is not None:
+            self.installer = installer
+            self.pending_version = self.manifest.version
+            self.store.transition(
+                "verified",
+                version=self.manifest.version,
+                installer=str(installer),
+                size=asset.size,
+                sha256=asset.sha256,
+            )
+            return UpdateResult("verified", installer=installer, version=self.manifest.version)
+
+        error = "; ".join(errors)
+        self.store.transition(
+            "available",
+            version=self.manifest.version,
+            error=error,
+            **cache_details,
+        )
+        return UpdateResult("available", version=self.manifest.version, error=error)
 
     def stage(self) -> UpdateResult:
         return self.download()
