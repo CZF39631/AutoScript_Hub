@@ -73,6 +73,7 @@ def test_release_workflow_passes_created_gitee_release_id():
     workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/release.yml").read_text("utf-8")
 
     assert "id: release_hosts" in workflow
+    assert 'gh release create "$GITHUB_REF_NAME" release-output/*.exe release-output/*.zip' in workflow
     assert "gitee_release_id=" in workflow
     assert '--target-commitish "$GITEE_TARGET_COMMIT"' in workflow
     assert '--release-id "$GITEE_RELEASE_ID"' in workflow
