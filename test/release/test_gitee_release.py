@@ -43,6 +43,7 @@ def test_create_returns_numeric_release_id_and_followups_use_it(tmp_path, monkey
         "POST",
         "https://gitee.com/api/v5/repos/owner/repo/releases/314/attach_files",
     )
+    assert calls[1][2]["timeout"] == (30, 900)
     assert calls[2][0:2] == (
         "PATCH",
         "https://gitee.com/api/v5/repos/owner/repo/releases/314",
