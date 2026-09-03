@@ -6,14 +6,21 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, Script, ScriptVersion, Run, Agent
+from app.models import User, Script, ScriptVersion, Run, Agent, Environment, Group
 from app.schemas import ExecuteRequest, RunBrief, RunDetail
 from app.auth import get_current_user, require_role
 from app.config import LOGS_DIR, PROJECT_ROOT
 from app.services.audit import write_audit
+from app.services.script_access import (
+    accessible_script_ids,
+    accessible_user_ids,
+    active_group_ids_for_user,
+    get_accessible_script_or_404,
+)
 from shared.script_contract import validate_params
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -62,6 +69,26 @@ def _validate_params(param_defs, params):
     return validate_params(param_defs, params, check_paths=False)
 
 
+def _restrict_run_query(query, current_user):
+    if current_user.role == "admin":
+        return query
+    if current_user.role == "operator":
+        return query.filter(Run.user_id == current_user.id)
+    return query.filter(or_(
+        Run.user_id == current_user.id,
+        (
+            Run.script_id.in_(accessible_script_ids(current_user))
+            & Run.user_id.in_(accessible_user_ids(current_user))
+        ),
+    ))
+
+
+def _can_view_run(db, current_user, run):
+    return _restrict_run_query(
+        db.query(Run).filter(Run.id == run.id), current_user,
+    ).first() is not None
+
+
 def _enrich_run(run, db, detail=False):
     """Keep numeric revisions for storage while exposing script contract SemVer to clients."""
     item = RunDetail.model_validate(run) if detail else RunBrief.model_validate(run)
@@ -100,13 +127,16 @@ def execute_script(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    script = db.query(Script).filter(
-        Script.id == req.script_id,
-        Script.is_deleted == False,
-        Script.status == "active",
-    ).first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在或未启用")
+    script = get_accessible_script_or_404(
+        db, current_user, req.script_id, require_active=True,
+    )
+    if req.environment_id is not None:
+        environment = db.query(Environment).filter(
+            Environment.id == req.environment_id,
+            Environment.user_id == current_user.id,
+        ).first()
+        if not environment:
+            raise HTTPException(status_code=404, detail="执行环境不存在")
 
     # Check for active runs — auto-cancel stale pending runs (>5 min)
     active = db.query(Run).filter(
@@ -161,11 +191,13 @@ def list_runs(
     date_to: Optional[str] = None,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
+    mine_only: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     q = db.query(Run).filter(Run.is_deleted == False)
-    if current_user.role == "operator":
+    q = _restrict_run_query(q, current_user)
+    if mine_only:
         q = q.filter(Run.user_id == current_user.id)
     if script_id:
         q = q.filter(Run.script_id == script_id)
@@ -198,7 +230,17 @@ def filter_users(
 ):
     if current_user.role == "operator":
         return [{"id": current_user.id, "name": current_user.display_name}]
-    users = db.query(User).filter(User.is_deleted == False).all()
+    users_query = db.query(User).filter(User.is_deleted == False)
+    if current_user.role == "developer":
+        group_ids = active_group_ids_for_user(db, current_user)
+        if group_ids:
+            users_query = users_query.filter(or_(
+                User.id == current_user.id,
+                User.groups.any(Group.id.in_(group_ids)),
+            ))
+        else:
+            users_query = users_query.filter(User.id == current_user.id)
+    users = users_query.all()
     return [{"id": u.id, "name": u.display_name} for u in users]
 
 
@@ -211,8 +253,8 @@ def get_run(
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
         raise HTTPException(status_code=404, detail="执行记录不存在")
-    if current_user.role == "operator" and run.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权限访问")
+    if not _can_view_run(db, current_user, run):
+        raise HTTPException(status_code=404, detail="执行记录不存在或无访问权限")
     return _enrich_run(run, db, detail=True)
 
 
@@ -336,8 +378,8 @@ def get_run_log(
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
         raise HTTPException(status_code=404, detail="执行记录不存在")
-    if current_user.role == "operator" and run.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权限访问")
+    if not _can_view_run(db, current_user, run):
+        raise HTTPException(status_code=404, detail="执行记录不存在或无访问权限")
 
     log_file = _resolve_log_file(run, run_id)
     if not log_file:
@@ -420,8 +462,8 @@ def stream_run_log(
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
         raise HTTPException(status_code=404, detail="执行记录不存在")
-    if current_user.role == "operator" and run.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权限访问")
+    if not _can_view_run(db, current_user, run):
+        raise HTTPException(status_code=404, detail="执行记录不存在或无访问权限")
 
     log_file = _resolve_log_file(run, run_id)
     if not log_file:

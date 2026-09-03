@@ -77,6 +77,8 @@ def test_disable_enable_script(client, dev_token):
     sid = upload_resp.json()["id"]
     resp = client.post(f"/api/scripts/{sid}/disable", headers={"Authorization": f"Bearer {dev_token}"})
     assert resp.status_code == 200
+    manageable = client.get("/api/scripts/manageable", headers={"Authorization": f"Bearer {dev_token}"})
+    assert next(item for item in manageable.json() if item["id"] == sid)["status"] == "disabled"
     resp = client.post(f"/api/scripts/{sid}/enable", headers={"Authorization": f"Bearer {dev_token}"})
     assert resp.status_code == 200
 

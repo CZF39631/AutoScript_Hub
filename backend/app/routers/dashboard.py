@@ -1,11 +1,17 @@
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from app.database import get_db
-from app.models import User, Script, Run, AuditLog, UserScript
+from app.models import User, Script, Run, AuditLog, UserScript, Group
 from app.auth import get_current_user, require_role
+from app.services.script_access import (
+    accessible_script_ids,
+    accessible_user_ids,
+    active_group_ids_for_user,
+    restrict_script_query,
+)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -19,15 +25,36 @@ def get_stats(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
-    own_run_filter = (Run.user_id == current_user.id) if current_user.role == "operator" else True
+    if current_user.role == "admin":
+        own_run_filter = True
+    elif current_user.role == "operator":
+        own_run_filter = Run.user_id == current_user.id
+    else:
+        own_run_filter = or_(
+            Run.user_id == current_user.id,
+            (
+                Run.script_id.in_(accessible_script_ids(current_user))
+                & Run.user_id.in_(accessible_user_ids(current_user))
+            ),
+        )
 
-    # Operators only receive statistics derived from their own records.
+    # Statistics use the same role and group boundary as run history.
     total_runs = db.query(func.count(Run.id)).filter(Run.is_deleted == False, own_run_filter).scalar()
     if current_user.role == "operator":
         total_scripts = db.query(func.count(UserScript.id)).filter(
             UserScript.user_id == current_user.id
         ).scalar()
         total_users = 1
+    elif current_user.role == "developer":
+        total_scripts = restrict_script_query(
+            db.query(Script).filter(Script.is_deleted == False, Script.status == "active"),
+            current_user,
+        ).count()
+        group_ids = active_group_ids_for_user(db, current_user)
+        total_users = db.query(User).filter(
+            User.is_deleted == False,
+            User.groups.any(Group.id.in_(group_ids)) if group_ids else User.id == current_user.id,
+        ).count()
     else:
         total_scripts = db.query(func.count(Script.id)).filter(
             Script.is_deleted == False, Script.status == "active"
@@ -93,6 +120,14 @@ def get_stats(
             and last_login is not None
             and last_login >= online_threshold
         )
+    elif current_user.role == "developer":
+        group_ids = active_group_ids_for_user(db, current_user)
+        online_users = db.query(User).filter(
+            User.is_deleted == False,
+            User.status == "active",
+            User.last_login_at >= online_threshold,
+            User.groups.any(Group.id.in_(group_ids)) if group_ids else User.id == current_user.id,
+        ).count()
     else:
         online_users = db.query(func.count(User.id)).filter(
             User.is_deleted == False, User.status == "active",

@@ -75,6 +75,7 @@ _last_update_check_time = 0
 _restart_requested = False
 _shutdown_when_idle = False
 _last_settings_sync_time = 0
+_last_script_access_sync_time = 0
 
 _CLIENT_SETTING_KEYS = {
     "server_url",
@@ -91,8 +92,10 @@ _CLIENT_SETTING_KEYS = {
 
 OFFLINE_NOTIFY_THRESHOLD_SEC = 30 * 60  # 30 min (design §5.9)
 UPDATE_CHECK_INTERVAL_SEC = 6 * 60 * 60
+SCRIPT_AUTHORIZATION_MAX_AGE_SEC = 7 * 24 * 60 * 60
 PENDING_REPORTS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_reports.json")
 PENDING_LOG_UPLOADS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_log_uploads.json")
+SCRIPT_AUTHORIZATIONS_FILE = str(_CLIENT_PATHS.config_dir / "script_authorizations.json")
 
 
 def _parse_result_literal(raw):
@@ -242,6 +245,8 @@ def authenticate(username, password):
             _token = data["token"]
             _user_id = data["user"]["id"]
             return True
+        if resp.status_code in (401, 403):
+            _invalidate_script_authorizations()
     except (requests.RequestException, OSError):
         pass
     return False
@@ -588,7 +593,8 @@ def send_heartbeat():
             _last_online_time = time.time()
             _offline_notified = False
             return True
-        if resp.status_code == 401:
+        if resp.status_code in (401, 403):
+            _invalidate_script_authorizations()
             _token = None
     except (requests.RequestException, OSError):
         pass
@@ -751,6 +757,68 @@ def _load_local_runs():
         _local_runs = {}
 
 
+def _load_authorized_script_ids():
+    """Return a current server-confirmed authorization snapshot; fail closed otherwise."""
+    try:
+        with open(SCRIPT_AUTHORIZATIONS_FILE, "r", encoding="utf-8") as stream:
+            payload = json.load(stream)
+        if payload.get("server_url") != BACKEND_URL.rstrip("/"):
+            return set()
+        configured_username = str(_client_config.get("username") or "").strip()
+        if payload.get("username") != configured_username:
+            return set()
+        synced_at = datetime.fromisoformat(str(payload.get("synced_at") or ""))
+        age = time.time() - synced_at.timestamp()
+        if age < -300 or age > SCRIPT_AUTHORIZATION_MAX_AGE_SEC:
+            return set()
+        return {int(item) for item in payload.get("script_ids", [])}
+    except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
+        return set()
+
+
+def _write_script_authorizations(script_ids):
+    payload = {
+        "server_url": BACKEND_URL.rstrip("/"),
+        "username": str(_client_config.get("username") or "").strip(),
+        "user_id": _user_id,
+        "script_ids": sorted(set(int(item) for item in script_ids)),
+        "synced_at": datetime.now().isoformat(),
+    }
+    path = Path(SCRIPT_AUTHORIZATIONS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _invalidate_script_authorizations():
+    try:
+        _write_script_authorizations([])
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _sync_script_authorizations():
+    """Persist group authorization so revoked cached scripts stay unavailable offline."""
+    if not _token:
+        return False
+    try:
+        response = requests.get(
+            "{}/api/scripts/authorized-ids".format(BACKEND_URL),
+            headers=_headers(),
+            timeout=10,
+        )
+        if response.status_code in (401, 403):
+            _write_script_authorizations([])
+            return True
+        if response.status_code != 200:
+            return False
+        _write_script_authorizations(response.json())
+        return True
+    except (requests.RequestException, OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
 def list_local_scripts():
     """Scan local script cache; return [{id, latest_version, name, ...}].
 
@@ -758,6 +826,7 @@ def list_local_scripts():
     For each, we parse main.py's config() to surface metadata to the offline UI.
     """
     result = []
+    authorized_ids = _load_authorized_script_ids()
     if not os.path.isdir(_SCRIPTS_DIR):
         return result
     for script_id_str in os.listdir(_SCRIPTS_DIR):
@@ -767,6 +836,8 @@ def list_local_scripts():
         try:
             script_id = int(script_id_str)
         except ValueError:
+            continue
+        if script_id not in authorized_ids:
             continue
         versions = []
         for v in os.listdir(script_dir):
@@ -814,6 +885,13 @@ def start_local_run(req):
     params = req.get("params") or {}
     if not script_id:
         return {"error": "script_id required"}
+    try:
+        script_id = int(script_id)
+    except (TypeError, ValueError):
+        return {"error": "invalid script_id"}
+    authorized_ids = _load_authorized_script_ids()
+    if script_id not in authorized_ids:
+        return {"error": "脚本授权已失效，请联网刷新市场权限"}
 
     script_dir = os.path.join(_SCRIPTS_DIR, str(script_id))
     if not os.path.isdir(script_dir):
@@ -1164,7 +1242,7 @@ def poll_and_execute():
     # 3) Look for pending run
     try:
         resp = requests.get(
-            "{}/api/runs?status=pending&limit=1".format(BACKEND_URL),
+            "{}/api/runs?status=pending&limit=1&mine_only=true".format(BACKEND_URL),
             headers=_headers(),
             timeout=10,
         )
@@ -1408,6 +1486,7 @@ def initialize_agent_runtime():
 def agent_iteration(username, password):
     """Run one online/offline Agent loop iteration without exiting on disconnect."""
     global _last_update_check_time, _restart_requested, _last_settings_sync_time
+    global _last_script_access_sync_time
 
     if not _token:
         if not authenticate(username, password):
@@ -1424,6 +1503,9 @@ def agent_iteration(username, password):
     if now - _last_settings_sync_time >= 60:
         if _sync_client_settings():
             _last_settings_sync_time = now
+    if now - _last_script_access_sync_time >= 60:
+        if _sync_script_authorizations():
+            _last_script_access_sync_time = now
 
     _flush_pending_reports()
     _flush_pending_log_uploads()

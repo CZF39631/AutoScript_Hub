@@ -31,6 +31,7 @@ from app.routers import settings as settings_router
 from app.routers import agents as agents_router
 from app.routers import presets as presets_router
 from app.routers import release_cache as release_cache_router
+from app.routers import groups as groups_router
 app = FastAPI(title="AutoScript Hub", version=get_version())
 
 # The packaged desktop UI is served from this fixed loopback origin and opens
@@ -58,6 +59,7 @@ app.include_router(settings_router.router)
 app.include_router(agents_router.router)
 app.include_router(presets_router.router)
 app.include_router(release_cache_router.router)
+app.include_router(groups_router.router)
 
 
 def _initialize_app():
