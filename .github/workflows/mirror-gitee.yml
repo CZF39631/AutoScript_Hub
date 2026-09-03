@@ -1,0 +1,36 @@
+name: Mirror to Gitee
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      GITEE_OWNER: ${{ vars.GITEE_OWNER }}
+      GITEE_REPO: ${{ vars.GITEE_REPO }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Mirror main and release tags
+        if: env.GITEE_TOKEN != '' && env.GITEE_OWNER != '' && env.GITEE_REPO != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          git remote add gitee "https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+          AUTH="$(printf '%s:%s' "$GITEE_OWNER" "$GITEE_TOKEN" | base64 | tr -d '\n')"
+          git -c http.extraHeader="Authorization: Basic $AUTH" \
+            push gitee refs/remotes/origin/main:refs/heads/main
+          git -c http.extraHeader="Authorization: Basic $AUTH" push gitee --tags
+      - name: Explain skipped mirror
+        if: env.GITEE_TOKEN == '' || env.GITEE_OWNER == '' || env.GITEE_REPO == ''
+        run: echo 'Gitee mirror skipped because GITEE_TOKEN or repository variables are not configured.'
