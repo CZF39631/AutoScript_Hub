@@ -18,6 +18,8 @@ def test_pyinstaller_builds_three_executables_in_one_collection():
     assert "COLLECT(" in spec
     assert "client/update/update-public-key.b64" in spec.replace("\\", "/")
     assert "autoscript-build" in spec
+    assert '"plyer.platforms.win.notification"' in spec
+    assert "plyer==2.1.0" in _read("client/requirements.txt")
 
 
 def test_updater_is_self_contained_before_it_is_copied_outside_install_tree():
@@ -100,6 +102,7 @@ def test_build_enforces_tests_and_95mb_gitee_gate():
     assert "backend/requirements.txt" in build
     assert "client/requirements.txt" in build
     assert "npm test" in build
+    assert "$env:VITE_AUTOSCRIPT_VERSION = $Version" in build
     assert "pytest" in build
     assert "stage_python_runtime.ps1" in build
     assert "windows-runtime" in build
@@ -140,6 +143,8 @@ def test_environment_ui_uses_managed_runtime_instead_of_arbitrary_venv_paths():
 def test_settings_ui_exposes_public_and_lan_update_sources():
     page = _read("frontend/src/pages/Settings.jsx")
 
+    assert "gitee_update_repository" in page
+    assert "chuzifeng/auto-script_-hub" in page
     assert "github_update_repository" in page
     assert "update_manifest_urls" in page
     assert "Gitee" in page

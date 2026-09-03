@@ -3,6 +3,18 @@ import json
 from pathlib import Path
 
 
+def test_default_update_source_prefers_public_gitee_mirror(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
+    from client.ui import config_manager
+    config_manager = importlib.reload(config_manager)
+
+    config = config_manager.load_config()
+
+    assert config["gitee_update_repository"] == "chuzifeng/auto-script_-hub"
+    assert config["github_update_repository"] == "CZF39631/AutoScript_Hub"
+    assert config["update_channel"] == "stable"
+
+
 def test_config_manager_uses_mutable_client_data_root(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
     from client.ui import config_manager

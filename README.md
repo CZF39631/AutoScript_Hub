@@ -14,9 +14,11 @@ AutoScript Hub 是面向团队和企业局域网的 Python 自动化脚本管理
 | **执行过程可靠可见** | UI 关闭后 Agent 仍可继续任务；支持实时日志、取消任务、执行历史、失败工单和结果文件快速打开。 |
 | **弱网场景更有韧性** | 已缓存脚本可在服务短暂不可用时继续执行，本地完成的记录在恢复连接后同步，降低网络波动影响。 |
 | **企业身份与本地权限解耦** | 可使用内置账号，也可选接企业外部认证；身份验证与平台角色分开管理，支持管理员、开发者和操作员权限。 |
+| **按团队隔离脚本市场** | 用户和脚本可加入多个分组，不同部门只看到获授权的脚本；角色控制操作能力，分组控制资源范围。 |
 | **用户全生命周期管理** | 支持搜索、启禁用、角色调整和软删除，历史执行与审计记录不会因删除用户而丢失。 |
 | **版本发布可追溯** | 脚本市场保存平台版本、语义版本和变更说明，可明确知道每次执行使用了哪一份代码。 |
 | **更新链路可验证** | 支持 GitHub、Git Raw 和局域网更新源；更新清单使用 Ed25519 签名，并校验安装包长度与 SHA-256。 |
+| **更新内容清晰可控** | 内置更新说明页面；重要更新仅在升级后首次运行时提醒一次，并支持默认隐藏弹窗。 |
 | **适合 AI 辅助开发** | 内置脚本契约、严格验证器和独立 AI Skill，让 AI 生成的脚本也遵循统一配置、参数、依赖和输出规范。 |
 | **部署轻量且跨架构** | 单个 Docker 服务支持 `linux/amd64` 与 `linux/arm64`，适合普通服务器、NAS 和小型局域网环境。 |
 
@@ -62,7 +64,7 @@ docker compose --env-file deploy/.env \
 
 首次启动向导填写局域网服务端地址和账号。桌面 UI、后台 Agent 和 Updater 分别是独立 EXE；关闭 UI 不会终止 Agent 正在执行的脚本。
 
-“设置 → 客户端更新”可检查、验证和安装更新。Gitee、Git Raw 或局域网清单地址可逐行填写，GitHub 仓库可单独配置。客户端不执行 `git pull`，也不保存仓库 Token 或 SSH Key。
+“设置 → 客户端更新”可检查、验证和安装更新，“更新说明”可查看当前及历史版本内容。重要更新默认在升级后的首次运行中提醒一次，也可关闭自动弹窗。客户端默认优先从 [Gitee 镜像](https://gitee.com/chuzifeng/auto-script_-hub) 检查更新，失败后自动尝试 GitHub；Git Raw 或局域网清单地址也可逐行填写。客户端不执行 `git pull`，也不保存仓库 Token 或 SSH Key。
 
 ## 开发启动
 
@@ -105,6 +107,9 @@ npm run build
 - 历史 0.9 验收证据清单：[docs/0.9-acceptance-checklist.md](docs/0.9-acceptance-checklist.md)
 - Skill 验证：`python skills/autoscript-script-authoring/scripts/validate_script.py <script.py|script.zip>`
 - Skill 打包：`python skills/autoscript-script-authoring/scripts/package_script.py <source> <output.zip>`
+- 人员分组、脚本市场隔离与升级兼容：[docs/人员分组与脚本市场.md](docs/人员分组与脚本市场.md)
+- 更新说明内容与重要更新提醒规则：[docs/更新说明维护.md](docs/更新说明维护.md)
+- Gitee 代码镜像、默认更新源与自动同步配置：[docs/Gitee镜像与更新.md](docs/Gitee镜像与更新.md)
 
 ## 关键目录
 

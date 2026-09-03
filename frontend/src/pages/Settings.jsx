@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Alert, Card, Form, Input, InputNumber, Button, message, Spin, Popconfirm, Select, Space, Tag } from 'antd'
-import { DownloadOutlined, ReloadOutlined, SaveOutlined, UndoOutlined, SettingOutlined } from '@ant-design/icons'
+import { DownloadOutlined, NotificationOutlined, ReloadOutlined, SaveOutlined, UndoOutlined, SettingOutlined } from '@ant-design/icons'
+import { Link } from 'react-router-dom'
 import api from '../api/client'
 import { checkUpdate, downloadAndInstallUpdate, loadUpdateStatus } from '../api/localUpdate'
 import { useConnection } from '../contexts/ConnectionContext'
@@ -31,6 +32,9 @@ export default function Settings() {
     setLoading(true)
     api.get('/api/settings')
       .then(r => form.setFieldsValue({
+        gitee_update_repository: 'chuzifeng/auto-script_-hub',
+        github_update_repository: 'CZF39631/AutoScript_Hub',
+        update_channel: 'stable',
         ...r.data,
         update_manifest_urls: (r.data.update_manifest_urls || []).join('\n'),
       }))
@@ -128,11 +132,18 @@ export default function Settings() {
           <Form.Item name="pip_index_url" label="Python 依赖镜像（可选）">
             <Input placeholder="如：https://pypi.tuna.tsinghua.edu.cn/simple" />
           </Form.Item>
-          <Form.Item name="github_update_repository" label="GitHub 更新仓库">
+          <Form.Item
+            name="gitee_update_repository"
+            label="Gitee 更新仓库（默认）"
+            extra="优先从 Gitee 读取签名更新清单；不可用时自动尝试 GitHub。"
+          >
+            <Input placeholder="chuzifeng/auto-script_-hub" />
+          </Form.Item>
+          <Form.Item name="github_update_repository" label="GitHub 备用更新仓库">
             <Input placeholder="CZF39631/AutoScript_Hub" />
           </Form.Item>
           <Form.Item name="update_channel" label="更新通道">
-            <Select options={[{ value: 'beta', label: 'Beta 0.9' }, { value: 'stable', label: 'Stable 1.x' }]} />
+            <Select options={[{ value: 'stable', label: 'Stable（稳定版）' }, { value: 'beta', label: 'Beta（测试版及稳定版）' }]} />
           </Form.Item>
           <Form.Item
             name="update_manifest_urls"
@@ -158,7 +169,11 @@ export default function Settings() {
         </Form>
       </Card>
 
-      <Card title="客户端更新" style={{ maxWidth: 600, marginTop: 16 }}>
+      <Card
+        title="客户端更新"
+        extra={<Link to="/updates"><NotificationOutlined /> 查看更新说明</Link>}
+        style={{ maxWidth: 600, marginTop: 16 }}
+      >
         {!agentOnline && <Alert type="info" showIcon message="此功能仅在 Windows 客户端中可用" />}
         {agentOnline && (
           <Space direction="vertical" style={{ width: '100%' }}>

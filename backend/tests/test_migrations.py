@@ -1,9 +1,11 @@
 from pathlib import Path
 
 import pytest
+from alembic import command
 from sqlalchemy import create_engine, inspect, text
 
 from app.migrations import (
+    alembic_config,
     UnsupportedLegacySchema,
     migration_status,
     upgrade_database,
@@ -26,7 +28,10 @@ def test_fresh_database_upgrades_to_head(tmp_path):
 
     assert revision == status["head"] == status["current"]
     assert status["ready"] is True
-    assert {"users", "scripts", "runs", "agents", "user_presets", "user_settings", "alembic_version"}.issubset(tables)
+    assert {
+        "users", "scripts", "runs", "agents", "user_presets", "user_settings",
+        "groups", "user_groups", "script_groups", "alembic_version",
+    }.issubset(tables)
 
 
 def test_existing_known_database_is_adopted_without_losing_rows(tmp_path):
@@ -45,9 +50,41 @@ def test_existing_known_database_is_adopted_without_losing_rows(tmp_path):
     with create_engine(database_url).connect() as connection:
         count = connection.execute(text("SELECT COUNT(*) FROM users WHERE username='existing'")).scalar()
         run = connection.execute(text("SELECT status FROM runs WHERE id=1")).scalar()
+        default_groups = connection.execute(text(
+            "SELECT COUNT(*) FROM groups WHERE is_default=1 AND status='active' AND is_deleted=0"
+        )).scalar()
+        user_memberships = connection.execute(text("SELECT COUNT(*) FROM user_groups")).scalar()
+        script_memberships = connection.execute(text("SELECT COUNT(*) FROM script_groups")).scalar()
     assert count == 1
     assert run == "succeeded"
+    assert default_groups == 1
+    assert user_memberships == 1
+    assert script_memberships == 1
     assert migration_status(database_url)["ready"] is True
+
+
+def test_group_migration_recovers_an_existing_default_name(tmp_path):
+    database_url = _sqlite_url(tmp_path / "existing-group-name.db")
+    config = alembic_config(database_url)
+    command.upgrade(config, "0003_external_auth_identity")
+    with create_engine(database_url).begin() as connection:
+        connection.execute(text(
+            "INSERT INTO groups "
+            "(name, description, status, is_default, created_at, updated_at, is_deleted) "
+            "VALUES ('默认分组', 'old', 'disabled', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ))
+
+    command.upgrade(config, "head")
+
+    with create_engine(database_url).connect() as connection:
+        row = connection.execute(text(
+            "SELECT status, is_default, is_deleted FROM groups WHERE name='默认分组'"
+        )).one()
+        defaults = connection.execute(text(
+            "SELECT COUNT(*) FROM groups WHERE is_default=true AND is_deleted=false"
+        )).scalar()
+    assert tuple(row) == ("active", 1, 0)
+    assert defaults == 1
 
 
 def test_legacy_schema_missing_required_column_is_rejected_before_stamp(tmp_path):

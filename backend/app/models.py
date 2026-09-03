@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint, Table, Index
 from sqlalchemy.orm import relationship, declarative_base  # type: ignore[attr-defined]
 
 Base = declarative_base()
@@ -8,6 +8,43 @@ Base = declarative_base()
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+user_groups = Table(
+    "user_groups",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id"), primary_key=True),
+    Column("group_id", Integer, ForeignKey("groups.id"), primary_key=True),
+    Column("created_at", DateTime, nullable=False, default=_utcnow),
+    Index("ix_user_groups_group_id", "group_id"),
+)
+
+script_groups = Table(
+    "script_groups",
+    Base.metadata,
+    Column("script_id", Integer, ForeignKey("scripts.id"), primary_key=True),
+    Column("group_id", Integer, ForeignKey("groups.id"), primary_key=True),
+    Column("created_at", DateTime, nullable=False, default=_utcnow),
+    Index("ix_script_groups_group_id", "group_id"),
+)
+
+
+class Group(Base):
+    __tablename__ = "groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="active")
+    is_default = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    is_deleted = Column(Boolean, nullable=False, default=False)
+
+    users = relationship("User", secondary=user_groups, back_populates="groups")  # type: ignore[call-arg]
+    scripts = relationship("Script", secondary=script_groups, back_populates="groups")  # type: ignore[call-arg]
 
 
 def _semantic_version(config_json):
@@ -41,6 +78,7 @@ class User(Base):
     is_deleted = Column(Boolean, nullable=False, default=False)
 
     runs = relationship("Run", back_populates="user", foreign_keys="Run.user_id")  # type: ignore[call-arg]
+    groups = relationship("Group", secondary=user_groups, back_populates="users")  # type: ignore[call-arg]
 
 
 class Agent(Base):
@@ -82,6 +120,7 @@ class Script(Base):
 
     versions = relationship("ScriptVersion", back_populates="script", order_by="ScriptVersion.version.desc()")  # type: ignore[call-arg]
     runs = relationship("Run", back_populates="script")  # type: ignore[call-arg]
+    groups = relationship("Group", secondary=script_groups, back_populates="scripts")  # type: ignore[call-arg]
 
     @property
     def latest_semantic_version(self):
