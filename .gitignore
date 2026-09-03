@@ -58,6 +58,7 @@ docs/test/
 release-output/
 release/windows/cache/
 deploy/.env
+ops/server/remote-upgrade.env
 
 # Local agent session state
 .omo/

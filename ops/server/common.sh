@@ -4,6 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 COMPOSE_FILE=${AUTOSCRIPT_COMPOSE_FILE:-$REPO_DIR/deploy/compose.yaml}
+ENV_FILE=${AUTOSCRIPT_ENV_FILE:-$REPO_DIR/deploy/.env}
 DATA_DIR=${AUTOSCRIPT_DATA_DIR:-/opt/autoscript-hub/data}
 PORT=${AUTOSCRIPT_PORT:-8000}
 PROJECT_NAME=${AUTOSCRIPT_PROJECT_NAME:-}
@@ -20,9 +21,9 @@ fi
 
 compose() {
   if [ -n "$PROJECT_NAME" ]; then
-    docker compose --project-name "$PROJECT_NAME" --env-file "$REPO_DIR/deploy/.env" -f "$COMPOSE_FILE" "$@"
+    docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
   else
-    docker compose --env-file "$REPO_DIR/deploy/.env" -f "$COMPOSE_FILE" "$@"
+    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
   fi
 }
 
