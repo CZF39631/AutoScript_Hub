@@ -148,16 +148,15 @@ jobs:
             GITEE_RELEASE_ID="$(python release/scripts/gitee_release.py create --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --tag "$GITHUB_REF_NAME" --target-commitish "$GITEE_TARGET_COMMIT" --body "$GITEE_BODY")"
             test -n "$GITEE_RELEASE_ID"
             echo "gitee_release_id=$GITEE_RELEASE_ID" >> "$GITHUB_OUTPUT"
-            python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" $(printf -- '--file %q ' release-output/*.exe release-output/*.zip)
+            # Gitee 从 GitHub 托管 Runner 接收 30MB 级安装包时会长期写入超时；
+            # Release 仍镜像说明、部署包、Skill 和签名清单，安装包由清单指向 GitHub 可信资产。
+            python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" $(printf -- '--file %q ' release-output/*.zip)
           fi
       - name: Sign and mirror update manifest
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           INSTALLER="release-output/AutoScript-Hub-Setup-$VERSION.exe"
           URLS=(--url "https://github.com/${GITHUB_REPOSITORY}/releases/download/$GITHUB_REF_NAME/$(basename "$INSTALLER")")
-          if [[ "$GITEE_ENABLED" == "true" ]]; then
-            URLS=(--url "https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME/$(basename "$INSTALLER")" "${URLS[@]}")
-          fi
           python release/scripts/make_update_manifest.py --version "$VERSION" --installer "$INSTALLER" --private-key update-private-key.pem --output release-output "${URLS[@]}"
           python release/scripts/write_checksums.py --directory release-output
           gh release upload "$GITHUB_REF_NAME" release-output/autoscript-hub-update.json release-output/autoscript-hub-update.json.sig release-output/SHA256SUMS.txt --clobber
@@ -200,11 +199,12 @@ jobs:
           gh release edit "$GITHUB_REF_NAME" --draft=false
       - name: Verify configured public mirrors anonymously
         run: |
-          MIRRORS=(--base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME")
+          python release/scripts/verify_release_mirrors.py --directory release-output \
+            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           if [[ "$GITEE_ENABLED" == "true" ]]; then
-            MIRRORS+=(--base-url "https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME")
+            curl -fsS "https://gitee.com/api/v5/repos/$GITEE_OWNER/$GITEE_REPO/releases/tags/$GITHUB_REF_NAME" \
+              | grep -F 'autoscript-hub-update.json' >/dev/null
           fi
-          python release/scripts/verify_release_mirrors.py --directory release-output "${MIRRORS[@]}"
       - name: Remove partial releases after any publication failure
         if: failure()
         continue-on-error: true
