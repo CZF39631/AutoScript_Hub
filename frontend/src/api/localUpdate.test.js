@@ -12,8 +12,8 @@ function client() {
       calls.push(['get', path])
       return { data: { state: 'verified', version: '0.9.1', current_version: '0.9.0' } }
     },
-    async post(path) {
-      calls.push(['post', path])
+    async post(path, data, config) {
+      calls.push(['post', path, data, config])
       return {
         data: {
           state: path.endsWith('install') ? 'installing' : 'available',
@@ -35,7 +35,7 @@ test('desktop update actions use the local Agent and never the server API', asyn
   assert.equal((await downloadAndInstallUpdate(localApi)).state, 'installing')
   assert.deepEqual(localApi.calls, [
     ['get', '/local/update'],
-    ['post', '/local/update/check'],
-    ['post', '/local/update/install'],
+    ['post', '/local/update/check', undefined, { timeout: 180000 }],
+    ['post', '/local/update/install', undefined, { timeout: 0 }],
   ])
 })
