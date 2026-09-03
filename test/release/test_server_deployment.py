@@ -1,4 +1,6 @@
+import importlib.util
 from pathlib import Path
+import tarfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -98,6 +100,7 @@ def test_failed_upgrade_rolls_back_with_the_previous_immutable_image_before_rest
     assert "sha256:" in common
     assert "OLD_IMAGE=$(current_server_image_id)" in upgrade
     assert 'rollback.sh" "$OLD_IMAGE" "$BACKUP_DIR"' in upgrade
+    assert "if ! pull_server || ! compose up" in upgrade
     assert "AUTOSCRIPT_SERVER_IMAGE" in rollback
     assert rollback.index("export AUTOSCRIPT_SERVER_IMAGE") < rollback.index("restore.sh")
     assert rollback.index("pull_server") < rollback.index("compose stop server")
@@ -119,6 +122,38 @@ def test_operational_scripts_do_not_require_preserved_executable_bits():
     assert 'sh "$SCRIPT_DIR/backup.sh"' in upgrade
     assert 'sh "$SCRIPT_DIR/rollback.sh"' in upgrade
     assert 'sh "$SCRIPT_DIR/restore.sh"' in rollback
+
+
+def test_remote_upgrade_uses_ignored_local_config_and_verifies_the_result(tmp_path):
+    script_path = ROOT / "ops/server/remote_upgrade.py"
+    script = script_path.read_text(encoding="utf-8")
+    gitignore = _read(".gitignore")
+
+    spec = importlib.util.spec_from_file_location("remote_upgrade", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    config = module.parse_env(ROOT / "ops/server/remote-upgrade.env.example")
+    archive = tmp_path / "ops-server.tar.gz"
+    module.build_archive(archive)
+    with tarfile.open(archive) as bundle:
+        names = set(bundle.getnames())
+
+    assert config["TARGET_VERSION"] == "1.2.0"
+    assert "ops/server/remote-upgrade.env" in gitignore
+    assert "ops/server/upgrade.sh" in names
+    assert "ops/server/backup_sqlite.py" in names
+    assert not any("remote-upgrade.env" in name for name in names)
+    assert "sha256sum" in script
+    assert '"migration":"ok"' in script
+    assert "cp -p \"$env_backup\" \"$env_file\"" in script
+
+
+def test_common_script_accepts_an_explicit_environment_file():
+    common = _read("ops/server/common.sh")
+
+    assert "AUTOSCRIPT_ENV_FILE" in common
+    assert '--env-file "$ENV_FILE"' in common
 
 
 def test_release_image_does_not_copy_development_secrets():
