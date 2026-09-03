@@ -25,7 +25,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin main --tags
+          # Tag 事件检出时本地可能先存在同名轻量引用；强制刷新为远端正式标签对象。
+          git fetch --force origin main --tags
           git remote add gitee "https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
           AUTH="$(printf '%s:%s' "$GITEE_OWNER" "$GITEE_TOKEN" | base64 | tr -d '\n')"
           git -c http.extraHeader="Authorization: Basic $AUTH" \
