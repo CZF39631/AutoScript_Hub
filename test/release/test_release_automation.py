@@ -328,6 +328,16 @@ def test_anonymous_mirror_verifier_requires_identical_assets(tmp_path):
         thread.join(timeout=5)
 
 
+def test_semver_prerelease_tags_use_beta_channel_without_overwriting_stable_tags():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+
+    assert "type=raw,value=beta,enable=${{ contains(github.ref_name, '-') }}" in release
+    assert "type=raw,value=stable,enable=${{ !contains(github.ref_name, '-') }}" in release
+    assert "AUTOSCRIPT_CHANNEL=${{ contains(github.ref_name, '-') && 'beta' || 'stable' }}" in release
+    assert 'if [[ "$GITHUB_REF_NAME" == *-* ]]; then GH_PRERELEASE=(--prerelease); fi' in release
+    assert 'if [[ "$GITHUB_REF_NAME" == *-* ]]; then GITEE_PRERELEASE=true; fi' in release
+
+
 # ---------------------------------------------------------------------------
 # LAN release-cache workflow security isolation
 # ---------------------------------------------------------------------------

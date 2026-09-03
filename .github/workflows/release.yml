@@ -68,9 +68,9 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=beta,enable=${{ startsWith(github.ref_name, 'v0.9.') }}
-            type=raw,value=stable,enable=${{ startsWith(github.ref_name, 'v1.') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref_name, 'v1.') }}
+            type=raw,value=beta,enable=${{ contains(github.ref_name, '-') }}
+            type=raw,value=stable,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
       - name: Build and push linux/amd64,linux/arm64
         uses: docker/build-push-action@v6
         with:
@@ -81,7 +81,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             AUTOSCRIPT_VERSION=${{ steps.release.outputs.version }}
-            AUTOSCRIPT_CHANNEL=${{ startsWith(github.ref_name, 'v1.') && 'stable' || 'beta' }}
+            AUTOSCRIPT_CHANNEL=${{ contains(github.ref_name, '-') && 'beta' || 'stable' }}
       - name: Smoke-test the published amd64 and arm64 images
         shell: bash
         env:
@@ -133,7 +133,7 @@ jobs:
           RELEASE_NOTES_FILE="docs/releases/$GITHUB_REF_NAME.md"
           GITEE_TARGET_COMMIT="$(git rev-parse HEAD)"
           GH_PRERELEASE=()
-          if [[ "$GITHUB_REF_NAME" == v0.9.* ]]; then GH_PRERELEASE=(--prerelease); fi
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then GH_PRERELEASE=(--prerelease); fi
           if [[ -f "$RELEASE_NOTES_FILE" ]]; then
             GH_NOTES=(--notes-file "$RELEASE_NOTES_FILE")
             GITEE_BODY="$(cat "$RELEASE_NOTES_FILE")"
@@ -192,7 +192,7 @@ jobs:
       - name: Publish both release hosts
         run: |
           GITEE_PRERELEASE=false
-          if [[ "$GITHUB_REF_NAME" == v0.9.* ]]; then GITEE_PRERELEASE=true; fi
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then GITEE_PRERELEASE=true; fi
           if [[ "$GITEE_ENABLED" == "true" ]]; then
             python release/scripts/gitee_release.py publish --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "${{ steps.release_hosts.outputs.gitee_release_id }}" --prerelease "$GITEE_PRERELEASE"
           fi
