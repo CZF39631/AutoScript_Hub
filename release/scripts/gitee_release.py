@@ -11,11 +11,20 @@ def _base_url(owner: str, repo: str) -> str:
 
 
 def request(method, url, token, **kwargs):
-    data = kwargs.pop("data", {})
     timeout = kwargs.pop("timeout", 120)
-    data["access_token"] = token
-    response = requests.request(method, url, data=data, timeout=timeout, **kwargs)
-    response.raise_for_status()
+    if method.upper() == "GET":
+        params = kwargs.pop("params", {})
+        params["access_token"] = token
+        response = requests.request(method, url, params=params, timeout=timeout, **kwargs)
+    else:
+        data = kwargs.pop("data", {})
+        data["access_token"] = token
+        response = requests.request(method, url, data=data, timeout=timeout, **kwargs)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        detail = getattr(response, "text", "")[:500].replace(token, "***")
+        raise RuntimeError(f"Gitee API {response.status_code}: {detail}") from exc
     return response.json() if response.content else {}
 
 
@@ -69,11 +78,20 @@ def publish_release(
 ) -> None:
     if not str(release_id).isdigit():
         raise ValueError("Gitee release id must be numeric")
+    url = f"{_base_url(owner, repo)}/{release_id}"
+    current = request("GET", url, token)
+    if not isinstance(current, dict) or not current.get("tag_name") or not current.get("name"):
+        raise RuntimeError("Gitee release response is missing tag_name or name")
     request(
         "PATCH",
-        f"{_base_url(owner, repo)}/{release_id}",
+        url,
         token,
-        data={"prerelease": "true" if prerelease else "false"},
+        data={
+            "tag_name": current["tag_name"],
+            "name": current["name"],
+            "body": current.get("body") or "AutoScript Hub release",
+            "prerelease": "true" if prerelease else "false",
+        },
     )
 
 
