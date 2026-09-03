@@ -76,6 +76,8 @@ def test_release_workflow_passes_created_gitee_release_id():
     assert 'gh release create "$GITHUB_REF_NAME" release-output/*.exe release-output/*.zip' in workflow
     assert "gitee_release_id=" in workflow
     assert '--target-commitish "$GITEE_TARGET_COMMIT"' in workflow
+    assert "$(printf -- '--file %q ' release-output/*.zip)" in workflow
+    assert "release-output/*.exe release-output/*.zip)" not in workflow
     assert '--release-id "$GITEE_RELEASE_ID"' in workflow
     assert "steps.release_hosts.outputs.gitee_release_id" in workflow
     assert 'GH_PRERELEASE=(--prerelease)' in workflow
