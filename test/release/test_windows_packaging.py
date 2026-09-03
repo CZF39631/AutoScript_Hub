@@ -102,6 +102,7 @@ def test_build_enforces_tests_and_95mb_gitee_gate():
     assert "backend/requirements.txt" in build
     assert "client/requirements.txt" in build
     assert "npm test" in build
+    assert "$env:VITE_AUTOSCRIPT_VERSION = $Version" in build
     assert "pytest" in build
     assert "stage_python_runtime.ps1" in build
     assert "windows-runtime" in build
