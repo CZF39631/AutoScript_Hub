@@ -11,7 +11,7 @@ ALLOWED_TRANSITIONS = {
     "idle": {"checking"},
     "checking": {"idle", "available"},
     "available": {"downloading", "idle"},
-    "downloading": {"verified", "idle"},
+    "downloading": {"verified", "available", "idle"},
     "verified": {"waiting-for-idle", "installing", "idle"},
     "waiting-for-idle": {"installing", "idle"},
     "installing": {"verifying-startup", "rolled-back"},

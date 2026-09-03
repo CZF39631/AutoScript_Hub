@@ -126,7 +126,13 @@ jobs:
         run: test -n "${{ secrets.UPDATE_PRIVATE_KEY_B64 }}"
       - name: Restore signing key
         run: echo '${{ secrets.UPDATE_PRIVATE_KEY_B64 }}' | base64 -d > update-private-key.pem
-      - name: Create draft releases and upload base assets
+      - name: Split installer into deterministic 8 MiB Gitee assets
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python release/scripts/split_update_asset.py \
+            --installer "release-output/AutoScript-Hub-Setup-$VERSION.exe" \
+            --output release-output/parts
+      - name: Create draft releases and upload installer/parts before manifest
         id: release_hosts
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -148,16 +154,24 @@ jobs:
             GITEE_RELEASE_ID="$(python release/scripts/gitee_release.py create --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --tag "$GITHUB_REF_NAME" --target-commitish "$GITEE_TARGET_COMMIT" --body "$GITEE_BODY")"
             test -n "$GITEE_RELEASE_ID"
             echo "gitee_release_id=$GITEE_RELEASE_ID" >> "$GITHUB_OUTPUT"
-            # Gitee 从 GitHub 托管 Runner 接收 30MB 级安装包时会长期写入超时；
-            # Release 仍镜像说明、部署包、Skill 和签名清单，安装包由清单指向 GitHub 可信资产。
-            python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" $(printf -- '--file %q ' release-output/*.zip)
+            # Gitee 不上传完整 EXE，改为上传固定 8 MiB 分卷，避免大文件写入超时。
+            GITEE_FILES=()
+            for file in release-output/*.zip release-output/parts/*; do
+              GITEE_FILES+=(--file "$file")
+            done
+            python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" "${GITEE_FILES[@]}"
           fi
       - name: Sign and mirror update manifest
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           INSTALLER="release-output/AutoScript-Hub-Setup-$VERSION.exe"
           URLS=(--url "https://github.com/${GITHUB_REPOSITORY}/releases/download/$GITHUB_REF_NAME/$(basename "$INSTALLER")")
-          python release/scripts/make_update_manifest.py --version "$VERSION" --installer "$INSTALLER" --private-key update-private-key.pem --output release-output "${URLS[@]}"
+          PARTS=()
+          if [[ "$GITEE_ENABLED" == "true" ]]; then
+            PARTS=(--parts-dir release-output/parts --parts-url-base "https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME")
+          fi
+          # 完整 EXE 和所有分卷上传成功后才签署清单，避免发布不可达资产。
+          python release/scripts/make_update_manifest.py --version "$VERSION" --installer "$INSTALLER" --private-key update-private-key.pem --output release-output "${URLS[@]}" "${PARTS[@]}"
           python release/scripts/write_checksums.py --directory release-output
           gh release upload "$GITHUB_REF_NAME" release-output/autoscript-hub-update.json release-output/autoscript-hub-update.json.sig release-output/SHA256SUMS.txt --clobber
           if [[ "$GITEE_ENABLED" == "true" ]]; then

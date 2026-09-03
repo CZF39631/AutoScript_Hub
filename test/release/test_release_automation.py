@@ -1,6 +1,7 @@
 from pathlib import Path
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 import shutil
 import subprocess
@@ -199,6 +200,59 @@ def test_manifest_generator_signs_installer_for_runtime_parser(tmp_path):
     assert UpdateManifest.from_bytes(raw, signature, public).version == "0.9.1"
 
 
+def test_splitter_uses_deterministic_8_mib_parts_and_manifest_describes_them(tmp_path):
+    installer = tmp_path / "AutoScript-Hub-Setup-0.9.1.exe"
+    installer.write_bytes((b"a" * (8 * 1024 * 1024)) + b"tail")
+    parts = tmp_path / "parts"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "release/scripts/split_update_asset.py",
+            "--installer", str(installer),
+            "--output", str(parts),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    created = sorted(parts.iterdir())
+    assert [path.name for path in created] == [
+        installer.name + ".part0001",
+        installer.name + ".part0002",
+    ]
+    assert [path.stat().st_size for path in created] == [8 * 1024 * 1024, 4]
+    assert b"".join(path.read_bytes() for path in created) == installer.read_bytes()
+
+    key = Ed25519PrivateKey.generate()
+    private = tmp_path / "key.pem"
+    private.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "release/scripts/make_update_manifest.py",
+            "--version", "0.9.1",
+            "--installer", str(installer),
+            "--private-key", str(private),
+            "--url", "https://github.example/full.exe",
+            "--parts-dir", str(parts),
+            "--parts-url-base", "https://gitee.example/download",
+            "--output", str(tmp_path),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    value = json.loads((tmp_path / "autoscript-hub-update.json").read_text("utf-8"))
+    asset = value["assets"]["windows-x86_64"]
+    assert asset["urls"] == ["https://github.example/full.exe"]
+    assert len(asset["parts"]) == 2
+    assert asset["parts"][0]["urls"] == [
+        "https://gitee.example/download/AutoScript-Hub-Setup-0.9.1.exe.part0001"
+    ]
+
+
 def test_workflows_cover_windows_dual_arch_images_and_both_release_hosts():
     ci = (ROOT / ".github/workflows/ci.yml").read_text("utf-8")
     release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
@@ -221,6 +275,11 @@ def test_workflows_cover_windows_dual_arch_images_and_both_release_hosts():
     assert '"${{ github.ref_name }}".TrimStart' not in release
     assert "write_checksums.py" in release
     assert 'pattern: "!*.dockerbuild"' in release
+    assert "split_update_asset.py" in release
+    assert "--parts-url-base" in release
+    assert "release-output/parts/*" in release
+    assert release.index("release-output/parts/*") < release.index("make_update_manifest.py")
+    assert "gh release create \"$GITHUB_REF_NAME\" release-output/*.exe" in release
 
 
 def test_release_windows_job_uses_the_exact_private_runtime_version():

@@ -23,11 +23,22 @@ class InvalidManifestSignature(InvalidManifest):
 
 
 @dataclass(frozen=True)
+class UpdatePart:
+    filename: str
+    size: int
+    sha256: str
+    urls: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class UpdateAsset:
     filename: str
     size: int
     sha256: str
     urls: tuple[str, ...]
+    # Optional in schema_version=1. Older clients ignore this field and keep
+    # downloading the complete installer from ``urls``.
+    parts: tuple[UpdatePart, ...] = ()
 
 
 def _valid_download_url(value: str) -> bool:
@@ -132,7 +143,41 @@ class UpdateManifest:
                 raise InvalidManifest(f"安装包 SHA-256 无效: {platform}")
             if not isinstance(urls, list) or not urls or not all(isinstance(url, str) and _valid_download_url(url) for url in urls):
                 raise InvalidManifest(f"安装包 URL 无效: {platform}")
-            assets[platform] = UpdateAsset(filename, size, digest, tuple(urls))
+            raw_parts = item.get("parts", [])
+            if not isinstance(raw_parts, list):
+                raise InvalidManifest(f"安装包分卷定义无效: {platform}")
+            parts = []
+            seen_part_names = set()
+            for index, raw_part in enumerate(raw_parts):
+                if not isinstance(raw_part, dict):
+                    raise InvalidManifest(f"安装包分卷定义无效: {platform}/{index}")
+                part_filename = raw_part.get("filename")
+                part_size = raw_part.get("size")
+                part_digest = raw_part.get("sha256")
+                part_urls = raw_part.get("urls")
+                if (
+                    not isinstance(part_filename, str)
+                    or not part_filename
+                    or "/" in part_filename
+                    or "\\" in part_filename
+                    or part_filename in seen_part_names
+                ):
+                    raise InvalidManifest(f"安装包分卷文件名无效: {platform}/{index}")
+                if not isinstance(part_size, int) or isinstance(part_size, bool) or part_size <= 0:
+                    raise InvalidManifest(f"安装包分卷大小无效: {platform}/{index}")
+                if not isinstance(part_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", part_digest):
+                    raise InvalidManifest(f"安装包分卷 SHA-256 无效: {platform}/{index}")
+                if (
+                    not isinstance(part_urls, list)
+                    or not part_urls
+                    or not all(isinstance(url, str) and _valid_download_url(url) for url in part_urls)
+                ):
+                    raise InvalidManifest(f"安装包分卷 URL 无效: {platform}/{index}")
+                seen_part_names.add(part_filename)
+                parts.append(UpdatePart(part_filename, part_size, part_digest, tuple(part_urls)))
+            if parts and sum(part.size for part in parts) != size:
+                raise InvalidManifest(f"安装包分卷总大小无效: {platform}")
+            assets[platform] = UpdateAsset(filename, size, digest, tuple(urls), tuple(parts))
         return cls(
             schema_version=1,
             product=value["product"],

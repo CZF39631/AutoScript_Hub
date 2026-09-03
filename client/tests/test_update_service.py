@@ -90,8 +90,127 @@ def test_download_tries_gitee_then_github_and_persists_verified_state(tmp_path):
     result = service.stage()
 
     assert result.state == "verified"
-    assert attempts == ["https://gitee.example/installer", "https://github.example/installer"]
+    assert attempts == [
+        "https://gitee.example/installer",
+        "https://gitee.example/installer",
+        "https://gitee.example/installer",
+        "https://github.example/installer",
+    ]
     assert result.installer.is_file()
+
+
+def _chunked_service(tmp_path, downloader):
+    chunks = (b"part-one", b"part-two")
+    installer = b"".join(chunks)
+    key = Ed25519PrivateKey.generate()
+    asset = {
+        "filename": "AutoScript-Hub-Setup-0.9.1.exe",
+        "size": len(installer),
+        "sha256": hashlib.sha256(installer).hexdigest(),
+        "urls": ["https://github.example/full.exe"],
+        "parts": [
+            {
+                "filename": f"installer.exe.part{index:04d}",
+                "size": len(chunk),
+                "sha256": hashlib.sha256(chunk).hexdigest(),
+                "urls": [f"https://gitee.example/part{index}"],
+            }
+            for index, chunk in enumerate(chunks, 1)
+        ],
+    }
+    payload = {
+        "schema_version": 1,
+        "product": "autoscript-hub-client",
+        "version": "0.9.1",
+        "channel": "beta",
+        "published_at": "2026-07-21T00:00:00Z",
+        "minimum_client_version": "0.9.0",
+        "release_notes_url": "https://example.com/release",
+        "assets": {"windows-x86_64": asset},
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    paths = ClientPaths.from_environment(install_dir=tmp_path / "install", data_dir=tmp_path / "data")
+    return UpdateService(
+        paths=paths,
+        current_version="0.9.0",
+        public_key=public,
+        sources=[_Source(raw, key.sign(raw))],
+        http_download=downloader,
+    ), chunks, installer
+
+
+def test_chunked_download_is_preferred_and_combined(tmp_path):
+    calls = []
+    payloads = {
+        "https://gitee.example/part1": b"part-one",
+        "https://gitee.example/part2": b"part-two",
+    }
+
+    def download(url, destination, size, digest):
+        calls.append(url)
+        destination.write_bytes(payloads[url])
+
+    service, _, installer = _chunked_service(tmp_path, download)
+    service.check()
+    result = service.download()
+
+    assert result.state == "verified"
+    assert result.installer.read_bytes() == installer
+    assert calls == ["https://gitee.example/part1", "https://gitee.example/part2"]
+
+
+def test_failed_download_returns_available_preserves_manifest_and_reuses_safe_parts(tmp_path):
+    calls = []
+
+    def failing(url, destination, size, digest):
+        calls.append(url)
+        if url.endswith("part1"):
+            destination.write_bytes(b"part-one")
+            return
+        raise OSError("offline")
+
+    service, _, installer = _chunked_service(tmp_path, failing)
+    service.check()
+    failed = service.download()
+
+    assert failed.state == "available"
+    persisted = service.store.read()
+    assert persisted["state"] == "available"
+    assert persisted["manifest_payload_b64"]
+    assert persisted["manifest_signature_b64"]
+
+    resumed_calls = []
+    payloads = {
+        "https://gitee.example/part2": b"part-two",
+        "https://github.example/full.exe": installer,
+    }
+
+    def resumed(url, destination, size, digest):
+        resumed_calls.append(url)
+        destination.write_bytes(payloads[url])
+
+    service.http_download = resumed
+    result = service.download()
+    assert result.state == "verified"
+    assert resumed_calls == ["https://gitee.example/part2"]
+
+
+def test_invalid_part_falls_back_to_streamed_full_installer(tmp_path):
+    calls = []
+
+    def download(url, destination, size, digest):
+        calls.append(url)
+        if "gitee" in url:
+            destination.write_bytes(b"corrupt")
+        else:
+            destination.write_bytes(b"part-onepart-two")
+
+    service, _, _ = _chunked_service(tmp_path, download)
+    service.check()
+
+    assert service.download().state == "verified"
+    assert calls == ["https://gitee.example/part1", "https://github.example/full.exe"]
 
 
 def test_running_script_defers_install(tmp_path):
