@@ -12,7 +12,12 @@ common_datas = [
     (str(ROOT / "client" / "update" / "update-public-key.b64"), "client/update"),  # client/update/update-public-key.b64
 ] + webview_datas
 common_binaries = webview_binaries
-common_hidden = webview_hidden + ["client.ui.wizard", "client.agent.notifier"]
+common_hidden = webview_hidden + [
+    "client.ui.wizard",
+    "client.agent.notifier",
+    "plyer",
+    "plyer.platforms.win.notification",
+]
 
 
 def analysis(entry, include_ui_assets=True):
