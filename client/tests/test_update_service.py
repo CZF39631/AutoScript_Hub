@@ -106,6 +106,35 @@ def test_running_script_defers_install(tmp_path):
     assert service.request_install().state == "installing"
 
 
+def test_discovered_update_manifest_is_reused_after_agent_restart(tmp_path):
+    service, _ = _service(tmp_path, idle=True)
+    assert service.check().state == "available"
+
+    resumed = UpdateService(
+        paths=service.paths,
+        current_version="0.9.0",
+        public_key=service.public_key,
+        sources=[],
+        http_get=lambda url: b"signed-installer",
+    )
+
+    assert resumed.manifest is not None
+    assert resumed.manifest.version == "0.9.1"
+    assert resumed.download().state == "verified"
+
+
+def test_source_failure_preserves_previously_discovered_update(tmp_path):
+    service, _ = _service(tmp_path, idle=True)
+    assert service.check().state == "available"
+    service.sources = [type("OfflineSource", (), {"fetch": lambda self: (_ for _ in ()).throw(OSError("offline"))})()]
+
+    result = service.check()
+
+    assert result.state == "available"
+    assert result.version == "0.9.1"
+    assert service.store.read()["last_check_error"] == "offline"
+
+
 def test_verified_update_can_be_resumed_after_agent_restart(tmp_path):
     service, _ = _service(tmp_path, idle=True)
     service.check()
