@@ -119,6 +119,9 @@ def test_asset_builder_outputs_standalone_skill_and_deploy_bundles(tmp_path):
     with zipfile.ZipFile(deploy) as bundle:
         assert "autoscript-hub-server/deploy/compose.yaml" in bundle.namelist()
         assert "autoscript-hub-server/ops/server/backup.sh" in bundle.namelist()
+        assert "autoscript-hub-server/ops/server/remote_upgrade.py" in bundle.namelist()
+        assert "autoscript-hub-server/ops/server/remote-upgrade.env.example" in bundle.namelist()
+        assert "autoscript-hub-server/ops/server/remote-upgrade.env" not in bundle.namelist()
         compose = bundle.read("autoscript-hub-server/deploy/compose.yaml").decode("utf-8")
         env_example = bundle.read("autoscript-hub-server/deploy/.env.example").decode("utf-8")
         assert "autoscript-hub-server:0.9.0" in compose

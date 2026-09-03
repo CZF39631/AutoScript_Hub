@@ -56,7 +56,7 @@ docker compose --env-file deploy/.env \
   -f deploy/compose.yaml -f deploy/compose.local.yaml up -d --build
 ```
 
-完整的备份、恢复、升级、回滚和镜像代理说明见 [docs/0.9-deployment-runbook.md](docs/0.9-deployment-runbook.md)。
+完整的备份、恢复、升级、回滚和镜像代理说明见 [docs/0.9-deployment-runbook.md](docs/0.9-deployment-runbook.md)。维护电脑可配置一次 `ops/server/remote-upgrade.env`，之后直接运行 `python ops/server/remote_upgrade.py`，固定执行备份、升级、迁移验证和失败回滚流程。
 
 ## Windows 客户端
 

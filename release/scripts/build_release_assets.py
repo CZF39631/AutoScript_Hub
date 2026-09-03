@@ -26,7 +26,10 @@ def _tree_entries(source, prefix):
     return [
         (path, f"{prefix}/{path.relative_to(source).as_posix()}")
         for path in source.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix not in {".pyc", ".pyo"}
+        and path.name not in {".env", "remote-upgrade.env"}
     ]
 
 
