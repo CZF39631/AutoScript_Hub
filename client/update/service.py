@@ -209,7 +209,7 @@ class UpdateService:
                 **self._manifest_cache(payload, signature),
             )
             return UpdateResult("available", version=manifest.version)
-        error = "; ".join(errors)
+        error = "; ".join(errors) if not matched_manifests else ""
         if cached_manifest is not None and not matched_manifests:
             self.manifest = cached_manifest
             self.pending_version = cached_manifest.version
