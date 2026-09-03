@@ -19,6 +19,7 @@ class SettingsPayload(BaseModel):
     browser_debug_port: Optional[int] = None
     proxy: Optional[str] = None
     pip_index_url: Optional[str] = None
+    gitee_update_repository: Optional[str] = None
     github_update_repository: Optional[str] = None
     update_channel: Optional[str] = None
     update_manifest_urls: Optional[list[str]] = None

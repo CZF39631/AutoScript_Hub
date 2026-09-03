@@ -176,6 +176,24 @@ def test_check_uses_newer_later_source_when_first_valid_manifest_is_stale(tmp_pa
     assert service.manifest.version == "0.9.2"
 
 
+def test_beta_channel_accepts_stable_manifest(tmp_path):
+    key = Ed25519PrivateKey.generate()
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    paths = ClientPaths.from_environment(install_dir=tmp_path / "install", data_dir=tmp_path / "data")
+    service = UpdateService(
+        paths=paths,
+        current_version="1.0.0",
+        public_key=public,
+        sources=[_signed_source(key, "1.1.0", channel="stable")],
+        expected_channel="beta",
+    )
+
+    result = service.check()
+
+    assert result.state == "available"
+    assert result.version == "1.1.0"
+
+
 def test_check_ignores_manifest_from_another_update_channel(tmp_path):
     key = Ed25519PrivateKey.generate()
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)

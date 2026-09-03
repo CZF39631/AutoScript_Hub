@@ -11,7 +11,7 @@ from typing import Dict
 
 from client.runtime.paths import ClientPaths
 from client.update.service import UpdateService
-from client.update.sources import DirectManifestSource, GitHubReleaseSource
+from client.update.sources import DirectManifestSource, GiteeReleaseSource, GitHubReleaseSource
 from client.update.state import UpdateStateStore
 from client.update.trust import load_update_public_key
 
@@ -68,9 +68,13 @@ def _sources(config: dict):
         for url in config.get("update_manifest_urls", [])
         if isinstance(url, str) and url.strip()
     ]
+    channel = config.get("update_channel") or "stable"
+    gitee_repository = config.get("gitee_update_repository", "chuzifeng/auto-script_-hub")
+    if gitee_repository:
+        sources.append(GiteeReleaseSource(gitee_repository, channel=channel))
     repository = config.get("github_update_repository", "CZF39631/AutoScript_Hub")
     if repository:
-        sources.append(GitHubReleaseSource(repository, channel=config.get("update_channel", "beta")))
+        sources.append(GitHubReleaseSource(repository, channel=channel))
     return sources
 
 
@@ -86,7 +90,7 @@ def _service(
         current_version=current_version,
         public_key=load_update_public_key(),
         sources=_sources(config),
-        expected_channel=config.get("update_channel") or "beta",
+        expected_channel=config.get("update_channel") or "stable",
         runtime_is_idle=runtime_is_idle,
         handoff=lambda installer, version: _handoff(paths, installer, version),
     )

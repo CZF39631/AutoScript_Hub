@@ -85,6 +85,7 @@ _CLIENT_SETTING_KEYS = {
     "browser_debug_port",
     "proxy",
     "pip_index_url",
+    "gitee_update_repository",
     "github_update_repository",
     "update_channel",
     "update_manifest_urls",

@@ -64,7 +64,7 @@ docker compose --env-file deploy/.env \
 
 首次启动向导填写局域网服务端地址和账号。桌面 UI、后台 Agent 和 Updater 分别是独立 EXE；关闭 UI 不会终止 Agent 正在执行的脚本。
 
-“设置 → 客户端更新”可检查、验证和安装更新，“更新说明”可查看当前及历史版本内容。重要更新默认在升级后的首次运行中提醒一次，也可关闭自动弹窗。Gitee、Git Raw 或局域网清单地址可逐行填写，GitHub 仓库可单独配置。客户端不执行 `git pull`，也不保存仓库 Token 或 SSH Key。
+“设置 → 客户端更新”可检查、验证和安装更新，“更新说明”可查看当前及历史版本内容。重要更新默认在升级后的首次运行中提醒一次，也可关闭自动弹窗。客户端默认优先从 [Gitee 镜像](https://gitee.com/chuzifeng/auto-script_-hub) 检查更新，失败后自动尝试 GitHub；Git Raw 或局域网清单地址也可逐行填写。客户端不执行 `git pull`，也不保存仓库 Token 或 SSH Key。
 
 ## 开发启动
 
@@ -109,6 +109,7 @@ npm run build
 - Skill 打包：`python skills/autoscript-script-authoring/scripts/package_script.py <source> <output.zip>`
 - 人员分组、脚本市场隔离与升级兼容：[docs/人员分组与脚本市场.md](docs/人员分组与脚本市场.md)
 - 更新说明内容与重要更新提醒规则：[docs/更新说明维护.md](docs/更新说明维护.md)
+- Gitee 代码镜像、默认更新源与自动同步配置：[docs/Gitee镜像与更新.md](docs/Gitee镜像与更新.md)
 
 ## 关键目录
 
