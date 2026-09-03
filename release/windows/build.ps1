@@ -27,8 +27,18 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
         & npm test
         if ($LASTEXITCODE -ne 0) { throw 'npm test failed' }
-        & npm run build
-        if ($LASTEXITCODE -ne 0) { throw 'npm build failed' }
+        $PreviousFrontendVersion = $env:VITE_AUTOSCRIPT_VERSION
+        try {
+            $env:VITE_AUTOSCRIPT_VERSION = $Version
+            & npm run build
+            if ($LASTEXITCODE -ne 0) { throw 'npm build failed' }
+        } finally {
+            if ($null -eq $PreviousFrontendVersion) {
+                Remove-Item Env:VITE_AUTOSCRIPT_VERSION -ErrorAction SilentlyContinue
+            } else {
+                $env:VITE_AUTOSCRIPT_VERSION = $PreviousFrontendVersion
+            }
+        }
     } finally { Pop-Location }
 
     & $PSScriptRoot\fetch_python_runtime.ps1

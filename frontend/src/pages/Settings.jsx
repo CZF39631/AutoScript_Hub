@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Alert, Card, Form, Input, InputNumber, Button, message, Spin, Popconfirm, Select, Space, Tag } from 'antd'
-import { DownloadOutlined, ReloadOutlined, SaveOutlined, UndoOutlined, SettingOutlined } from '@ant-design/icons'
+import { DownloadOutlined, NotificationOutlined, ReloadOutlined, SaveOutlined, UndoOutlined, SettingOutlined } from '@ant-design/icons'
+import { Link } from 'react-router-dom'
 import api from '../api/client'
 import { checkUpdate, downloadAndInstallUpdate, loadUpdateStatus } from '../api/localUpdate'
 import { useConnection } from '../contexts/ConnectionContext'
@@ -158,7 +159,11 @@ export default function Settings() {
         </Form>
       </Card>
 
-      <Card title="客户端更新" style={{ maxWidth: 600, marginTop: 16 }}>
+      <Card
+        title="客户端更新"
+        extra={<Link to="/updates"><NotificationOutlined /> 查看更新说明</Link>}
+        style={{ maxWidth: 600, marginTop: 16 }}
+      >
         {!agentOnline && <Alert type="info" showIcon message="此功能仅在 Windows 客户端中可用" />}
         {agentOnline && (
           <Space direction="vertical" style={{ width: '100%' }}>
