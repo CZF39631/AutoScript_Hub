@@ -1,5 +1,6 @@
 """Signed manifest check, mirrored download, and installer handoff state machine."""
 
+import base64
 import hashlib
 import os
 from pathlib import Path
@@ -64,7 +65,37 @@ class UpdateService:
         self.manifest = None
         self.installer = None
         self.pending_version = None
+        self._recover_discovered_update()
         self._recover_staged_update()
+
+    def _recover_discovered_update(self) -> None:
+        state = self.store.read()
+        if state.get("state") != "available":
+            return
+        try:
+            payload = base64.b64decode(state["manifest_payload_b64"], validate=True)
+            signature = base64.b64decode(state["manifest_signature_b64"], validate=True)
+            manifest = UpdateManifest.from_bytes(payload, signature, self.public_key)
+            if manifest.version != state.get("version") or not manifest.is_newer_than(self.current_version):
+                raise ValueError("缓存的更新版本无效")
+            channel_matches = (
+                manifest.channel == self.expected_channel
+                or (self.expected_channel == "beta" and manifest.channel == "stable")
+            )
+            if not channel_matches:
+                raise ValueError("缓存的更新通道不匹配")
+            manifest.asset_for("windows-x86_64")
+            self.manifest = manifest
+            self.pending_version = manifest.version
+        except (KeyError, ValueError, TypeError):
+            self.store.transition("idle", error="无法恢复已发现的更新，请重新检查")
+
+    @staticmethod
+    def _manifest_cache(payload: bytes, signature: bytes) -> dict:
+        return {
+            "manifest_payload_b64": base64.b64encode(payload).decode("ascii"),
+            "manifest_signature_b64": base64.b64encode(signature).decode("ascii"),
+        }
 
     def _recover_staged_update(self) -> None:
         state = self.store.read()
@@ -119,6 +150,12 @@ class UpdateService:
     def check(self) -> UpdateResult:
         persisted = self.store.read()
         current_state = persisted["state"]
+        cached_manifest = self.manifest if current_state == "available" else None
+        cached_details = {
+            key: persisted[key]
+            for key in ("manifest_payload_b64", "manifest_signature_b64")
+            if key in persisted
+        }
         if current_state == "installing" and self._should_recover_installing(persisted):
             self.store.transition(
                 "rolled-back",
@@ -156,16 +193,33 @@ class UpdateService:
                 if manifest.is_newer_than(self.current_version):
                     if not manifest.supports(self.current_version):
                         raise RuntimeError("当前客户端低于该更新允许的最低版本")
-                    candidates.append(manifest)
+                    candidates.append((manifest, payload, signature))
             except Exception as exc:
                 errors.append(str(exc))
         if candidates:
-            manifest = max(candidates, key=lambda item: Version(item.version))
+            manifest, payload, signature = max(
+                candidates,
+                key=lambda item: Version(item[0].version),
+            )
             self.manifest = manifest
             self.pending_version = manifest.version
-            self.store.transition("available", version=manifest.version)
+            self.store.transition(
+                "available",
+                version=manifest.version,
+                **self._manifest_cache(payload, signature),
+            )
             return UpdateResult("available", version=manifest.version)
         error = "; ".join(errors)
+        if cached_manifest is not None and not matched_manifests:
+            self.manifest = cached_manifest
+            self.pending_version = cached_manifest.version
+            self.store.transition(
+                "available",
+                version=cached_manifest.version,
+                last_check_error=error,
+                **cached_details,
+            )
+            return UpdateResult("available", version=cached_manifest.version)
         version = (
             max(matched_manifests, key=lambda item: Version(item.version)).version
             if matched_manifests
