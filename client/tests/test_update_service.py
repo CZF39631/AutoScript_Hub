@@ -205,6 +205,27 @@ def test_check_uses_newer_later_source_when_first_valid_manifest_is_stale(tmp_pa
     assert service.manifest.version == "0.9.2"
 
 
+def test_successful_fallback_does_not_report_an_earlier_source_error(tmp_path):
+    key = Ed25519PrivateKey.generate()
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    paths = ClientPaths.from_environment(install_dir=tmp_path / "install", data_dir=tmp_path / "data")
+    offline = type("OfflineSource", (), {"fetch": lambda self: (_ for _ in ()).throw(OSError("SSL EOF"))})()
+    service = UpdateService(
+        paths=paths,
+        current_version="0.9.1",
+        public_key=public,
+        sources=[offline, _signed_source(key, "0.9.1")],
+        expected_channel="beta",
+    )
+
+    result = service.check()
+
+    assert result.state == "idle"
+    assert result.version == "0.9.1"
+    assert result.error == ""
+    assert service.store.read()["error"] == ""
+
+
 def test_beta_channel_accepts_stable_manifest(tmp_path):
     key = Ed25519PrivateKey.generate()
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
