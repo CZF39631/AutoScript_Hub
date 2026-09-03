@@ -9,11 +9,19 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User, Script, ScriptVersion, UserScript
-from app.schemas import ScriptBrief, ScriptDetail, ScriptVersionBrief
+from app.schemas import GroupBrief, ScriptBrief, ScriptDetail, ScriptGroupUpdate, ScriptVersionBrief
 from app.auth import get_current_user, require_role
-from app.services.script_parser import parse_script_config
 from app.services.script_storage import save_script_file
 from app.services.audit import write_audit
+from app.services.groups import get_or_create_default_group
+from app.services.script_access import (
+    active_group_ids_for_user,
+    assignable_groups,
+    can_manage_script,
+    get_accessible_script_or_404,
+    get_manageable_script_or_404,
+    restrict_script_query,
+)
 from shared.script_contract import validate_script
 
 router = APIRouter(prefix="/api/scripts", tags=["scripts"])
@@ -42,15 +50,56 @@ def _validated_upload(path):
     return report.config
 
 
-def _script_brief_from_orm(script):
+def _response_groups(script, db, current_user):
+    groups = list(script.groups)
+    if current_user.role != "admin":
+        allowed_ids = active_group_ids_for_user(db, current_user)
+        groups = [
+            group for group in groups
+            if group.id in allowed_ids and group.status == "active" and not group.is_deleted
+        ]
+    return [GroupBrief.model_validate(group) for group in groups]
+
+
+def _script_brief_from_orm(script, db, current_user):
     if hasattr(ScriptBrief, "model_validate"):
-        return ScriptBrief.model_validate(script)
-    return ScriptBrief.from_orm(script)
+        item = ScriptBrief.model_validate(script)
+    else:
+        item = ScriptBrief.from_orm(script)
+    item.groups = _response_groups(script, db, current_user)
+    item.can_manage = can_manage_script(db, current_user, script)
+    item.can_manage_groups = current_user.role == "admin"
+    return item
 
 
-def _can_manage_scripts(current_user):
-    """Admin and developer can upload and manage marketplace scripts."""
-    return current_user.role in ("admin", "developer")
+def _script_detail_from_orm(script, db, current_user):
+    item = ScriptDetail.model_validate(script)
+    item.groups = _response_groups(script, db, current_user)
+    item.can_manage = can_manage_script(db, current_user, script)
+    item.can_manage_groups = current_user.role == "admin"
+    return item
+
+
+def _parse_group_ids(raw):
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="group_ids 必须是 JSON 数组")
+    if not isinstance(value, list) or any(isinstance(item, bool) or not isinstance(item, int) for item in value):
+        raise HTTPException(status_code=400, detail="group_ids 必须是整数数组")
+    return value
+
+
+def _upload_groups(db, current_user, raw_group_ids):
+    group_ids = _parse_group_ids(raw_group_ids)
+    if group_ids is None:
+        if current_user.role == "admin":
+            group_ids = [get_or_create_default_group(db, current_user.id).id]
+        else:
+            group_ids = sorted(active_group_ids_for_user(db, current_user))
+    return assignable_groups(db, current_user, group_ids, allow_empty=True)
 
 
 @router.get("", response_model=List[ScriptBrief])
@@ -60,6 +109,7 @@ def list_scripts(
     db: Session = Depends(get_db),
 ):
     q = db.query(Script).filter(Script.is_deleted == False, Script.status == "active")
+    q = restrict_script_query(q, current_user)
     if category:
         q = q.filter(Script.category == category)
 
@@ -69,7 +119,8 @@ def list_scripts(
     if not installed_ids:
         return []
     q = q.filter(Script.id.in_(installed_ids))
-    return q.order_by(Script.updated_at.desc()).all()
+    scripts = q.order_by(Script.updated_at.desc()).all()
+    return [_script_brief_from_orm(script, db, current_user) for script in scripts]
 
 
 @router.get("/marketplace", response_model=List[ScriptBrief])
@@ -79,6 +130,7 @@ def list_marketplace(
     db: Session = Depends(get_db),
 ):
     q = db.query(Script).filter(Script.is_deleted == False, Script.status == "active")
+    q = restrict_script_query(q, current_user)
     if category:
         q = q.filter(Script.category == category)
     scripts = q.order_by(Script.updated_at.desc()).all()
@@ -88,10 +140,34 @@ def list_marketplace(
 
     result = []
     for s in scripts:
-        item = _script_brief_from_orm(s)
+        item = _script_brief_from_orm(s, db, current_user)
         item.installed = s.id in installed_ids
         result.append(item)
     return result
+
+
+@router.get("/manageable", response_model=List[ScriptBrief])
+def list_manageable_scripts(
+    current_user: User = Depends(require_role("admin", "developer")),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Script).filter(Script.is_deleted == False)
+    query = restrict_script_query(query, current_user)
+    scripts = query.order_by(Script.updated_at.desc()).all()
+    return [_script_brief_from_orm(script, db, current_user) for script in scripts]
+
+
+@router.get("/authorized-ids", response_model=List[int])
+def list_authorized_script_ids(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Script.id).filter(
+        Script.is_deleted == False,
+        Script.status == "active",
+    )
+    query = restrict_script_query(query, current_user)
+    return [int(row[0]) for row in query.order_by(Script.id).all()]
 
 
 @router.post("/{script_id}/install")
@@ -100,9 +176,9 @@ def install_script(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False, Script.status == "active").first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在")
+    script = get_accessible_script_or_404(
+        db, current_user, script_id, require_active=True,
+    )
 
     existing = db.query(UserScript).filter(
         UserScript.user_id == current_user.id, UserScript.script_id == script_id
@@ -139,6 +215,7 @@ def uninstall_script(
 def upload_script(
     file: UploadFile = File(...),
     changelog: str = Form(""),
+    group_ids: Optional[str] = Form(None),
     current_user: User = Depends(require_role("admin", "developer")),
     db: Session = Depends(get_db),
 ):
@@ -159,6 +236,7 @@ def upload_script(
 
     try:
         config = _validated_upload(tmp_path)
+        groups = _upload_groups(db, current_user, group_ids)
 
         script = Script(
             name=config.get("name", safe_name),
@@ -173,6 +251,7 @@ def upload_script(
         )
         db.add(script)
         db.flush()
+        script.groups = groups
 
         save_script_file(script.id, 1, tmp_path, script_type)
 
@@ -189,7 +268,7 @@ def upload_script(
         db.refresh(script)
         write_audit(current_user.id, current_user.username, "upload_script",
                     target_type="script", target_id=script.id, detail=script.name)
-        return script
+        return _script_detail_from_orm(script, db, current_user)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -203,9 +282,7 @@ def upload_version(
     current_user: User = Depends(require_role("admin", "developer")),
     db: Session = Depends(get_db),
 ):
-    script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在")
+    script = get_manageable_script_or_404(db, current_user, script_id)
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="未提供文件")
@@ -249,10 +326,32 @@ def upload_version(
         write_audit(current_user.id, current_user.username, "upload_version",
                     target_type="script", target_id=script.id,
                     detail="v{} {}".format(new_version, script.name))
-        return script
+        return _script_detail_from_orm(script, db, current_user)
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@router.put("/{script_id}/groups", response_model=ScriptDetail)
+def update_script_groups(
+    script_id: int,
+    req: ScriptGroupUpdate,
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    script = get_manageable_script_or_404(db, current_user, script_id)
+    script.groups = assignable_groups(
+        db, current_user, req.group_ids, allow_empty=True,
+    )
+    script.updated_by = current_user.id
+    db.commit()
+    db.refresh(script)
+    write_audit(
+        current_user.id, current_user.username, "update_script_groups",
+        target_type="script", target_id=script.id,
+        detail="group_ids={}".format(sorted(group.id for group in script.groups)),
+    )
+    return _script_detail_from_orm(script, db, current_user)
 
 
 @router.get("/{script_id}", response_model=ScriptDetail)
@@ -261,10 +360,8 @@ def get_script(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在")
-    return script
+    script = get_accessible_script_or_404(db, current_user, script_id)
+    return _script_detail_from_orm(script, db, current_user)
 
 
 @router.get("/{script_id}/download")
@@ -278,9 +375,7 @@ def download_script(
     from fastapi.responses import FileResponse
     from app.services.script_storage import get_script_file_path
 
-    script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在")
+    script = get_accessible_script_or_404(db, current_user, script_id)
 
     ver = version or script.latest_version
     script_dir = get_script_file_path(script_id, ver)
@@ -306,6 +401,7 @@ def list_versions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    get_accessible_script_or_404(db, current_user, script_id)
     return db.query(ScriptVersion).filter(
         ScriptVersion.script_id == script_id
     ).order_by(ScriptVersion.version.desc()).all()
@@ -317,9 +413,7 @@ def disable_script(
     current_user: User = Depends(require_role("admin", "developer")),
     db: Session = Depends(get_db),
 ):
-    script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在")
+    script = get_manageable_script_or_404(db, current_user, script_id)
     script.status = "disabled"
     script.updated_by = current_user.id
     db.commit()
@@ -334,9 +428,7 @@ def enable_script(
     current_user: User = Depends(require_role("admin", "developer")),
     db: Session = Depends(get_db),
 ):
-    script = db.query(Script).filter(Script.id == script_id, Script.is_deleted == False).first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在")
+    script = get_manageable_script_or_404(db, current_user, script_id)
     script.status = "active"
     script.updated_by = current_user.id
     db.commit()

@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { Descriptions, Collapse, Tag, Spin, Button, Upload, Modal, Input, Form, Select, message } from 'antd'
 import { UploadOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
 import { useConnection } from '../contexts/ConnectionContext'
 import api from '../api/client'
 import ParamForm from '../components/ParamForm'
 import { formatScriptVersion } from '../utils/scriptVersion'
+import { parseScriptConfig, shouldFallbackToLocal } from '../utils/groups'
 
 const PARAMS_STORAGE_KEY = 'autoscript_saved_params'
 
@@ -28,7 +28,6 @@ function saveParams(scriptId, params) {
 export default function ScriptDetail() {
   const { id } = useParams()
   const nav = useNavigate()
-  const { user } = useAuth()
   const { online, localApi } = useConnection()
   const [script, setScript] = useState(null)
   const [versions, setVersions] = useState([])
@@ -42,7 +41,7 @@ export default function ScriptDetail() {
   const [verForm] = Form.useForm()
   const [offlineMode, setOfflineMode] = useState(false)
 
-  const canUpload = (user?.role === 'admin' || user?.role === 'developer') && online
+  const canUpload = Boolean(script?.can_manage) && online
 
   const loadPresets = useCallback(() => {
     if (!online) return
@@ -82,20 +81,35 @@ export default function ScriptDetail() {
       setSavedParams(loadSavedParams(id))
       return
     }
-    Promise.all([
-      api.get(`/api/scripts/${id}`),
-      api.get(`/api/scripts/${id}/versions`),
-      api.get('/api/environments'),
-    ]).then(([s, v, e]) => {
+    api.get(`/api/scripts/${id}`).then(async s => {
       setScript(s.data)
-      setVersions(v.data)
-      setEnvironments(e.data)
-      const defEnv = e.data.find(e => e.is_default)
-      if (defEnv) setSelectedEnvId(defEnv.id)
       setOfflineMode(false)
-    }).catch(() => {
-      // Backend failed mid-request — fall back to local cache
-      loadFromLocal()
+      const [versionResult, environmentResult] = await Promise.allSettled([
+        api.get(`/api/scripts/${id}/versions`),
+        api.get('/api/environments'),
+      ])
+      if (versionResult.status === 'fulfilled') setVersions(versionResult.value.data)
+      else {
+        setVersions([])
+        message.warning('版本记录暂时无法加载')
+      }
+      if (environmentResult.status === 'fulfilled') {
+        const items = environmentResult.value.data
+        setEnvironments(items)
+        const defEnv = items.find(environment => environment.is_default)
+        if (defEnv) setSelectedEnvId(defEnv.id)
+      } else {
+        setEnvironments([])
+        message.warning('执行环境暂时无法加载')
+      }
+    }).catch(error => {
+      if (shouldFallbackToLocal(error)) return loadFromLocal()
+      const status = error.response?.status
+      if (status === 401) message.error('登录状态已失效')
+      else if (status === 403) message.error('无权访问该脚本')
+      else if (status === 404) message.error('脚本不存在或已无访问权限')
+      else message.error(error.response?.data?.detail || '加载脚本失败')
+      setScript(null)
     }).finally(() => setLoading(false))
 
     setSavedParams(loadSavedParams(id))
@@ -197,7 +211,7 @@ export default function ScriptDetail() {
   if (loading) return <Spin />
   if (!script) return <div>脚本不存在</div>
 
-  const config = script.config_json ? JSON.parse(script.config_json) : {}
+  const config = parseScriptConfig(script.config_json)
   const paramDefs = config.params || []
 
   return (
@@ -212,6 +226,7 @@ export default function ScriptDetail() {
       <Descriptions bordered size="small" column={1} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="描述">{script.description}</Descriptions.Item>
         <Descriptions.Item label="分类">{script.category}</Descriptions.Item>
+        <Descriptions.Item label="可见分组">{script.groups?.length ? script.groups.map(group => <Tag key={group.id}>{group.name}</Tag>) : <span style={{ color: '#999' }}>未分组</span>}</Descriptions.Item>
         <Descriptions.Item label="版本">{formatScriptVersion(script.latest_semantic_version, script.latest_version)}</Descriptions.Item>
         <Descriptions.Item label="状态">
           <Tag color={script.status === 'active' ? 'green' : 'red'}>{script.status}</Tag>

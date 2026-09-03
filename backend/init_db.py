@@ -6,6 +6,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.models import User
+from app.services.groups import get_or_create_default_group
 from app.database import engine, SessionLocal
 from app.config import ADMIN_PASSWORD, ADMIN_USERNAME, DATABASE_URL, SCRIPTS_DIR, LOGS_DIR, PROJECT_ROOT
 from app.auth import hash_password
@@ -46,10 +47,13 @@ def init():
                 status="active",
             )
             db.add(admin)
-            db.commit()
+            db.flush()
             print("Created admin user: {} / ***".format(admin_user))
         else:
             print("Admin user already exists")
+        if not admin.groups:
+            admin.groups = [get_or_create_default_group(db, admin.id)]
+        db.commit()
     finally:
         db.close()
 

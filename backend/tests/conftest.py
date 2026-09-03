@@ -12,7 +12,7 @@ from app.models import Base
 from app.database import get_db
 from app.main import app
 from app.auth import hash_password
-from app.models import User
+from app.models import Group, User
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +63,13 @@ def _create_user(TestSession, username, password, role, display_name=None):
         status="active",
     )
     db.add(user)
+    db.flush()
+    group = db.query(Group).filter(Group.is_default == True, Group.is_deleted == False).first()
+    if not group:
+        group = Group(name="默认分组", status="active", is_default=True)
+        db.add(group)
+        db.flush()
+    user.groups = [group]
     db.commit()
     db.close()
 

@@ -1,14 +1,15 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User
+from app.models import Group, User
 from app.schemas import UserCreate, UserUpdate, UserDetail
 from app.auth import require_role, hash_password
 from app.services.audit import write_audit
+from app.services.groups import set_user_groups
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -36,6 +37,7 @@ def _protect_admin_transition(db: Session, user: User, role=None, status=None) -
 @router.get("", response_model=List[UserDetail])
 def list_users(
     search: str = Query(default="", max_length=100),
+    group_id: Optional[int] = Query(default=None),
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
@@ -44,6 +46,8 @@ def list_users(
     if keyword:
         pattern = f"%{keyword}%"
         query = query.filter(or_(User.username.ilike(pattern), User.display_name.ilike(pattern)))
+    if group_id is not None:
+        query = query.filter(User.groups.any(Group.id == group_id))
     return query.order_by(User.id.desc()).all()
 
 
@@ -69,6 +73,8 @@ def create_user(
         created_by=current_user.id,
     )
     db.add(user)
+    db.flush()
+    set_user_groups(db, user, req.group_ids, current_user.id)
     db.commit()
     db.refresh(user)
     write_audit(current_user.id, current_user.username, "create_user",
@@ -107,6 +113,12 @@ def update_user(
     if req.status is not None and req.status != user.status:
         changes.append(f"status={user.status} -> {req.status}")
         user.status = req.status
+    if req.group_ids is not None:
+        previous_ids = {group.id for group in user.groups}
+        set_user_groups(db, user, req.group_ids, current_user.id)
+        next_ids = {group.id for group in user.groups}
+        if previous_ids != next_ids:
+            changes.append(f"groups={sorted(previous_ids)} -> {sorted(next_ids)}")
     user.updated_by = current_user.id
     db.commit()
     db.refresh(user)

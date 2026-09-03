@@ -221,7 +221,7 @@ def test_poll_skips_script_download_when_another_agent_claims_first(monkeypatch)
     agent.poll_and_execute()
 
     assert requests_seen == [
-        ("get", "{}/api/runs?status=pending&limit=1".format(agent.BACKEND_URL)),
+        ("get", "{}/api/runs?status=pending&limit=1&mine_only=true".format(agent.BACKEND_URL)),
         ("post", "{}/api/runs/37/claim".format(agent.BACKEND_URL), {"agent_id": 11}),
     ]
     assert agent._current_run_id is None
@@ -266,7 +266,7 @@ def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
     agent.poll_and_execute()
 
     assert requests_seen[:2] == [
-        ("get", "{}/api/runs?status=pending&limit=1".format(agent.BACKEND_URL)),
+        ("get", "{}/api/runs?status=pending&limit=1&mine_only=true".format(agent.BACKEND_URL)),
         ("post", "{}/api/runs/38/claim".format(agent.BACKEND_URL), {"agent_id": 12}),
     ]
     assert requests_seen[2] == ("get", "{}/api/scripts/1".format(agent.BACKEND_URL))
@@ -409,6 +409,7 @@ def test_agent_iteration_stays_alive_offline_and_recovers_authentication(monkeyp
     monkeypatch.setattr(agent, "_check_offline_notification", lambda: events.append("notify"))
     monkeypatch.setattr(agent, "_check_and_stage_update", lambda: {"state": "idle"})
     monkeypatch.setattr(agent, "_get_update_status", lambda: {"state": "idle"})
+    monkeypatch.setattr(agent, "_sync_script_authorizations", lambda: False)
     agent._token = None
     agent._agent_id = None
     agent._last_update_check_time = 0
@@ -430,6 +431,7 @@ def test_authenticated_agent_checks_updates_on_start_and_every_six_hours(monkeyp
     monkeypatch.setattr(agent.time, "time", lambda: clock[0])
     monkeypatch.setattr(agent, "_check_and_stage_update", lambda: checks.append(clock[0]) or {"state": "idle"})
     monkeypatch.setattr(agent, "_sync_client_settings", lambda: False)
+    monkeypatch.setattr(agent, "_sync_script_authorizations", lambda: False)
     monkeypatch.setattr(agent, "_flush_pending_reports", lambda: None)
     monkeypatch.setattr(agent, "_flush_pending_log_uploads", lambda: None)
     monkeypatch.setattr(agent, "_check_local_runs", lambda: None)
@@ -458,6 +460,7 @@ def test_scheduled_check_does_not_install_when_update_waits_for_idle(monkeypatch
     monkeypatch.setattr(agent, "_install_staged_update", lambda: installs.append(True))
     monkeypatch.setattr(agent, "_get_update_status", lambda: {"state": "waiting-for-idle"})
     monkeypatch.setattr(agent, "_sync_client_settings", lambda: False)
+    monkeypatch.setattr(agent, "_sync_script_authorizations", lambda: False)
     monkeypatch.setattr(agent, "_flush_pending_reports", lambda: None)
     monkeypatch.setattr(agent, "_flush_pending_log_uploads", lambda: None)
     monkeypatch.setattr(agent, "_check_local_runs", lambda: None)
