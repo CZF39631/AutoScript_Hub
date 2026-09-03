@@ -52,6 +52,27 @@ def test_shutdown_request_enters_drain_mode_and_rejects_new_local_runs():
         agent._shutdown_when_idle = False
 
 
+def test_connected_run_completion_reports_status_and_shows_notification(monkeypatch):
+    reports = []
+    notifications = []
+    monkeypatch.setattr(agent, "_check_running_process", lambda: {
+        "status": "success",
+        "error": None,
+        "result": None,
+        "run_id": 21,
+        "log_path": None,
+        "script_dir": None,
+        "script_name": "通知测试脚本",
+    })
+    monkeypatch.setattr(agent, "_report_run_status", lambda run_id, update: reports.append((run_id, update)))
+    monkeypatch.setattr(agent, "_notify_execution_result", lambda name, status, error=None: notifications.append((name, status, error)))
+
+    agent.poll_and_execute()
+
+    assert reports == [(21, {"status": "success"})]
+    assert notifications == [("通知测试脚本", "success", None)]
+
+
 def test_poll_does_not_claim_new_backend_work_while_draining(monkeypatch):
     agent._shutdown_when_idle = True
     agent._running_proc = None

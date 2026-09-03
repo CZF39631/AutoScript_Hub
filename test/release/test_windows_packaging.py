@@ -18,6 +18,8 @@ def test_pyinstaller_builds_three_executables_in_one_collection():
     assert "COLLECT(" in spec
     assert "client/update/update-public-key.b64" in spec.replace("\\", "/")
     assert "autoscript-build" in spec
+    assert '"plyer.platforms.win.notification"' in spec
+    assert "plyer==2.1.0" in _read("client/requirements.txt")
 
 
 def test_updater_is_self_contained_before_it_is_copied_outside_install_tree():
