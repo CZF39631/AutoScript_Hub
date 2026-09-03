@@ -18,12 +18,25 @@ def request(method, url, token, **kwargs):
     return response.json() if response.content else {}
 
 
-def create_release(owner: str, repo: str, token: str, tag: str, body: str) -> str:
+def create_release(
+    owner: str,
+    repo: str,
+    token: str,
+    tag: str,
+    body: str,
+    target_commitish: str,
+) -> str:
     payload = request(
         "POST",
         _base_url(owner, repo),
         token,
-        data={"tag_name": tag, "name": tag, "body": body, "prerelease": "true"},
+        data={
+            "tag_name": tag,
+            "name": tag,
+            "body": body,
+            "target_commitish": target_commitish,
+            "prerelease": "true",
+        },
     )
     release_id = payload.get("id") if isinstance(payload, dict) else None
     if release_id is None or isinstance(release_id, bool) or not str(release_id).isdigit():
@@ -79,14 +92,24 @@ def main():
     parser.add_argument("--token", required=True)
     parser.add_argument("--tag")
     parser.add_argument("--release-id")
+    parser.add_argument("--target-commitish")
     parser.add_argument("--prerelease", choices=["true", "false"], default="false")
     parser.add_argument("--file", type=Path, action="append", default=[])
     parser.add_argument("--body", default="AutoScript Hub release")
     args = parser.parse_args()
     if args.command == "create":
-        if not args.tag:
-            parser.error("create requires --tag")
-        print(create_release(args.owner, args.repo, args.token, args.tag, args.body))
+        if not args.tag or not args.target_commitish:
+            parser.error("create requires --tag and --target-commitish")
+        print(
+            create_release(
+                args.owner,
+                args.repo,
+                args.token,
+                args.tag,
+                args.body,
+                args.target_commitish,
+            )
+        )
     elif args.command == "upload":
         if not args.release_id:
             parser.error("upload requires --release-id")

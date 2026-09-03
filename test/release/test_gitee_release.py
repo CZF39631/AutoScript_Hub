@@ -30,12 +30,15 @@ def test_create_returns_numeric_release_id_and_followups_use_it(tmp_path, monkey
     asset = tmp_path / "asset.zip"
     asset.write_bytes(b"asset")
 
-    release_id = gitee_release.create_release("owner", "repo", "token", "v0.9.0", "body")
+    release_id = gitee_release.create_release(
+        "owner", "repo", "token", "v0.9.0", "body", "commit-sha"
+    )
     gitee_release.upload_files("owner", "repo", "token", release_id, [asset])
     gitee_release.publish_release("owner", "repo", "token", release_id, prerelease=True)
     gitee_release.delete_release("owner", "repo", "token", release_id)
 
     assert release_id == "314"
+    assert calls[0][2]["data"]["target_commitish"] == "commit-sha"
     assert calls[1][0:2] == (
         "POST",
         "https://gitee.com/api/v5/repos/owner/repo/releases/314/attach_files",
@@ -60,7 +63,9 @@ def test_create_rejects_response_without_release_id(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="release id"):
-        gitee_release.create_release("owner", "repo", "token", "v0.9.0", "body")
+        gitee_release.create_release(
+            "owner", "repo", "token", "v0.9.0", "body", "commit-sha"
+        )
 
 
 def test_release_workflow_passes_created_gitee_release_id():
@@ -68,6 +73,7 @@ def test_release_workflow_passes_created_gitee_release_id():
 
     assert "id: release_hosts" in workflow
     assert "gitee_release_id=" in workflow
+    assert '--target-commitish "$GITEE_TARGET_COMMIT"' in workflow
     assert '--release-id "$GITEE_RELEASE_ID"' in workflow
     assert "steps.release_hosts.outputs.gitee_release_id" in workflow
     assert 'GH_PRERELEASE=(--prerelease)' in workflow
