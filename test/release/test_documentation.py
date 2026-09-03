@@ -12,7 +12,7 @@ def test_readme_links_all_09_entrypoints():
     readme = _read("README.md")
 
     assert "docker compose" in readme
-    assert "192.168" in readme
+    assert "http://<服务器IP>:8000" in readme
     assert "AutoScript-Hub-Setup-<version>.exe" in readme
     assert "Python 3.11.9" in readme
     assert "skills/autoscript-script-authoring" in readme

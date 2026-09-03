@@ -64,6 +64,8 @@ def test_external_login_provisions_local_user_and_returns_local_token(client, fr
         user = db.query(User).filter(User.external_subject == "external-001").one()
         assert user.auth_source == "external"
         assert user.display_name == "示例用户"
+        assert len(user.groups) == 1
+        assert user.groups[0].is_default is True
     finally:
         db.close()
 

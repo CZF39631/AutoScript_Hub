@@ -143,7 +143,11 @@ class UpdateService:
             try:
                 payload, signature = source.fetch()
                 manifest = UpdateManifest.from_bytes(payload, signature, self.public_key)
-                if manifest.channel != self.expected_channel:
+                channel_matches = (
+                    manifest.channel == self.expected_channel
+                    or (self.expected_channel == "beta" and manifest.channel == "stable")
+                )
+                if not channel_matches:
                     raise RuntimeError(
                         f"更新通道不匹配: 期望 {self.expected_channel}，收到 {manifest.channel}"
                     )

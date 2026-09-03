@@ -75,6 +75,7 @@ _last_update_check_time = 0
 _restart_requested = False
 _shutdown_when_idle = False
 _last_settings_sync_time = 0
+_last_script_access_sync_time = 0
 
 _CLIENT_SETTING_KEYS = {
     "server_url",
@@ -84,6 +85,7 @@ _CLIENT_SETTING_KEYS = {
     "browser_debug_port",
     "proxy",
     "pip_index_url",
+    "gitee_update_repository",
     "github_update_repository",
     "update_channel",
     "update_manifest_urls",
@@ -91,8 +93,10 @@ _CLIENT_SETTING_KEYS = {
 
 OFFLINE_NOTIFY_THRESHOLD_SEC = 30 * 60  # 30 min (design §5.9)
 UPDATE_CHECK_INTERVAL_SEC = 6 * 60 * 60
+SCRIPT_AUTHORIZATION_MAX_AGE_SEC = 7 * 24 * 60 * 60
 PENDING_REPORTS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_reports.json")
 PENDING_LOG_UPLOADS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_log_uploads.json")
+SCRIPT_AUTHORIZATIONS_FILE = str(_CLIENT_PATHS.config_dir / "script_authorizations.json")
 
 
 def _parse_result_literal(raw):
@@ -242,6 +246,8 @@ def authenticate(username, password):
             _token = data["token"]
             _user_id = data["user"]["id"]
             return True
+        if resp.status_code in (401, 403):
+            _invalidate_script_authorizations()
     except (requests.RequestException, OSError):
         pass
     return False
@@ -458,6 +464,22 @@ def _start_script_subprocess(script_dir, params, log_path, timeout, env_vars=Non
     return proc
 
 
+def _notify_execution_result(script_name, status, error=None):
+    """Notify completion without allowing notification failures to affect task state."""
+    try:
+        from client.agent.notifier import show_system_notification
+        name = script_name or "脚本"
+        if status == "success":
+            message = "{} 执行完成".format(name)
+        elif status == "cancelled":
+            message = "{} 已取消".format(name)
+        else:
+            message = "{} 执行失败：{}".format(name, error or "未知错误")
+        show_system_notification("AutoScript Hub", message)
+    except Exception as exc:
+        logger.warning("通知失败: %s", exc)
+
+
 def _check_running_process():
     """Check if the running process has finished. Returns result dict or None if still running."""
     global _running_proc, _running_info, _current_run_id
@@ -486,6 +508,7 @@ def _check_running_process():
                 "result": None,
                 "run_id": info.get("run_id"),
                 "log_path": info.get("log_path"),
+                "script_name": info.get("script_name"),
             }
         return None  # still running
 
@@ -529,6 +552,7 @@ def _check_running_process():
         "run_id": run_id,
         "log_path": log_path,
         "script_dir": info.get("script_dir"),
+        "script_name": info.get("script_name"),
     }
 
 
@@ -588,7 +612,8 @@ def send_heartbeat():
             _last_online_time = time.time()
             _offline_notified = False
             return True
-        if resp.status_code == 401:
+        if resp.status_code in (401, 403):
+            _invalidate_script_authorizations()
             _token = None
     except (requests.RequestException, OSError):
         pass
@@ -708,6 +733,11 @@ def _report_run_status(run_id, update):
     return False
 
 
+def _report_run_failure(run_id, error, script_name=None):
+    _report_run_status(run_id, {"status": "failed", "error_msg": error})
+    _notify_execution_result(script_name, "failed", error)
+
+
 # === Local (offline) run management (design §5.x offline mode) ===
 # Local runs execute scripts already cached on this machine without consulting the
 # backend. Finished local runs are synced to the backend when connectivity returns,
@@ -751,6 +781,68 @@ def _load_local_runs():
         _local_runs = {}
 
 
+def _load_authorized_script_ids():
+    """Return a current server-confirmed authorization snapshot; fail closed otherwise."""
+    try:
+        with open(SCRIPT_AUTHORIZATIONS_FILE, "r", encoding="utf-8") as stream:
+            payload = json.load(stream)
+        if payload.get("server_url") != BACKEND_URL.rstrip("/"):
+            return set()
+        configured_username = str(_client_config.get("username") or "").strip()
+        if payload.get("username") != configured_username:
+            return set()
+        synced_at = datetime.fromisoformat(str(payload.get("synced_at") or ""))
+        age = time.time() - synced_at.timestamp()
+        if age < -300 or age > SCRIPT_AUTHORIZATION_MAX_AGE_SEC:
+            return set()
+        return {int(item) for item in payload.get("script_ids", [])}
+    except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
+        return set()
+
+
+def _write_script_authorizations(script_ids):
+    payload = {
+        "server_url": BACKEND_URL.rstrip("/"),
+        "username": str(_client_config.get("username") or "").strip(),
+        "user_id": _user_id,
+        "script_ids": sorted(set(int(item) for item in script_ids)),
+        "synced_at": datetime.now().isoformat(),
+    }
+    path = Path(SCRIPT_AUTHORIZATIONS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _invalidate_script_authorizations():
+    try:
+        _write_script_authorizations([])
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _sync_script_authorizations():
+    """Persist group authorization so revoked cached scripts stay unavailable offline."""
+    if not _token:
+        return False
+    try:
+        response = requests.get(
+            "{}/api/scripts/authorized-ids".format(BACKEND_URL),
+            headers=_headers(),
+            timeout=10,
+        )
+        if response.status_code in (401, 403):
+            _write_script_authorizations([])
+            return True
+        if response.status_code != 200:
+            return False
+        _write_script_authorizations(response.json())
+        return True
+    except (requests.RequestException, OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
 def list_local_scripts():
     """Scan local script cache; return [{id, latest_version, name, ...}].
 
@@ -758,6 +850,7 @@ def list_local_scripts():
     For each, we parse main.py's config() to surface metadata to the offline UI.
     """
     result = []
+    authorized_ids = _load_authorized_script_ids()
     if not os.path.isdir(_SCRIPTS_DIR):
         return result
     for script_id_str in os.listdir(_SCRIPTS_DIR):
@@ -767,6 +860,8 @@ def list_local_scripts():
         try:
             script_id = int(script_id_str)
         except ValueError:
+            continue
+        if script_id not in authorized_ids:
             continue
         versions = []
         for v in os.listdir(script_dir):
@@ -814,6 +909,13 @@ def start_local_run(req):
     params = req.get("params") or {}
     if not script_id:
         return {"error": "script_id required"}
+    try:
+        script_id = int(script_id)
+    except (TypeError, ValueError):
+        return {"error": "invalid script_id"}
+    authorized_ids = _load_authorized_script_ids()
+    if script_id not in authorized_ids:
+        return {"error": "脚本授权已失效，请联网刷新市场权限"}
 
     script_dir = os.path.join(_SCRIPTS_DIR, str(script_id))
     if not os.path.isdir(script_dir):
@@ -973,17 +1075,7 @@ def _record_local_run_completion(info, status, error, result):
         )
     _save_local_runs()
 
-    # System bubble notification (design §5.5)
-    try:
-        from client.agent.notifier import show_system_notification
-        title = "AutoScript Hub"
-        name = rec.get("script_name") or "脚本"
-        if status == "success":
-            show_system_notification(title, "{} 执行完成".format(name))
-        else:
-            show_system_notification(title, "{} 执行失败:{}".format(name, error or "未知错误"))
-    except Exception as e:
-        logger.warning("通知失败: %s", e)
+    _notify_execution_result(rec.get("script_name"), status, error)
 
 
 def list_local_runs():
@@ -1098,6 +1190,7 @@ def _sync_local_runs_to_backend():
 def poll_and_execute():
     """Non-blocking poll: check running process or start new run."""
     global _running_proc, _running_info, _current_run_id
+    script_name = None
 
     # Upload live log bytes before other polling work.
     if _running_proc is not None and _running_info.get("run_id") and _running_info.get("log_path"):
@@ -1126,9 +1219,11 @@ def poll_and_execute():
                     os.remove(_running_proc._params_file)
                 except (OSError, AttributeError):
                     pass
+                cancelled_name = _running_info.get("script_name")
                 _running_proc = None
                 _current_run_id = None
                 _running_info = {}
+                _notify_execution_result(cancelled_name, "cancelled")
                 return  # next cycle picks up new pending runs
         except (requests.RequestException, OSError):
             pass  # best-effort: if check fails, normal timeout watchdog still applies
@@ -1139,6 +1234,7 @@ def poll_and_execute():
         run_id = result.pop("run_id", None)
         actual_log_path = result.pop("log_path", None)
         result_script_dir = result.pop("script_dir", None)
+        result_script_name = result.pop("script_name", None)
         if run_id:
             if actual_log_path:
                 _finish_log_upload(run_id, actual_log_path, agent_id=_agent_id)
@@ -1151,6 +1247,7 @@ def poll_and_execute():
                     ensure_ascii=False,
                 )
             _report_run_status(run_id, update)
+            _notify_execution_result(result_script_name, result["status"], result.get("error"))
         return  # Don't start new run yet (next poll cycle)
 
     # 2) If already running, don't start another
@@ -1164,7 +1261,7 @@ def poll_and_execute():
     # 3) Look for pending run
     try:
         resp = requests.get(
-            "{}/api/runs?status=pending&limit=1".format(BACKEND_URL),
+            "{}/api/runs?status=pending&limit=1&mine_only=true".format(BACKEND_URL),
             headers=_headers(),
             timeout=10,
         )
@@ -1194,14 +1291,16 @@ def poll_and_execute():
             timeout=10,
         )
         if script_resp.status_code != 200:
-            _report_run_status(
+            _report_run_failure(
                 run_id,
-                {"status": "failed", "error_msg": "Failed to load script metadata"},
+                "Failed to load script metadata",
+                "脚本 #{}".format(script_id),
             )
             _current_run_id = None
             return
 
         script = script_resp.json()
+        script_name = script.get("name") or "脚本 #{}".format(script_id)
         ver = script["latest_version"]
         script_dir = os.path.join(_SCRIPTS_DIR, str(script_id), str(ver))
         os.makedirs(_LOGS_DIR, exist_ok=True)
@@ -1217,7 +1316,7 @@ def poll_and_execute():
                 _install_downloaded_script(dl_resp.content, script_dir)
                 print("脚本已下载到 {}".format(script_dir))
             else:
-                _report_run_status(run_id, {"status": "failed", "error_msg": "Failed to download script files"})
+                _report_run_failure(run_id, "Failed to download script files", script_name)
                 _current_run_id = None
                 return
 
@@ -1266,7 +1365,7 @@ def poll_and_execute():
         if script_config:
             script_python, dep_error = prepare_script_environment(script_config, offline=False)
             if dep_error:
-                _report_run_status(run_id, {"status": "failed", "error_msg": dep_error})
+                _report_run_failure(run_id, dep_error, script_name)
                 _current_run_id = None
                 return
             python_executable = script_python
@@ -1277,10 +1376,11 @@ def poll_and_execute():
                 params_for_check = json.loads(run["params"]) if run.get("params") else {}
                 val_errors = _validate_run_params(param_defs, params_for_check)
                 if val_errors:
-                    _report_run_status(run_id, {
-                        "status": "failed",
-                        "error_msg": "参数校验失败: " + "; ".join(val_errors),
-                    })
+                    _report_run_failure(
+                        run_id,
+                        "参数校验失败: " + "; ".join(val_errors),
+                        script_name,
+                    )
                     _current_run_id = None
                     return
 
@@ -1300,12 +1400,17 @@ def poll_and_execute():
             "log_path": log_path,
             "timeout": timeout,
             "start_time": time.time(),
+            "script_name": script_name,
         }
         print("脚本执行已启动 (PID {}, 任务 {})".format(proc.pid, run_id))
 
     except Exception as e:
         if _current_run_id:
-            _report_run_status(_current_run_id, {"status": "failed", "error_msg": str(e)})
+            _report_run_failure(
+                _current_run_id,
+                str(e),
+                script_name,
+            )
         _current_run_id = None
 
 
@@ -1408,6 +1513,7 @@ def initialize_agent_runtime():
 def agent_iteration(username, password):
     """Run one online/offline Agent loop iteration without exiting on disconnect."""
     global _last_update_check_time, _restart_requested, _last_settings_sync_time
+    global _last_script_access_sync_time
 
     if not _token:
         if not authenticate(username, password):
@@ -1424,6 +1530,9 @@ def agent_iteration(username, password):
     if now - _last_settings_sync_time >= 60:
         if _sync_client_settings():
             _last_settings_sync_time = now
+    if now - _last_script_access_sync_time >= 60:
+        if _sync_script_authorizations():
+            _last_script_access_sync_time = now
 
     _flush_pending_reports()
     _flush_pending_log_uploads()

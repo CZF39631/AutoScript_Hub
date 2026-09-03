@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app import config
 from app.auth import hash_password
 from app.models import User
+from app.services.groups import set_user_groups
 
 
 class ExternalAuthError(RuntimeError):
@@ -123,6 +124,7 @@ def resolve_local_user(db: Session, identity: ExternalIdentity) -> User:
     db.add(user)
     try:
         db.flush()
+        set_user_groups(db, user, None)
     except IntegrityError as exc:
         db.rollback()
         raise ExternalIdentityNotAuthorized("External identity could not be provisioned") from exc

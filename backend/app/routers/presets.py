@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User, Script, UserPreset
 from app.auth import get_current_user
+from app.services.script_access import get_accessible_script_or_404
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +99,7 @@ def list_presets(
     db: Session = Depends(get_db),
 ):
     """Return both developer presets (read-only) and current user's personal presets."""
-    script = db.query(Script).filter(
-        Script.id == script_id, Script.is_deleted == False
-    ).first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在")
+    script = get_accessible_script_or_404(db, current_user, script_id)
 
     personal_rows = db.query(UserPreset).filter(
         UserPreset.user_id == current_user.id,
@@ -123,11 +120,7 @@ def create_preset(
     db: Session = Depends(get_db),
 ):
     """Save current user's personal preset for a script."""
-    script = db.query(Script).filter(
-        Script.id == script_id, Script.is_deleted == False
-    ).first()
-    if not script:
-        raise HTTPException(status_code=404, detail="脚本不存在")
+    get_accessible_script_or_404(db, current_user, script_id, require_active=True)
     if not req.name or not req.name.strip():
         raise HTTPException(status_code=400, detail="预设名称为必填项")
 

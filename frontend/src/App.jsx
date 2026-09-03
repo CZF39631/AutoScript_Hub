@@ -3,7 +3,7 @@ import { Layout, Menu, Button } from 'antd'
 import {
   DashboardOutlined, CodeOutlined, HistoryOutlined,
   UserOutlined, LogoutOutlined, AuditOutlined, BugOutlined, GlobalOutlined,
-  SettingOutlined
+  SettingOutlined, NotificationOutlined
 } from '@ant-design/icons'
 import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
@@ -20,6 +20,8 @@ import AuditLog from './pages/AuditLog'
 import Issues from './pages/Issues'
 import Environments from './pages/Environments'
 import Settings from './pages/Settings'
+import Updates from './pages/Updates'
+import ImportantUpdateNotice from './components/ImportantUpdateNotice'
 
 const { Sider, Content } = Layout
 
@@ -58,6 +60,7 @@ function AppLayout() {
     { key: '/issues', icon: <BugOutlined />, label: '问题工单' },
     { key: '/environments', icon: <GlobalOutlined />, label: '环境管理' },
     { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
+    { key: '/updates', icon: <NotificationOutlined />, label: '更新说明' },
   ]
 
   const adminItems = [
@@ -76,6 +79,7 @@ function AppLayout() {
     : loc.pathname.startsWith('/issues') ? '/issues'
     : loc.pathname.startsWith('/environments') ? '/environments'
     : loc.pathname.startsWith('/settings') ? '/settings'
+    : loc.pathname.startsWith('/updates') ? '/updates'
     : loc.pathname.startsWith('/scripts') ? '/scripts'
     : '/dashboard'
 
@@ -112,6 +116,7 @@ function AppLayout() {
       <Layout className="app-workspace">
         <OfflineBanner />
         <Content className="app-content">
+          <ImportantUpdateNotice />
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/scripts" element={<Scripts />} />
@@ -123,6 +128,7 @@ function AppLayout() {
             <Route path="/issues" element={<Issues />} />
             <Route path="/environments" element={<Environments />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/updates" element={<Updates />} />
             <Route path="*" element={<Navigate to="/dashboard" />} />
           </Routes>
         </Content>

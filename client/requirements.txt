@@ -2,3 +2,4 @@ requests==2.33.0
 pywebview==6.1
 packaging==26.0
 cryptography==50.0.1
+plyer==2.1.0

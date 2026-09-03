@@ -2,12 +2,14 @@ from typing import Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User, Run, Script, Issue
 from app.auth import get_current_user, require_role
 from app.services.audit import write_audit
+from app.services.script_access import accessible_script_ids, accessible_user_ids
 
 router = APIRouter(prefix="/api/issues", tags=["issues"])
 
@@ -82,6 +84,14 @@ def list_issues(
     q = db.query(Issue).filter(Issue.is_deleted == False)
     if current_user.role == "operator":
         q = q.filter(Issue.user_id == current_user.id)
+    elif current_user.role == "developer":
+        q = q.filter(or_(
+            Issue.user_id == current_user.id,
+            (
+                Issue.script_id.in_(accessible_script_ids(current_user))
+                & Issue.user_id.in_(accessible_user_ids(current_user))
+            ),
+        ))
     if status:
         q = q.filter(Issue.status == status)
     issues = q.order_by(Issue.created_at.desc()).limit(100).all()
@@ -100,7 +110,15 @@ def get_issue_log(
     if not issue:
         raise HTTPException(status_code=404, detail="问题工单不存在")
     if current_user.role == "operator" and issue.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权限访问")
+        raise HTTPException(status_code=404, detail="问题工单不存在或无访问权限")
+    if current_user.role == "developer" and issue.user_id != current_user.id:
+        allowed = db.query(Issue).filter(
+            Issue.id == issue.id,
+            Issue.script_id.in_(accessible_script_ids(current_user)),
+            Issue.user_id.in_(accessible_user_ids(current_user)),
+        ).first()
+        if not allowed:
+            raise HTTPException(status_code=404, detail="问题工单不存在或无访问权限")
 
     if not issue.run_id:
         return {"log": ""}
@@ -122,6 +140,14 @@ def resolve_issue(
     issue = db.query(Issue).filter(Issue.id == issue_id, Issue.is_deleted == False).first()
     if not issue:
         raise HTTPException(status_code=404, detail="问题工单不存在")
+    if current_user.role == "developer" and issue.user_id != current_user.id:
+        allowed = db.query(Issue).filter(
+            Issue.id == issue.id,
+            Issue.script_id.in_(accessible_script_ids(current_user)),
+            Issue.user_id.in_(accessible_user_ids(current_user)),
+        ).first()
+        if not allowed:
+            raise HTTPException(status_code=404, detail="问题工单不存在或无访问权限")
     issue.status = "resolved"
     issue.resolve_note = req.resolve_note
     issue.resolved_by = current_user.id
