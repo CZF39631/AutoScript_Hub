@@ -55,7 +55,8 @@ def upload_files(owner: str, repo: str, token: str, release_id: str, files) -> N
                 f"{_base_url(owner, repo)}/{release_id}/attach_files",
                 token,
                 files={"file": (path.name, stream)},
-                timeout=(30, 900),
+                # 单值同时放宽连接、写入和读取阶段；GitHub 到 Gitee 的大文件上行可能较慢。
+                timeout=900,
             )
 
 
