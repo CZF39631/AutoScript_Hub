@@ -138,12 +138,14 @@ def test_remote_upgrade_uses_ignored_local_config_and_verifies_the_result(tmp_pa
     module.build_archive(archive)
     with tarfile.open(archive) as bundle:
         names = set(bundle.getnames())
+        upgrade_script = bundle.extractfile("ops/server/upgrade.sh").read()
 
     assert config["TARGET_VERSION"] == "1.2.0"
     assert "ops/server/remote-upgrade.env" in gitignore
     assert "ops/server/upgrade.sh" in names
     assert "ops/server/backup_sqlite.py" in names
     assert not any("remote-upgrade.env" in name for name in names)
+    assert b"\r\n" not in upgrade_script
     assert "sha256sum" in script
     assert '"migration":"ok"' in script
     assert "cp -p \"$env_backup\" \"$env_file\"" in script

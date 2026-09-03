@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -166,7 +167,12 @@ def build_archive(output: Path) -> None:
                 "remote-upgrade.env.example",
                 "remote_upgrade.py",
             } and source.suffix in {".sh", ".py"}:
-                archive.add(source, arcname=f"ops/server/{source.name}")
+                archive_name = f"ops/server/{source.name}"
+                content = source.read_bytes().replace(b"\r\n", b"\n")
+                info = tarfile.TarInfo(archive_name)
+                info.size = len(content)
+                info.mode = 0o755 if source.suffix == ".sh" else 0o644
+                archive.addfile(info, io.BytesIO(content))
 
 
 def command_path(name: str) -> str:
@@ -254,8 +260,8 @@ def main() -> int:
         remote_command = "sh -s -- " + " ".join(shlex.quote(value) for value in remote_args)
         subprocess.run(
             [ssh, *connection, destination, remote_command],
-            input=REMOTE_SCRIPT,
-            text=True,
+            # Windows 文本管道会把 LF 改写为 CRLF，远程 /bin/sh 会把 \r 识别为参数内容。
+            input=REMOTE_SCRIPT.encode("utf-8"),
             check=True,
         )
     return 0
