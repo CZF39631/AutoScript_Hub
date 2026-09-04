@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import requests
 
 from release.scripts import gitee_release
 
@@ -41,28 +42,37 @@ def test_create_returns_numeric_release_id_and_followups_use_it(tmp_path, monkey
 
     assert release_id == "314"
     assert calls[0][2]["data"]["target_commitish"] == "commit-sha"
-    assert calls[1][0:2] == (
-        "POST",
-        "https://gitee.com/api/v5/repos/owner/repo/releases/314/attach_files",
-    )
-    assert calls[1][2]["timeout"] == 900
-    assert calls[2][0:2] == (
-        "GET",
-        "https://gitee.com/api/v5/repos/owner/repo/releases/314",
-    )
-    assert calls[2][2]["params"]["access_token"] == "token"
-    assert calls[3][0:2] == (
-        "PATCH",
-        "https://gitee.com/api/v5/repos/owner/repo/releases/314",
-    )
-    assert calls[3][2]["data"]["prerelease"] == "true"
-    assert calls[3][2]["data"]["tag_name"] == "v0.9.0"
-    assert calls[3][2]["data"]["body"] == "body"
-    assert calls[4][0:2] == (
-        "DELETE",
-        "https://gitee.com/api/v5/repos/owner/repo/releases/314",
-    )
+    upload_calls = [call for call in calls if call[0] == "POST" and call[1].endswith("/attach_files")]
+    assert len(upload_calls) == 1
+    assert upload_calls[0][2]["timeout"] == 180
+    release_gets = [call for call in calls if call[0] == "GET" and call[1].endswith("/releases/314")]
+    assert release_gets
+    assert all(call[2]["params"]["access_token"] == "token" for call in release_gets)
+    patch = next(call for call in calls if call[0] == "PATCH")
+    assert patch[2]["data"]["prerelease"] == "true"
+    assert patch[2]["data"]["tag_name"] == "v0.9.0"
+    assert patch[2]["data"]["body"] == "body"
+    assert any(call[0] == "DELETE" and call[1].endswith("/releases/314") for call in calls)
     assert all("/releases/v0.9.0" not in url for _, url, _ in calls)
+
+
+def test_upload_timeout_is_treated_as_success_when_asset_appears(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "POST":
+            raise requests.Timeout("response lost")
+        uploaded = any(call[0] == "POST" for call in calls)
+        return FakeResponse({"assets": [{"name": "asset.bin"}]} if uploaded else {"assets": []})
+
+    monkeypatch.setattr(gitee_release.requests, "request", fake_request)
+    asset = tmp_path / "asset.bin"
+    asset.write_bytes(b"asset")
+
+    gitee_release.upload_files("owner", "repo", "token", "314", [asset], retry_delay=0)
+
+    assert len([call for call in calls if call[0] == "POST"]) == 1
 
 
 def test_create_rejects_response_without_release_id(monkeypatch):

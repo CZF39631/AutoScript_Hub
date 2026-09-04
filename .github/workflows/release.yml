@@ -126,7 +126,7 @@ jobs:
         run: test -n "${{ secrets.UPDATE_PRIVATE_KEY_B64 }}"
       - name: Restore signing key
         run: echo '${{ secrets.UPDATE_PRIVATE_KEY_B64 }}' | base64 -d > update-private-key.pem
-      - name: Split installer into deterministic 8 MiB Gitee assets
+      - name: Split installer into deterministic 2 MiB Gitee assets
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           python release/scripts/split_update_asset.py \
@@ -154,7 +154,7 @@ jobs:
             GITEE_RELEASE_ID="$(python release/scripts/gitee_release.py create --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --tag "$GITHUB_REF_NAME" --target-commitish "$GITEE_TARGET_COMMIT" --body "$GITEE_BODY")"
             test -n "$GITEE_RELEASE_ID"
             echo "gitee_release_id=$GITEE_RELEASE_ID" >> "$GITHUB_OUTPUT"
-            # Gitee 不上传完整 EXE，改为上传固定 8 MiB 分卷，避免大文件写入超时。
+            # Gitee 不上传完整 EXE，改为上传固定 2 MiB 分卷，并对超时执行幂等重试。
             GITEE_FILES=()
             for file in release-output/*.zip release-output/parts/*; do
               GITEE_FILES+=(--file "$file")

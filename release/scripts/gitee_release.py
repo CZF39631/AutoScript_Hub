@@ -3,6 +3,7 @@
 
 import argparse
 from pathlib import Path
+import time
 import requests
 
 
@@ -54,19 +55,60 @@ def create_release(
     return str(release_id)
 
 
-def upload_files(owner: str, repo: str, token: str, release_id: str, files) -> None:
+def _uploaded_asset_names(owner: str, repo: str, token: str, release_id: str) -> set[str]:
+    payload = request("GET", f"{_base_url(owner, repo)}/{release_id}", token, timeout=60)
+    if not isinstance(payload, dict):
+        return set()
+    assets = payload.get("assets", [])
+    return {
+        item.get("name")
+        for item in assets
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+
+
+def upload_files(
+    owner: str,
+    repo: str,
+    token: str,
+    release_id: str,
+    files,
+    *,
+    attempts: int = 3,
+    retry_delay: float = 2,
+) -> None:
     if not str(release_id).isdigit():
         raise ValueError("Gitee release id must be numeric")
+    if attempts < 1:
+        raise ValueError("upload attempts must be positive")
+    upload_url = f"{_base_url(owner, repo)}/{release_id}/attach_files"
     for path in files:
-        with path.open("rb") as stream:
-            request(
-                "POST",
-                f"{_base_url(owner, repo)}/{release_id}/attach_files",
-                token,
-                files={"file": (path.name, stream)},
-                # 单值同时放宽连接、写入和读取阶段；GitHub 到 Gitee 的大文件上行可能较慢。
-                timeout=900,
-            )
+        if path.name in _uploaded_asset_names(owner, repo, token, release_id):
+            continue
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                # 每次重试都重新打开文件，避免从上次中断位置继续提交损坏附件。
+                with path.open("rb") as stream:
+                    request(
+                        "POST",
+                        upload_url,
+                        token,
+                        files={"file": (path.name, stream)},
+                        timeout=180,
+                    )
+                break
+            except Exception as exc:
+                last_error = exc
+                # 上传可能已被 Gitee 接收、但响应在返回途中丢失；先查询再决定是否重传。
+                try:
+                    if path.name in _uploaded_asset_names(owner, repo, token, release_id):
+                        break
+                except Exception:
+                    pass
+                if attempt + 1 == attempts:
+                    raise RuntimeError(f"Gitee 附件上传失败（{path.name}，已重试 {attempts} 次）") from last_error
+                time.sleep(retry_delay * (2 ** attempt))
 
 
 def publish_release(
