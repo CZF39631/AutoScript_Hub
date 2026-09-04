@@ -63,12 +63,22 @@ def _handoff(paths: ClientPaths, installer: Path, version: str) -> None:
 
 
 def _sources(config: dict):
-    sources = [
+    channel = config.get("update_channel") or "stable"
+    sources = []
+    server_url = config.get("server_url")
+    if isinstance(server_url, str) and server_url.strip():
+        release_base = server_url.strip().rstrip("/") + "/api/release"
+        sources.append(
+            DirectManifestSource(
+                f"{release_base}/manifest/{channel}",
+                installer_base_url=f"{release_base}/installer",
+            )
+        )
+    sources.extend(
         DirectManifestSource(url)
         for url in config.get("update_manifest_urls", [])
         if isinstance(url, str) and url.strip()
-    ]
-    channel = config.get("update_channel") or "stable"
+    )
     gitee_repository = config.get("gitee_update_repository", "chuzifeng/auto-script_-hub")
     if gitee_repository:
         sources.append(GiteeReleaseSource(gitee_repository, channel=channel))

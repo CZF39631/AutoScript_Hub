@@ -13,6 +13,21 @@ def test_default_update_check_uses_gitee_without_querying_github():
     assert [type(source) for source in sources] == [GiteeReleaseSource]
 
 
+def test_server_cache_is_checked_before_gitee_and_exposes_installer_mirror():
+    sources = _sources({
+        "server_url": "http://192.168.1.106:8123/",
+        "gitee_update_repository": "chuzifeng/auto-script_-hub",
+        "update_channel": "beta",
+        "update_manifest_urls": [],
+    })
+
+    assert [type(source) for source in sources] == [DirectManifestSource, GiteeReleaseSource]
+    assert sources[0].manifest_url == "http://192.168.1.106:8123/api/release/manifest/beta"
+    assert sources[0].preferred_installer_url("setup.exe") == (
+        "http://192.168.1.106:8123/api/release/installer/setup.exe"
+    )
+
+
 def test_direct_source_reads_manifest_and_signature():
     responses = {
         "https://mirror.example/autoscript-hub-update.json": b"manifest",
