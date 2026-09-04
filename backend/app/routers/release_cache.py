@@ -76,6 +76,28 @@ def _verify_token(authorization: str | None) -> None:
 # Anonymous read endpoints
 # ----------------------------------------------------------------------
 
+@router.get("/manifest/{channel}.sig")
+async def get_channel_manifest_sig(channel: str):
+    """Serve the cached signature selected for stable or beta."""
+    if channel not in {"stable", "beta"}:
+        raise HTTPException(status_code=404, detail="更新通道不存在")
+    path = _get_cache().get_channel_file(channel, "autoscript-hub-update.json.sig")
+    if path is None:
+        raise HTTPException(status_code=404, detail="暂无缓存的更新签名")
+    return FileResponse(path, media_type="application/octet-stream")
+
+
+@router.get("/manifest/{channel}")
+async def get_channel_manifest(channel: str):
+    """Serve the cached manifest selected for stable or beta."""
+    if channel not in {"stable", "beta"}:
+        raise HTTPException(status_code=404, detail="更新通道不存在")
+    path = _get_cache().get_channel_file(channel, "autoscript-hub-update.json")
+    if path is None:
+        raise HTTPException(status_code=404, detail="暂无缓存的更新清单")
+    return FileResponse(path, media_type="application/json")
+
+
 @router.get("/manifest")
 async def get_latest_manifest():
     """Serve the latest cached manifest JSON (anonymous)."""
@@ -100,7 +122,7 @@ async def get_latest_manifest_sig():
 async def get_installer(filename: str):
     """Serve a cached installer file by filename (anonymous)."""
     cache = _get_cache()
-    path = cache.get_file(None, filename)
+    path = cache.find_file(filename)
     if path is None:
         raise HTTPException(status_code=404, detail="安装包不存在")
     return FileResponse(path, media_type="application/octet-stream")

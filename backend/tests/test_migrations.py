@@ -30,7 +30,7 @@ def test_fresh_database_upgrades_to_head(tmp_path):
     assert status["ready"] is True
     assert {
         "users", "scripts", "runs", "agents", "user_presets", "user_settings",
-        "groups", "user_groups", "script_groups", "alembic_version",
+        "groups", "user_groups", "script_groups", "server_settings", "alembic_version",
     }.issubset(tables)
 
 
@@ -85,6 +85,35 @@ def test_group_migration_recovers_an_existing_default_name(tmp_path):
         )).scalar()
     assert tuple(row) == ("active", 1, 0)
     assert defaults == 1
+
+
+def test_server_settings_migration_seeds_singleton_and_constraints(tmp_path):
+    database_url = _sqlite_url(tmp_path / "server-settings.db")
+    config = alembic_config(database_url)
+    command.upgrade(config, "0004_grouped_marketplace")
+    # 0001 uses current metadata for fresh installs; dropping the table here
+    # reproduces an existing deployment created before 0005.
+    with create_engine(database_url).begin() as connection:
+        connection.execute(text("DROP TABLE server_settings"))
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    with engine.connect() as connection:
+        row = connection.execute(text(
+            "SELECT id, enabled, outbound_proxy, github_repository, interval_hours "
+            "FROM server_settings"
+        )).one()
+        assert tuple(row) == (1, 0, None, "CZF39631/AutoScript_Hub", 6)
+    with pytest.raises(Exception):
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO server_settings "
+                "(id, enabled, github_repository, interval_hours, updated_at) "
+                "VALUES (2, 0, 'owner/repo', 6, CURRENT_TIMESTAMP)"
+            ))
+    with pytest.raises(Exception):
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE server_settings SET interval_hours=169 WHERE id=1"))
 
 
 def test_legacy_schema_missing_required_column_is_rejected_before_stamp(tmp_path):

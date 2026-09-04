@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint, Table, Index
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint, Table, Index, CheckConstraint
 from sqlalchemy.orm import relationship, declarative_base  # type: ignore[attr-defined]
 
 Base = declarative_base()
@@ -262,3 +262,21 @@ class UserSettings(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
     settings_json = Column(Text, nullable=False, default="{}")
+
+
+class ServerSettings(Base):
+    """Persisted process-wide settings.  The database permits only row id=1."""
+
+    __tablename__ = "server_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_server_settings_singleton"),
+        CheckConstraint("interval_hours >= 1 AND interval_hours <= 168", name="ck_server_settings_interval"),
+    )
+
+    id = Column(Integer, primary_key=True, default=1)
+    enabled = Column(Boolean, nullable=False, default=False)
+    outbound_proxy = Column(String(2048), nullable=True)
+    github_repository = Column(String(255), nullable=False, default="CZF39631/AutoScript_Hub")
+    interval_hours = Column(Integer, nullable=False, default=6)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
