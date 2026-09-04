@@ -87,7 +87,7 @@ function AppLayout() {
     <Layout className="app-shell">
       <Sider width={224} theme="light" className="app-sidebar">
         <div className="app-brand">
-          <span className="app-brand__mark">A</span>
+          <img className="app-brand__mark" src="/app-icon.png" alt="" />
           <span>
             <strong>AutoScript</strong>
             <small>Hub</small>
