@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 
@@ -72,6 +73,8 @@ _offline_notified = False  # avoid spamming disconnect notifications
 _log_upload_offsets = {}  # run_id -> server-acknowledged UTF-8 byte offset
 _pending_log_uploads = {}  # run_id -> local log path requiring a final retry
 _last_update_check_time = 0
+_update_worker = None
+_update_worker_lock = threading.Lock()
 _restart_requested = False
 _shutdown_when_idle = False
 _last_settings_sync_time = 0
@@ -1459,17 +1462,40 @@ def _get_runtime_info():
         }
 
 
-def _install_staged_update():
+def _run_update_install_worker():
     global _restart_requested
     from client.agent.updater import install_staged_update
-    local_version = get_version()
-    result = install_staged_update(
-        current_version=local_version,
-        runtime_is_idle=lambda: _running_proc is None and _local_run_proc is None,
-    )
-    if result.get("state") == "installing":
-        _restart_requested = True
-    return result
+
+    try:
+        result = install_staged_update(
+            current_version=get_version(),
+            runtime_is_idle=lambda: _running_proc is None and _local_run_proc is None,
+        )
+        if result.get("state") == "installing":
+            _restart_requested = True
+    except Exception:
+        logger.exception("后台更新下载或安装启动失败")
+
+
+def _install_staged_update():
+    """Start download/verification in the background and return immediately."""
+    global _update_worker
+    with _update_worker_lock:
+        if _update_worker is not None and _update_worker.is_alive():
+            return _get_update_status()
+        persisted = _get_update_status()
+        _update_worker = threading.Thread(
+            target=_run_update_install_worker,
+            name="client-update-worker",
+            daemon=True,
+        )
+        _update_worker.start()
+        return {
+            **persisted,
+            "state": "downloading",
+            "version": persisted.get("version"),
+            "error": None,
+        }
 
 
 def request_shutdown_when_idle():

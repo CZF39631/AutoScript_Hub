@@ -8,6 +8,7 @@ import { useConnection } from '../contexts/ConnectionContext'
 
 const updateStateSummary = {
   available: '发现可用更新（尚未下载）',
+  downloading: '正在后台下载并验证更新',
   verified: '更新已下载并验证',
   'waiting-for-idle': '更新已就绪，脚本结束后请再次点击“下载并安装”',
   installing: '正在安装更新',
@@ -15,6 +16,7 @@ const updateStateSummary = {
 
 const updateStateColor = {
   available: 'blue',
+  downloading: 'processing',
   verified: 'green',
   'waiting-for-idle': 'orange',
   installing: 'processing',
@@ -46,6 +48,14 @@ export default function Settings() {
     loadUpdateStatus(localApi).then(setUpdateState).catch(() => {})
   }, [agentOnline, localApi])
 
+  useEffect(() => {
+    if (!agentOnline || updateState.state !== 'downloading') return undefined
+    const interval = setInterval(() => {
+      loadUpdateStatus(localApi).then(setUpdateState).catch(() => {})
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [agentOnline, localApi, updateState.state])
+
   const runUpdateAction = async (action) => {
     setUpdateBusy(true)
     try {
@@ -56,7 +66,8 @@ export default function Settings() {
       if (action === 'check') {
         if (result.state === 'available') message.info('发现可用更新，请点击“下载并安装”')
         else message.info('更新检查完成')
-      } else if (result.state === 'installing') message.success('更新安装已启动，客户端将自动重启')
+      } else if (result.state === 'downloading') message.info('已在后台下载并验证更新，你可以继续使用客户端')
+      else if (result.state === 'installing') message.success('更新安装已启动，客户端将自动重启')
       else if (result.state === 'waiting-for-idle') message.info('更新已就绪。脚本运行结束后，请再次点击“下载并安装”完成安装')
       else message.info('当前没有可用更新')
     } catch (error) {
@@ -191,7 +202,7 @@ export default function Settings() {
               <Button
                 type="primary"
                 icon={<DownloadOutlined />}
-                loading={updateBusy}
+                loading={updateBusy || updateState.state === 'downloading'}
                 disabled={!canInstallUpdate}
                 onClick={() => runUpdateAction('install')}
               >
