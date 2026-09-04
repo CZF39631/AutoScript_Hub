@@ -2,7 +2,7 @@ from client.agent.updater import _sources
 from client.update.sources import DirectManifestSource, GiteeReleaseSource, GitHubReleaseSource
 
 
-def test_default_source_order_prefers_gitee_before_github():
+def test_default_update_check_uses_gitee_without_querying_github():
     sources = _sources({
         "gitee_update_repository": "chuzifeng/auto-script_-hub",
         "github_update_repository": "CZF39631/AutoScript_Hub",
@@ -10,7 +10,7 @@ def test_default_source_order_prefers_gitee_before_github():
         "update_manifest_urls": [],
     })
 
-    assert [type(source) for source in sources] == [GiteeReleaseSource, GitHubReleaseSource]
+    assert [type(source) for source in sources] == [GiteeReleaseSource]
 
 
 def test_direct_source_reads_manifest_and_signature():

@@ -11,7 +11,7 @@ from typing import Dict
 
 from client.runtime.paths import ClientPaths
 from client.update.service import UpdateService
-from client.update.sources import DirectManifestSource, GiteeReleaseSource, GitHubReleaseSource
+from client.update.sources import DirectManifestSource, GiteeReleaseSource
 from client.update.state import UpdateStateStore
 from client.update.trust import load_update_public_key
 
@@ -72,9 +72,8 @@ def _sources(config: dict):
     gitee_repository = config.get("gitee_update_repository", "chuzifeng/auto-script_-hub")
     if gitee_repository:
         sources.append(GiteeReleaseSource(gitee_repository, channel=channel))
-    repository = config.get("github_update_repository", "CZF39631/AutoScript_Hub")
-    if repository:
-        sources.append(GitHubReleaseSource(repository, channel=channel))
+    # 版本检查只访问 Gitee，避免国内网络因 GitHub API 不可达而拖慢或误报失败。
+    # GitHub 完整安装包仍可由已验签清单列为下载阶段的最终兜底地址。
     return sources
 
 
