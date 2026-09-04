@@ -14,6 +14,7 @@ from client.update.download import download_verified_file, sha256_file
 from client.update.sources import http_get_bytes
 from client.update.state import UpdateResult, UpdateStateStore
 from shared.update_manifest import UpdateManifest
+from shared.version import parse_update_version
 
 
 def _default_is_pid_alive(pid: int) -> bool:
@@ -183,7 +184,7 @@ class UpdateService:
         target_version = persisted.get("version")
         if target_version is not None:
             try:
-                return Version(target_version) < Version(self.current_version)
+                return Version(target_version) < parse_update_version(self.current_version)
             except InvalidVersion:
                 pass
         return False

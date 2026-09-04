@@ -13,6 +13,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from packaging.version import InvalidVersion, Version
 
+from shared.version import parse_update_version
+
 
 class InvalidManifest(ValueError):
     pass
@@ -197,12 +199,12 @@ class UpdateManifest:
 
     def is_newer_than(self, current_version: str) -> bool:
         try:
-            return Version(self.version) > Version(current_version)
+            return Version(self.version) > parse_update_version(current_version)
         except InvalidVersion:
             return False
 
     def supports(self, current_version: str) -> bool:
         try:
-            return Version(current_version) >= Version(self.minimum_client_version)
+            return parse_update_version(current_version) >= Version(self.minimum_client_version)
         except InvalidVersion:
             return False

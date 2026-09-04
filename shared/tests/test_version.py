@@ -1,7 +1,10 @@
 import json
 
+import pytest
+from packaging.version import InvalidVersion, Version
+
 from shared import version
-from shared.version import DEV_VERSION, RELEASE_VERSION, get_channel, get_version
+from shared.version import DEV_VERSION, RELEASE_VERSION, get_channel, get_version, parse_update_version
 
 
 def test_release_and_development_versions_share_the_0_9_base():
@@ -34,6 +37,18 @@ def test_channel_can_be_explicit_or_derived(monkeypatch):
 
     monkeypatch.setenv("AUTOSCRIPT_VERSION", "1.1.0-beta1")
     assert get_channel() == "beta"
+
+
+def test_review_versions_are_ordered_before_their_preview_target():
+    assert parse_update_version("1.2.2-review.1") < Version("1.2.2")
+    assert parse_update_version("1.2.3-beta.2-review.1") < Version("1.2.3-beta.2")
+    assert parse_update_version("1.2.3-beta.2-review.2") > parse_update_version("1.2.3-beta.2-review.1")
+    assert Version("1.2.3-beta.1") > parse_update_version("1.2.2-review.1")
+
+
+def test_invalid_update_version_is_rejected():
+    with pytest.raises(InvalidVersion):
+        parse_update_version("not-a-version")
 
 
 def test_baked_server_build_identity_wins_over_runtime_environment(monkeypatch, tmp_path):
