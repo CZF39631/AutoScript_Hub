@@ -236,7 +236,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                 result = self._update_status(
                     callback, {"state": "idle", "error": "更新功能不可用"}
                 )
-                self._json(result, 200 if result.get("state") in {"installing", "waiting-for-idle"} else 409)
+                self._json(
+                    result,
+                    200 if result.get("state") in {"downloading", "installing", "waiting-for-idle"} else 409,
+                )
             except Exception as e:
                 self._json(
                     self._update_status(None, {"state": "idle", "error": str(e)}),

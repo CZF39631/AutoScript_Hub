@@ -1,5 +1,6 @@
 import io
 import os
+import threading
 import time
 import zipfile
 
@@ -469,6 +470,30 @@ def test_authenticated_agent_checks_updates_on_start_and_every_six_hours(monkeyp
     assert agent.agent_iteration("operator", "secret") is True
 
     assert checks == [1000.0, 1000.0 + agent.UPDATE_CHECK_INTERVAL_SEC]
+
+
+def test_install_update_starts_background_worker_and_returns_immediately(monkeypatch):
+    from client.agent import updater
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def install_staged_update(**kwargs):
+        started.set()
+        release.wait(timeout=3)
+        return {"state": "waiting-for-idle", "version": "1.2.3"}
+
+    monkeypatch.setattr(updater, "install_staged_update", install_staged_update)
+    monkeypatch.setattr(agent, "_get_update_status", lambda: {"state": "available", "version": "1.2.3"})
+    agent._update_worker = None
+
+    result = agent._install_staged_update()
+
+    assert result == {"state": "downloading", "version": "1.2.3", "error": None}
+    assert started.wait(timeout=1)
+    assert agent._update_worker.is_alive()
+    release.set()
+    agent._update_worker.join(timeout=2)
 
 
 def test_scheduled_check_does_not_install_when_update_waits_for_idle(monkeypatch):
