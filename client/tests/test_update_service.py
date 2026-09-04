@@ -343,6 +343,7 @@ def test_successful_fallback_does_not_report_an_earlier_source_error(tmp_path):
     assert result.version == "0.9.1"
     assert result.error == ""
     assert service.store.read()["error"] == ""
+    assert service.store.read()["version"] == "0.9.1"
 
 
 def test_beta_channel_accepts_stable_manifest(tmp_path):
