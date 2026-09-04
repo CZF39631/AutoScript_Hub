@@ -346,6 +346,25 @@ def test_successful_fallback_does_not_report_an_earlier_source_error(tmp_path):
     assert service.store.read()["version"] == "0.9.1"
 
 
+def test_review_build_can_discover_a_published_beta_update(tmp_path):
+    key = Ed25519PrivateKey.generate()
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    paths = ClientPaths.from_environment(install_dir=tmp_path / "install", data_dir=tmp_path / "data")
+    service = UpdateService(
+        paths=paths,
+        current_version="1.2.2-review.1",
+        public_key=public,
+        sources=[_signed_source(key, "1.2.3-beta.1")],
+        expected_channel="beta",
+    )
+
+    result = service.check()
+
+    assert result.state == "available"
+    assert result.version == "1.2.3-beta.1"
+    assert service.store.read()["version"] == "1.2.3-beta.1"
+
+
 def test_beta_channel_accepts_stable_manifest(tmp_path):
     key = Ed25519PrivateKey.generate()
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
