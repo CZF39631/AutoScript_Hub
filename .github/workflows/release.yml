@@ -216,8 +216,11 @@ jobs:
           python release/scripts/verify_release_mirrors.py --directory release-output \
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           if [[ "$GITEE_ENABLED" == "true" ]]; then
-            curl -fsS "https://gitee.com/api/v5/repos/$GITEE_OWNER/$GITEE_REPO/releases/tags/$GITHUB_REF_NAME" \
-              | grep -F 'autoscript-hub-update.json' >/dev/null
+            GITEE_RELEASE_BASE="https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME"
+            python release/scripts/verify_chunked_update.py \
+              --manifest-url "$GITEE_RELEASE_BASE/autoscript-hub-update.json" \
+              --signature-url "$GITEE_RELEASE_BASE/autoscript-hub-update.json.sig" \
+              --public-key client/update/update-public-key.b64
           fi
       - name: Remove partial releases after any publication failure
         if: failure()

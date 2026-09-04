@@ -401,6 +401,14 @@ def test_semver_prerelease_tags_use_beta_channel_without_overwriting_stable_tags
 # LAN release-cache workflow security isolation
 # ---------------------------------------------------------------------------
 
+def test_release_anonymously_verifies_gitee_parts_after_publication():
+    release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+
+    assert "release/scripts/verify_chunked_update.py" in release
+    assert "--public-key client/update/update-public-key.b64" in release
+    assert release.index("Publish both release hosts") < release.index("verify_chunked_update.py")
+
+
 def test_lan_sync_job_runs_on_self_hosted_runner():
     release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
 
