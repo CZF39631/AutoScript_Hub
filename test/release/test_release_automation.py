@@ -200,9 +200,9 @@ def test_manifest_generator_signs_installer_for_runtime_parser(tmp_path):
     assert UpdateManifest.from_bytes(raw, signature, public).version == "0.9.1"
 
 
-def test_splitter_uses_deterministic_8_mib_parts_and_manifest_describes_them(tmp_path):
+def test_splitter_uses_deterministic_2_mib_parts_and_manifest_describes_them(tmp_path):
     installer = tmp_path / "AutoScript-Hub-Setup-0.9.1.exe"
-    installer.write_bytes((b"a" * (8 * 1024 * 1024)) + b"tail")
+    installer.write_bytes((b"a" * (2 * 1024 * 1024)) + b"tail")
     parts = tmp_path / "parts"
     completed = subprocess.run(
         [
@@ -221,7 +221,7 @@ def test_splitter_uses_deterministic_8_mib_parts_and_manifest_describes_them(tmp
         installer.name + ".part0001",
         installer.name + ".part0002",
     ]
-    assert [path.stat().st_size for path in created] == [8 * 1024 * 1024, 4]
+    assert [path.stat().st_size for path in created] == [2 * 1024 * 1024, 4]
     assert b"".join(path.read_bytes() for path in created) == installer.read_bytes()
 
     key = Ed25519PrivateKey.generate()

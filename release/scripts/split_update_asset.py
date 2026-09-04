@@ -5,7 +5,8 @@ import argparse
 from pathlib import Path
 
 
-PART_SIZE = 8 * 1024 * 1024
+# Gitee 跨境附件上传对较大请求容易长时间无响应；小分卷降低单次重传成本。
+PART_SIZE = 2 * 1024 * 1024
 
 
 def split_asset(installer: Path, output: Path, part_size: int = PART_SIZE) -> list[Path]:
