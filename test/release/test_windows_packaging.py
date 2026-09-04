@@ -140,12 +140,12 @@ def test_environment_ui_uses_managed_runtime_instead_of_arbitrary_venv_paths():
     assert "/detect-python-versions" not in page
 
 
-def test_settings_ui_exposes_public_and_lan_update_sources():
+def test_settings_ui_exposes_gitee_and_lan_update_sources():
     page = _read("frontend/src/pages/Settings.jsx")
 
     assert "gitee_update_repository" in page
     assert "chuzifeng/auto-script_-hub" in page
-    assert "github_update_repository" in page
+    assert "github_update_repository" not in page
     assert "update_manifest_urls" in page
     assert "Gitee" in page
     assert "局域网" in page
