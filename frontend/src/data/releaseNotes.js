@@ -1,23 +1,36 @@
 export const currentRelease = {
-  id: 'v1.2.3-beta.1',
+  id: 'v1.2.3-beta.2',
   important: false,
-  title: 'v1.2.3-beta.1：异步更新下载预览版',
-  summary: '更新检查仅访问 Gitee，下载安装改为后台任务，避免客户端在下载期间误判离线。',
+  title: 'v1.2.3-beta.2：更新状态修复预览版',
+  summary: '修复检查完成后仍显示“尚未检查”，并支持不发布到线上的本地 Review 更新测试版本。',
   sections: [
     {
-      title: '更新流程',
+      title: '更新状态',
       items: [
-        '版本检查仅访问 Gitee Release，不再因 GitHub API 在国内不可达而拖慢或误报失败。',
-        'GitHub 完整安装包仍保留为下载阶段的最终兜底，不参与版本检查。',
-        '点击“下载并安装”后立即转为后台任务，页面持续响应并每秒刷新更新状态。',
-        '下载期间仍可使用客户端，不再显示“此功能仅在 Windows 客户端中可用”的错误状态。',
-        '下载验证完成后继续由独立 AutoScriptUpdater.exe 静默安装、重启和回滚。',
+        '检查完成且暂无可用更新时持久化最新版本，刷新页面后仍正确显示“当前已是最新版本”。',
+        '支持 1.2.2-review.1 等本地 Review 版本参与更新比较，无需发布线上 Beta 即可验证更新链路。',
+        '构建测试不再向开发电脑发送模拟脚本失败的真实系统通知。',
+      ],
+    },
+    {
+      title: 'Beta.1 更新流程',
+      items: [
+        '版本检查仅访问 Gitee Release，GitHub 完整安装包仅作为下载阶段的最终兜底。',
+        '下载安装在后台执行，本地 Agent 在下载期间保持响应。',
+        '验证完成后由独立 AutoScriptUpdater.exe 静默安装、重启和回滚。',
       ],
     },
   ],
 }
 
 export const releaseHistory = [
+  {
+    id: 'v1.2.3-beta.1',
+    version: '1.2.3-beta.1',
+    title: '异步更新下载预览版',
+    summary: '更新检查仅访问 Gitee，下载安装改为后台任务。',
+    sections: [],
+  },
   {
     id: 'v1.2.2',
     version: '1.2.2',
