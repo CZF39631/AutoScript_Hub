@@ -95,7 +95,8 @@ def test_release_workflow_passes_created_gitee_release_id():
     assert 'gh release create "$GITHUB_REF_NAME" release-output/*.exe release-output/*.zip' in workflow
     assert "gitee_release_id=" in workflow
     assert '--target-commitish "$GITEE_TARGET_COMMIT"' in workflow
-    assert 'for file in release-output/*.zip release-output/parts/*' in workflow
+    assert 'for file in release-output/*.zip' in workflow
+    assert "release-output/parts/*" not in workflow
     assert 'GITEE_FILES+=(--file "$file")' in workflow
     assert '"${GITEE_FILES[@]}"' in workflow
     assert "release-output/*.exe release-output/*.zip)" not in workflow

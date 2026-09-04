@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, Optional
 from urllib.parse import unquote, urlsplit
 
 import httpx
+from packaging.version import InvalidVersion, Version
 
 from app.config import RELEASE_CACHE_DIR, RELEASE_CACHE_RETENTION, UPDATE_PUBLIC_KEY_BYTES
 from app.database import SessionLocal
@@ -154,9 +155,18 @@ def _release_asset_url(release: Dict[str, Any], repository: str, filename: str) 
 
 
 def _select_releases(releases: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    usable = [item for item in releases if isinstance(item, dict) and not item.get("draft")]
-    stable = next((item for item in usable if not item.get("prerelease")), None)
-    beta = next(iter(usable), None)
+    usable = []
+    for item in releases:
+        if not isinstance(item, dict) or item.get("draft"):
+            continue
+        try:
+            version = Version(str(item.get("tag_name", "")).lstrip("v"))
+        except InvalidVersion:
+            continue
+        usable.append((version, item))
+    usable.sort(key=lambda entry: entry[0], reverse=True)
+    stable = next((item for _, item in usable if not item.get("prerelease")), None)
+    beta = usable[0][1] if usable else None
     selected = {}
     if stable is not None:
         selected["stable"] = stable

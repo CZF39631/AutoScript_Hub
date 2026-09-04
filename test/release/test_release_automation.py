@@ -275,10 +275,9 @@ def test_workflows_cover_windows_dual_arch_images_and_both_release_hosts():
     assert '"${{ github.ref_name }}".TrimStart' not in release
     assert "write_checksums.py" in release
     assert 'pattern: "!*.dockerbuild"' in release
-    assert "split_update_asset.py" in release
-    assert "--parts-url-base" in release
-    assert "release-output/parts/*" in release
-    assert release.index("release-output/parts/*") < release.index("make_update_manifest.py")
+    assert "split_update_asset.py" not in release
+    assert "--parts-url-base" not in release
+    assert "release-output/parts/*" not in release
     assert "gh release create \"$GITHUB_REF_NAME\" release-output/*.exe" in release
 
 
@@ -401,12 +400,13 @@ def test_semver_prerelease_tags_use_beta_channel_without_overwriting_stable_tags
 # LAN release-cache workflow security isolation
 # ---------------------------------------------------------------------------
 
-def test_release_anonymously_verifies_gitee_parts_after_publication():
+def test_release_anonymously_verifies_gitee_signed_manifest_without_parts():
     release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
 
-    assert "release/scripts/verify_chunked_update.py" in release
-    assert "--public-key client/update/update-public-key.b64" in release
-    assert release.index("Publish both release hosts") < release.index("verify_chunked_update.py")
+    assert "gitee-manifest.json.sig" in release
+    assert "UpdateManifest.from_bytes" in release
+    assert "assert not manifest.asset_for('windows-x86_64').parts" in release
+    assert release.index("Publish both release hosts") < release.index("gitee-manifest.json.sig")
 
 
 def test_lan_sync_job_runs_on_self_hosted_runner():

@@ -126,13 +126,7 @@ jobs:
         run: test -n "${{ secrets.UPDATE_PRIVATE_KEY_B64 }}"
       - name: Restore signing key
         run: echo '${{ secrets.UPDATE_PRIVATE_KEY_B64 }}' | base64 -d > update-private-key.pem
-      - name: Split installer into deterministic 2 MiB Gitee assets
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          python release/scripts/split_update_asset.py \
-            --installer "release-output/AutoScript-Hub-Setup-$VERSION.exe" \
-            --output release-output/parts
-      - name: Create draft releases and upload installer/parts before manifest
+      - name: Create draft releases and upload assets before manifest
         id: release_hosts
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -154,9 +148,9 @@ jobs:
             GITEE_RELEASE_ID="$(python release/scripts/gitee_release.py create --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --tag "$GITHUB_REF_NAME" --target-commitish "$GITEE_TARGET_COMMIT" --body "$GITEE_BODY")"
             test -n "$GITEE_RELEASE_ID"
             echo "gitee_release_id=$GITEE_RELEASE_ID" >> "$GITHUB_OUTPUT"
-            # Gitee 不上传完整 EXE，改为上传固定 2 MiB 分卷，并对超时执行幂等重试。
+            # Gitee 只镜像轻量发布资产和签名清单；完整安装包由 GitHub 托管。
             GITEE_FILES=()
-            for file in release-output/*.zip release-output/parts/*; do
+            for file in release-output/*.zip; do
               GITEE_FILES+=(--file "$file")
             done
             python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" "${GITEE_FILES[@]}"
@@ -166,12 +160,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           INSTALLER="release-output/AutoScript-Hub-Setup-$VERSION.exe"
           URLS=(--url "https://github.com/${GITHUB_REPOSITORY}/releases/download/$GITHUB_REF_NAME/$(basename "$INSTALLER")")
-          PARTS=()
-          if [[ "$GITEE_ENABLED" == "true" ]]; then
-            PARTS=(--parts-dir release-output/parts --parts-url-base "https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME")
-          fi
-          # 完整 EXE 和所有分卷上传成功后才签署清单，避免发布不可达资产。
-          python release/scripts/make_update_manifest.py --version "$VERSION" --installer "$INSTALLER" --private-key update-private-key.pem --output release-output "${URLS[@]}" "${PARTS[@]}"
+          # GitHub 完整 EXE 上传成功后才签署清单，Gitee 仅镜像清单和签名。
+          python release/scripts/make_update_manifest.py --version "$VERSION" --installer "$INSTALLER" --private-key update-private-key.pem --output release-output "${URLS[@]}"
           python release/scripts/write_checksums.py --directory release-output
           gh release upload "$GITHUB_REF_NAME" release-output/autoscript-hub-update.json release-output/autoscript-hub-update.json.sig release-output/SHA256SUMS.txt --clobber
           if [[ "$GITEE_ENABLED" == "true" ]]; then
@@ -217,10 +207,20 @@ jobs:
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           if [[ "$GITEE_ENABLED" == "true" ]]; then
             GITEE_RELEASE_BASE="https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME"
-            python release/scripts/verify_chunked_update.py \
-              --manifest-url "$GITEE_RELEASE_BASE/autoscript-hub-update.json" \
-              --signature-url "$GITEE_RELEASE_BASE/autoscript-hub-update.json.sig" \
-              --public-key client/update/update-public-key.b64
+            curl -fsS "$GITEE_RELEASE_BASE/autoscript-hub-update.json" -o /tmp/gitee-manifest.json
+            curl -fsS "$GITEE_RELEASE_BASE/autoscript-hub-update.json.sig" -o /tmp/gitee-manifest.json.sig
+            python - <<'PY'
+          from pathlib import Path
+          from client.update.trust import load_update_public_key
+          from shared.update_manifest import UpdateManifest
+          manifest = UpdateManifest.from_bytes(
+              Path('/tmp/gitee-manifest.json').read_bytes(),
+              Path('/tmp/gitee-manifest.json.sig').read_bytes(),
+              load_update_public_key(),
+          )
+          assert not manifest.asset_for('windows-x86_64').parts
+          print(f'Gitee signed manifest verified: {manifest.version}')
+          PY
           fi
       - name: Remove partial releases after any publication failure
         if: failure()
