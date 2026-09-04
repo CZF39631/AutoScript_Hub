@@ -207,8 +207,8 @@ jobs:
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           if [[ "$GITEE_ENABLED" == "true" ]]; then
             GITEE_RELEASE_BASE="https://gitee.com/$GITEE_OWNER/$GITEE_REPO/releases/download/$GITHUB_REF_NAME"
-            curl -fsS "$GITEE_RELEASE_BASE/autoscript-hub-update.json" -o /tmp/gitee-manifest.json
-            curl -fsS "$GITEE_RELEASE_BASE/autoscript-hub-update.json.sig" -o /tmp/gitee-manifest.json.sig
+            curl -fLsS "$GITEE_RELEASE_BASE/autoscript-hub-update.json" -o /tmp/gitee-manifest.json
+            curl -fLsS "$GITEE_RELEASE_BASE/autoscript-hub-update.json.sig" -o /tmp/gitee-manifest.json.sig
             python - <<'PY'
           from pathlib import Path
           from client.update.trust import load_update_public_key

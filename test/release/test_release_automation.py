@@ -403,6 +403,7 @@ def test_semver_prerelease_tags_use_beta_channel_without_overwriting_stable_tags
 def test_release_anonymously_verifies_gitee_signed_manifest_without_parts():
     release = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
 
+    assert 'curl -fLsS "$GITEE_RELEASE_BASE/autoscript-hub-update.json"' in release
     assert "gitee-manifest.json.sig" in release
     assert "UpdateManifest.from_bytes" in release
     assert "assert not manifest.asset_for('windows-x86_64').parts" in release
