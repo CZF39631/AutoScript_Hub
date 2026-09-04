@@ -10,6 +10,12 @@ from client.agent import main as agent
 from client.agent.executor import execute_script
 
 
+@pytest.fixture(autouse=True)
+def _block_real_desktop_notifications(monkeypatch):
+    """客户端测试不得向开发机发送真实系统通知。"""
+    monkeypatch.setattr(agent, "_notify_execution_result", lambda *args, **kwargs: None)
+
+
 class _Response:
     def __init__(self, status_code, payload):
         self.status_code = status_code
@@ -278,7 +284,8 @@ def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
     monkeypatch.setattr(agent, "_check_running_process", lambda: None)
     monkeypatch.setattr(agent.os.path, "isdir", lambda path: True)
     monkeypatch.setattr(agent, "parse_script_config", lambda path: {})
-    monkeypatch.setattr(agent, "_start_script_subprocess", lambda *args, **kwargs: started.append(args) or object())
+    fake_process = type("FakeProcess", (), {"pid": 1234})()
+    monkeypatch.setattr(agent, "_start_script_subprocess", lambda *args, **kwargs: started.append(args) or fake_process)
     monkeypatch.setattr(agent, "_LOGS_DIR", str(tmp_path))
     agent._running_proc = None
     agent._running_info = {}
@@ -293,6 +300,8 @@ def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
     ]
     assert requests_seen[2] == ("get", "{}/api/scripts/1".format(agent.BACKEND_URL))
     assert len(started) == 1
+    assert agent._running_proc is fake_process
+    assert agent._current_run_id == 38
 
 
 def test_poll_fails_a_claimed_run_when_script_metadata_cannot_be_loaded(monkeypatch):
