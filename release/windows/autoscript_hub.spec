@@ -43,9 +43,10 @@ MERGE((ui, "AutoScriptHub", "AutoScriptHub"), (agent, "AutoScriptAgent", "AutoSc
 ui_pyz = PYZ(ui.pure)
 agent_pyz = PYZ(agent.pure)
 updater_pyz = PYZ(updater.pure)
+app_icon = str(ROOT / "release" / "windows" / "app-icon.ico")
 
-ui_exe = EXE(ui_pyz, ui.scripts, [], exclude_binaries=True, name="AutoScriptHub", console=False, disable_windowed_traceback=False)
-agent_exe = EXE(agent_pyz, agent.scripts, [], exclude_binaries=True, name="AutoScriptAgent", console=False, disable_windowed_traceback=False)
+ui_exe = EXE(ui_pyz, ui.scripts, [], exclude_binaries=True, name="AutoScriptHub", console=False, disable_windowed_traceback=False, icon=app_icon)
+agent_exe = EXE(agent_pyz, agent.scripts, [], exclude_binaries=True, name="AutoScriptAgent", console=False, disable_windowed_traceback=False, icon=app_icon)
 updater_exe = EXE(
     updater_pyz,
     updater.scripts,
@@ -56,6 +57,7 @@ updater_exe = EXE(
     name="AutoScriptUpdater",
     console=False,
     disable_windowed_traceback=False,
+    icon=app_icon,
 )
 
 bundle = COLLECT(

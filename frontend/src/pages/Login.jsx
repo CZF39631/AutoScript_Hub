@@ -71,7 +71,7 @@ export default function Login() {
     <div className="login-page">
       <Card className="login-card" bordered={false}>
         <div className="login-brand">
-          <div className="login-brand__icon">A</div>
+          <img className="login-brand__icon" src="/app-icon.png" alt="AutoScript Hub" />
           <h1>AutoScript Hub</h1>
           <p>安全、清晰地管理自动化脚本</p>
         </div>

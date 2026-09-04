@@ -20,6 +20,7 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
+SetupIconFile=app-icon.ico
 UninstallDisplayIcon={app}\AutoScriptHub.exe
 CloseApplications=yes
 RestartApplications=no
