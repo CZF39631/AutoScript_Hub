@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 import winreg
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Callable
 
 logger = logging.getLogger(__name__)
@@ -325,6 +325,7 @@ def start_local_server(
     AgentHandler.install_update_fn = install_update_fn
     AgentHandler.get_runtime_info_fn = get_runtime_info_fn
     AgentHandler.request_shutdown_fn = request_shutdown_fn
-    server = HTTPServer(("127.0.0.1", port), AgentHandler)
+    # 更新检查和安装可能持续数分钟；并发处理可确保连接状态、进度等接口仍可响应。
+    server = ThreadingHTTPServer(("127.0.0.1", port), AgentHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     return t

@@ -2,7 +2,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
-from http.server import HTTPServer
+from http.server import ThreadingHTTPServer
 
 import pytest
 
@@ -18,7 +18,7 @@ def _headers(**extra):
 
 def _server():
     AgentHandler.api_token = TOKEN
-    server = HTTPServer(("127.0.0.1", 0), AgentHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), AgentHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -131,6 +131,41 @@ def test_local_update_endpoints_expose_status_check_and_manual_install():
             with urllib.request.urlopen(request, timeout=3) as response:
                 assert json.loads(response.read())["state"] == expected
     finally:
+        server.shutdown(); server.server_close()
+
+
+def test_connection_endpoint_remains_available_during_long_update_download():
+    started = threading.Event()
+    release = threading.Event()
+    AgentHandler.get_connection_status_fn = lambda: {"online": True}
+
+    def install():
+        started.set()
+        release.wait(timeout=3)
+        return {"state": "installing", "version": "1.2.2"}
+
+    AgentHandler.install_update_fn = install
+    server = _server()
+    request_thread = None
+    try:
+        base = "http://127.0.0.1:{}".format(server.server_port)
+        install_request = urllib.request.Request(
+            base + "/local/update/install", data=b"{}", headers=_headers(), method="POST",
+        )
+        request_thread = threading.Thread(
+            target=lambda: urllib.request.urlopen(install_request, timeout=5).read(),
+            daemon=True,
+        )
+        request_thread.start()
+        assert started.wait(timeout=1)
+
+        connection_request = urllib.request.Request(base + "/local/connection", headers=_headers())
+        with urllib.request.urlopen(connection_request, timeout=1) as response:
+            assert json.loads(response.read())["online"] is True
+    finally:
+        release.set()
+        if request_thread:
+            request_thread.join(timeout=2)
         server.shutdown(); server.server_close()
 
 
