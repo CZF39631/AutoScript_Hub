@@ -25,7 +25,7 @@ class AuditLogItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-@router.get("", response_model=list)
+@router.get("", response_model=list[AuditLogItem])
 def list_audit_logs(
     action: Optional[str] = None,
     username: Optional[str] = None,

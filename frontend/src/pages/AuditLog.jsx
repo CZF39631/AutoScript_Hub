@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Table, Input, Select, Space } from 'antd'
+import { Table, Input, Select, Space, message } from 'antd'
 import api from '../api/client'
 import { formatServerTime } from '../utils/dateTime'
 
@@ -32,7 +32,10 @@ export default function AuditLog() {
     if (action) params.set('action', action)
     if (username) params.set('username', username)
     params.set('limit', '200')
-    api.get(`/api/audit?${params.toString()}`).then(r => setLogs(r.data)).finally(() => setLoading(false))
+    api.get(`/api/audit?${params.toString()}`)
+      .then(r => setLogs(r.data))
+      .catch(error => message.error(error.response?.data?.detail || '加载审计日志失败'))
+      .finally(() => setLoading(false))
   }
 
   useEffect(load, [action, username])
