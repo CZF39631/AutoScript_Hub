@@ -7,6 +7,10 @@ on:
         description: Existing Gitee tag used for the temporary release
         required: true
         default: v1.2.0
+      cleanup_release_id:
+        description: Optional numeric Gitee release ID to delete instead of running smoke
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -23,7 +27,14 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
       - run: python -m pip install requests
+      - name: Delete an incomplete Gitee release
+        if: inputs.cleanup_release_id != ''
+        run: |
+          python release/scripts/gitee_release.py delete \
+            --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" \
+            --release-id "${{ inputs.cleanup_release_id }}"
       - name: Create, update and delete a temporary Gitee release
+        if: inputs.cleanup_release_id == ''
         env:
           TEST_TAG: ${{ inputs.tag }}
         shell: bash
