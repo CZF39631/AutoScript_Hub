@@ -268,7 +268,7 @@ class UpdateService:
             if matched_manifests
             else None
         )
-        self.store.transition("idle", error=error)
+        self.store.transition("idle", version=version, error=error)
         return UpdateResult("idle", version=version, error=error)
 
     def _cached_manifest_details(self) -> dict:
