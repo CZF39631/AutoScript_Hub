@@ -26,6 +26,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zipfile import BadZipFile, ZipFile
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 MANIFEST_NAME = "autoscript-hub-update.json"
 MANIFEST_SIG_NAME = "autoscript-hub-update.json.sig"
 INDEX_NAME = "index.json"
+CHANNELS = {"stable", "beta"}
+_PUBLISH_LOCK = threading.RLock()
 
 
 class ReleaseCacheError(ValueError):
@@ -86,14 +89,56 @@ class ReleaseCache:
         return self.cache_dir / INDEX_NAME
 
     def read_index(self) -> Dict[str, Any]:
-        """Return the current index, or an empty default if absent."""
+        """Return a normalized index, including per-channel latest pointers."""
+        default = {
+            "latest_version": None,
+            "versions": [],
+            "channels": {"stable": None, "beta": None},
+            "version_channels": {},
+        }
         try:
-            return json.loads(self._index_path.read_text(encoding="utf-8"))
+            raw = json.loads(self._index_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {"latest_version": None, "versions": []}
+            return default
+        if not isinstance(raw, dict):
+            return default
+        versions = raw.get("versions") if isinstance(raw.get("versions"), list) else []
+        versions = [value for value in versions if isinstance(value, str)]
+        mappings = raw.get("version_channels")
+        mappings = dict(mappings) if isinstance(mappings, dict) else {}
+        # Transparently adopt indexes written before channel support.
+        for version in versions:
+            if version in mappings:
+                continue
+            try:
+                manifest = json.loads(
+                    (self._version_dir(version) / MANIFEST_NAME).read_text(encoding="utf-8")
+                )
+                channel = manifest.get("channel")
+                if channel in CHANNELS:
+                    mappings[version] = [channel]
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                pass
+        normalized_mappings = {
+            version: [channel for channel in channels if channel in CHANNELS]
+            for version, channels in mappings.items()
+            if version in versions and isinstance(channels, list)
+        }
+        channels = raw.get("channels") if isinstance(raw.get("channels"), dict) else {}
+        channel_latest = {}
+        for channel in CHANNELS:
+            candidates = [v for v in versions if channel in normalized_mappings.get(v, [])]
+            candidates.sort(key=Version, reverse=True)
+            requested = channels.get(channel)
+            channel_latest[channel] = requested if requested in candidates else (candidates[0] if candidates else None)
+        return {
+            "latest_version": raw.get("latest_version") if raw.get("latest_version") in versions else (versions[0] if versions else None),
+            "versions": versions,
+            "channels": channel_latest,
+            "version_channels": normalized_mappings,
+        }
 
-    def _write_index(self, latest: Optional[str], versions: List[str]) -> None:
-        data = {"latest_version": latest, "versions": versions}
+    def _write_index(self, data: Dict[str, Any]) -> None:
         tmp = self._index_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self._index_path)
@@ -102,8 +147,13 @@ class ReleaseCache:
     # Public read helpers
     # ------------------------------------------------------------------
 
-    def latest_version(self) -> Optional[str]:
-        return self.read_index().get("latest_version")
+    def latest_version(self, channel: Optional[str] = None) -> Optional[str]:
+        index = self.read_index()
+        if channel is None:
+            return index.get("latest_version")
+        if channel not in CHANNELS:
+            return None
+        return index.get("channels", {}).get(channel)
 
     def list_versions(self) -> List[Dict[str, Any]]:
         """Return version metadata sorted newest-first."""
@@ -119,7 +169,7 @@ class ReleaseCache:
     def _version_dir(self, version: str) -> Path:
         return self.cache_dir / version
 
-    def get_file(self, version: Optional[str], filename: str) -> Optional[Path]:
+    def get_file(self, version: Optional[str], filename: str, channel: Optional[str] = None) -> Optional[Path]:
         """Safely resolve a cached file path.
 
         Returns ``None`` if the version or file does not exist.
@@ -127,7 +177,7 @@ class ReleaseCache:
         """
         if not _is_safe_name(filename):
             return None
-        resolved_version = version or self.latest_version()
+        resolved_version = version or self.latest_version(channel)
         if resolved_version is None or not _is_safe_name(resolved_version):
             return None
         try:
@@ -141,6 +191,19 @@ class ReleaseCache:
         except ValueError:
             return None
         return candidate if candidate.is_file() else None
+
+    def get_channel_file(self, channel: str, filename: str) -> Optional[Path]:
+        return self.get_file(None, filename, channel=channel)
+
+    def find_file(self, filename: str) -> Optional[Path]:
+        """Find a file by exact safe name in any retained version, newest first."""
+        if not _is_safe_name(filename):
+            return None
+        for item in self.list_versions():
+            path = self.get_file(item["version"], filename)
+            if path is not None:
+                return path
+        return None
 
     # ------------------------------------------------------------------
     # Upload validation + atomic publish
@@ -180,56 +243,83 @@ class ReleaseCache:
         except (BadZipFile, OSError) as exc:
             raise ReleaseCacheError(f"无效的 ZIP 压缩包: {exc}") from exc
 
+        return self._validate_staged(staging)
+
+    def _validate_staged(
+        self,
+        staging: Path,
+        expected_channel: Optional[str] = None,
+        publication_channel: Optional[str] = None,
+    ) -> Dict[str, Any]:
         manifest_path = staging / MANIFEST_NAME
         sig_path = staging / MANIFEST_SIG_NAME
         if not manifest_path.is_file():
-            raise ReleaseCacheError("压缩包缺少清单文件")
+            raise ReleaseCacheError("缺少清单文件")
         if not sig_path.is_file():
-            raise ReleaseCacheError("压缩包缺少签名文件")
-
-        payload = manifest_path.read_bytes()
-        signature = sig_path.read_bytes()
-
+            raise ReleaseCacheError("缺少签名文件")
+        if self.public_key is None:
+            raise ReleaseCacheDisabled("缺少更新公钥，无法验证 LAN 清单签名")
         try:
-            manifest = UpdateManifest.from_bytes(payload, signature, self.public_key)
-        except InvalidManifest as exc:
+            manifest = UpdateManifest.from_bytes(
+                manifest_path.read_bytes(), sig_path.read_bytes(), self.public_key
+            )
+        except (InvalidManifest, OSError) as exc:
             raise ReleaseCacheError(f"清单签名或格式无效: {exc}") from exc
+        if expected_channel == "stable" and manifest.channel != "stable":
+            raise ReleaseCacheError("stable 通道不能发布预发布清单")
+        if expected_channel not in (None, "stable", "beta"):
+            raise ReleaseCacheError("更新通道无效")
 
         asset = manifest.asset_for("windows-x86_64")
         installer_path = staging / asset.filename
         if not installer_path.is_file():
-            raise ReleaseCacheError(f"压缩包缺少安装包: {asset.filename}")
+            raise ReleaseCacheError(f"缺少安装包: {asset.filename}")
         if installer_path.stat().st_size != asset.size:
             raise ReleaseCacheError("安装包大小与清单不匹配")
-        actual_hash = _sha256_file(installer_path)
-        if actual_hash != asset.sha256:
+        if _sha256_file(installer_path) != asset.sha256:
             raise ReleaseCacheError("安装包 SHA-256 与清单不匹配")
 
-        # Reject unexpected extra files: the bundle must contain exactly the
-        # manifest, its signature, and the manifest-declared installer.
         expected_names = {MANIFEST_NAME, MANIFEST_SIG_NAME, asset.filename}
         actual_names = {p.name for p in staging.iterdir() if p.is_file()}
         extra = actual_names - expected_names
         if extra:
-            raise ReleaseCacheError(f"压缩包包含多余文件: {', '.join(sorted(extra))}")
-
-        # Validate version is usable as a directory name.
+            raise ReleaseCacheError(f"发布目录包含多余文件: {', '.join(sorted(extra))}")
         try:
             Version(manifest.version)
         except InvalidVersion as exc:
             raise ReleaseCacheError(f"清单版本不是有效 SemVer: {exc}") from exc
 
-        files = {
-            MANIFEST_NAME: manifest_path,
-            MANIFEST_SIG_NAME: sig_path,
-            asset.filename: installer_path,
-        }
         return {
             "staging_dir": staging,
             "version": manifest.version,
             "manifest": manifest,
-            "files": files,
+            "publication_channel": publication_channel or manifest.channel,
+            "files": {
+                MANIFEST_NAME: manifest_path,
+                MANIFEST_SIG_NAME: sig_path,
+                asset.filename: installer_path,
+            },
         }
+
+    def validate_files(
+        self,
+        manifest_path: Path,
+        signature_path: Path,
+        installer_path: Path,
+        channel: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate three already-downloaded files using the normal publish path."""
+        if not _is_safe_name(installer_path.name):
+            raise ReleaseCacheError("安装包文件名不安全")
+        staging = Path(tempfile.mkdtemp(prefix="release-cache-stage-", dir=str(self.cache_dir)))
+        try:
+            shutil.copy2(manifest_path, staging / MANIFEST_NAME)
+            shutil.copy2(signature_path, staging / MANIFEST_SIG_NAME)
+            shutil.copy2(installer_path, staging / installer_path.name)
+            return self._validate_staged(staging, expected_channel=channel, publication_channel=channel)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
 
     def publish(self, validated: Dict[str, Any]) -> str:
         """Atomically publish a validated bundle into the cache directory.
@@ -252,9 +342,9 @@ class ReleaseCache:
         files: Dict[str, Path] = validated["files"]
 
         target = self._version_dir(version)
-        # Unique sibling directory for assembling the complete file set.
-        publish_staging = self.cache_dir / f".publish-staging-{version}-{os.getpid()}"
-
+        publish_staging = Path(tempfile.mkdtemp(prefix=f".publish-staging-{version}-", dir=str(self.cache_dir)))
+        shutil.rmtree(publish_staging)
+        _PUBLISH_LOCK.acquire()
         try:
             # 1. Build the complete version directory in publish_staging.
             publish_staging.mkdir(parents=True, exist_ok=False)
@@ -274,47 +364,77 @@ class ReleaseCache:
 
             try:
                 os.replace(publish_staging, target)
-            except OSError:
-                # The rename of staging into target failed.  Restore the
-                # backup so the previous version remains visible.
+                # Update pointers only after the complete directory exists.  If
+                # writing the index fails, restore the previous directory too.
+                index = self.read_index()
+                publication_channel = validated.get("publication_channel", validated["manifest"].channel)
+                mappings = index.get("version_channels", {})
+                mapped_channels = set(mappings.get(version, []))
+                mapped_channels.add(publication_channel)
+                mappings[version] = sorted(mapped_channels)
+                index["version_channels"] = mappings
+                self._prune(index)
+            except Exception:
+                if target.exists():
+                    shutil.rmtree(target, ignore_errors=True)
                 if backup is not None and backup.exists():
                     os.replace(backup, target)
                 raise
 
-            # 3. Clean up the old version directory if we swapped one out.
             if backup is not None and backup.exists():
                 shutil.rmtree(backup, ignore_errors=True)
-
-            # 4. Update the index now that a complete version directory exists.
-            index = self.read_index()
-            versions = [v for v in index.get("versions", []) if v != version]
-            versions.append(version)
-            versions.sort(key=lambda v: Version(v), reverse=True)
-            self._write_index(versions[0] if versions else None, versions)
-
-            self._prune()
             return version
         finally:
-            # Always clean up both staging directories on exit.
             shutil.rmtree(staging, ignore_errors=True)
             shutil.rmtree(publish_staging, ignore_errors=True)
+            _PUBLISH_LOCK.release()
 
     def publish_bundle(self, bundle_path: Path) -> str:
         """Validate and publish in one call.  Returns the version string."""
-        validated = self.validate_bundle(bundle_path)
-        return self.publish(validated)
+        return self.publish(self.validate_bundle(bundle_path))
 
-    def _prune(self) -> None:
-        """Remove oldest versions exceeding the retention count."""
-        index = self.read_index()
-        versions: List[str] = index.get("versions", [])
-        versions.sort(key=lambda v: Version(v), reverse=True)
-        pruned = False
-        while len(versions) > self.retention:
-            old = versions.pop()
-            old_dir = self._version_dir(old)
-            shutil.rmtree(old_dir, ignore_errors=True)
-            pruned = True
-        if pruned:
-            latest = versions[0] if versions else None
-            self._write_index(latest, versions)
+    def publish_files(
+        self,
+        manifest_path: Path,
+        signature_path: Path,
+        installer_path: Path,
+        channel: Optional[str] = None,
+    ) -> str:
+        """Validate and atomically publish a manifest, signature and complete EXE."""
+        return self.publish(self.validate_files(manifest_path, signature_path, installer_path, channel))
+
+    def _prune(self, index: Optional[Dict[str, Any]] = None) -> None:
+        """Apply the global retention limit while preferring each channel's latest."""
+        index = index or self.read_index()
+        mappings: Dict[str, List[str]] = index.get("version_channels", {})
+        candidates = [version for version, channels in mappings.items() if channels]
+        candidates.sort(key=Version, reverse=True)
+        required = set()
+        for channel in CHANNELS:
+            channel_versions = [version for version in candidates if channel in mappings[version]]
+            if channel_versions:
+                required.add(channel_versions[0])
+        retained = sorted(required, key=Version, reverse=True)[:self.retention]
+        for version in candidates:
+            if len(retained) >= self.retention:
+                break
+            if version not in retained:
+                retained.append(version)
+        retained.sort(key=Version, reverse=True)
+        removed = (set(index.get("versions", [])) | set(mappings)) - set(retained)
+        for old in removed:
+            mappings.pop(old, None)
+        channel_latest = {}
+        for channel in CHANNELS:
+            available = [version for version in retained if channel in mappings.get(version, [])]
+            channel_latest[channel] = available[0] if available else None
+        index.update({
+            "latest_version": retained[0] if retained else None,
+            "versions": retained,
+            "channels": channel_latest,
+            "version_channels": mappings,
+        })
+        # Publish the new index before deleting files that it no longer references.
+        self._write_index(index)
+        for old in removed:
+            shutil.rmtree(self._version_dir(old), ignore_errors=True)

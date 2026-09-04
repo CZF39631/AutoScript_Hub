@@ -25,6 +25,8 @@ HEARTBEAT_TIMEOUT_SEC = 90
 
 # Module-level state for daily log cleanup
 _last_cleanup_date: Optional[str] = None
+_scheduler_lock = threading.Lock()
+_scheduler_thread: Optional[threading.Thread] = None
 
 
 def _ensure_aware(value: Optional[datetime]) -> Optional[datetime]:
@@ -37,10 +39,18 @@ def _ensure_aware(value: Optional[datetime]) -> Optional[datetime]:
 
 
 def start_scheduler() -> None:
-    """Start the background scheduler thread. Idempotent."""
-    t = threading.Thread(target=_scheduler_loop, daemon=True, name="autoscript-scheduler")
-    t.start()
-    logger.info("Background scheduler started (scan every %ss)", SCAN_INTERVAL_SEC)
+    """Start the heartbeat scheduler and independent update downloader once."""
+    global _scheduler_thread
+    with _scheduler_lock:
+        if _scheduler_thread is None or not _scheduler_thread.is_alive():
+            _scheduler_thread = threading.Thread(
+                target=_scheduler_loop, daemon=True, name="autoscript-scheduler"
+            )
+            _scheduler_thread.start()
+            logger.info("Background scheduler started (scan every %ss)", SCAN_INTERVAL_SEC)
+    # Network downloads run in another daemon and cannot delay heartbeat scans.
+    from app.server_update_cache import start_server_update_cache
+    start_server_update_cache()
 
 
 def _scheduler_loop() -> None:

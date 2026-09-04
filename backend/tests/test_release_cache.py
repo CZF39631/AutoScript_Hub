@@ -558,6 +558,46 @@ class TestRouterSyncValidation:
         assert len(versions_resp.json()["versions"]) == 3
 
 
+class TestChannelReadsAndRetainedInstaller:
+    def test_channel_manifests_and_retained_installers(self, release_env, client, tmp_path):
+        publications = [
+            ("1.0.0", b"stable-installer"),
+            ("0.9.9", b"beta-installer"),
+        ]
+        for version, content in publications:
+            filename = f"AutoScript-Hub-Setup-{version}.exe"
+            bundle = tmp_path / f"bundle-{version}.zip"
+            _make_bundle(
+                bundle,
+                version,
+                content,
+                f"https://github.com/example/repo/releases/download/v{version}/{filename}",
+                release_env["key"],
+            )
+            response = client.post(
+                "/api/release/sync",
+                content=bundle.read_bytes(),
+                headers=_auth_headers(release_env["token"]),
+            )
+            assert response.status_code == 201
+
+        stable = client.get("/api/release/manifest/stable")
+        beta = client.get("/api/release/manifest/beta")
+        assert stable.status_code == beta.status_code == 200
+        assert stable.json()["version"] == "1.0.0"
+        assert beta.json()["version"] == "0.9.9"
+        assert client.get("/api/release/manifest/stable.sig").status_code == 200
+        assert client.get("/api/release/manifest/beta.sig").status_code == 200
+        # 1.0.0 is the legacy latest pointer; 0.9.9 must still be found by name.
+        old_installer = client.get("/api/release/installer/AutoScript-Hub-Setup-0.9.9.exe")
+        assert old_installer.status_code == 200
+        assert old_installer.content == b"beta-installer"
+
+    def test_unknown_channel_is_not_served(self, release_env, client):
+        assert client.get("/api/release/manifest/nightly").status_code == 404
+        assert client.get("/api/release/manifest/nightly.sig").status_code == 404
+
+
 class TestRouterConstantTimeAuth:
     """Verify the auth uses constant-time comparison (hmac.compare_digest)."""
 
