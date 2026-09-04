@@ -82,6 +82,37 @@ def _service(tmp_path, idle):
     )
 
 
+def test_server_manifest_prefers_cached_installer_before_public_urls(tmp_path):
+    installer = b"cached-installer"
+    key = Ed25519PrivateKey.generate()
+    source = _signed_source(key, "0.9.1")
+    payload = json.loads(source.raw)
+    payload["assets"]["windows-x86_64"]["size"] = len(installer)
+    payload["assets"]["windows-x86_64"]["sha256"] = hashlib.sha256(installer).hexdigest()
+    source.raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    source.signature = key.sign(source.raw)
+    source.preferred_installer_url = lambda filename: f"http://server/api/release/installer/{filename}"
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    paths = ClientPaths.from_environment(install_dir=tmp_path / "install", data_dir=tmp_path / "data")
+    calls = []
+
+    def download(url, destination, size, digest):
+        calls.append(url)
+        destination.write_bytes(installer)
+
+    service = UpdateService(
+        paths=paths,
+        current_version="0.9.0",
+        public_key=public,
+        sources=[source],
+        http_download=download,
+    )
+
+    assert service.check().state == "available"
+    assert service.download().state == "verified"
+    assert calls == ["http://server/api/release/installer/AutoScript-Hub-Setup-0.9.1.exe"]
+
+
 def test_download_tries_gitee_then_github_and_persists_verified_state(tmp_path):
     service, attempts = _service(tmp_path, idle=True)
 

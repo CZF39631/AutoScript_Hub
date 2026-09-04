@@ -74,6 +74,7 @@ class UpdateService:
         self.pending_version = None
         self._manifest_payload: bytes | None = None
         self._manifest_signature: bytes | None = None
+        self._preferred_installer_url: str | None = None
         self._recover_discovered_update()
         self._recover_staged_update()
 
@@ -98,6 +99,8 @@ class UpdateService:
             self.pending_version = manifest.version
             self._manifest_payload = payload
             self._manifest_signature = signature
+            preferred_url = state.get("preferred_installer_url")
+            self._preferred_installer_url = preferred_url if isinstance(preferred_url, str) else None
             if state.get("state") == "downloading":
                 self.store.transition(
                     "available",
@@ -235,11 +238,15 @@ class UpdateService:
                 if manifest.is_newer_than(self.current_version):
                     if not manifest.supports(self.current_version):
                         raise RuntimeError("当前客户端低于该更新允许的最低版本")
-                    candidates.append((manifest, payload, signature))
+                    preferred_url = None
+                    preferred_url_factory = getattr(source, "preferred_installer_url", None)
+                    if callable(preferred_url_factory):
+                        preferred_url = preferred_url_factory(manifest.asset_for("windows-x86_64").filename)
+                    candidates.append((manifest, payload, signature, preferred_url))
             except Exception as exc:
                 errors.append(str(exc))
         if candidates:
-            manifest, payload, signature = max(
+            manifest, payload, signature, preferred_url = max(
                 candidates,
                 key=lambda item: Version(item[0].version),
             )
@@ -247,9 +254,12 @@ class UpdateService:
             self.pending_version = manifest.version
             self._manifest_payload = payload
             self._manifest_signature = signature
+            self._preferred_installer_url = preferred_url
+            preferred_details = {"preferred_installer_url": preferred_url} if preferred_url else {}
             self.store.transition(
                 "available",
                 version=manifest.version,
+                **preferred_details,
                 **self._manifest_cache(payload, signature),
             )
             return UpdateResult("available", version=manifest.version)
@@ -275,7 +285,10 @@ class UpdateService:
     def _cached_manifest_details(self) -> dict:
         if self._manifest_payload is None or self._manifest_signature is None:
             raise RuntimeError("缺少已验证的更新清单缓存")
-        return self._manifest_cache(self._manifest_payload, self._manifest_signature)
+        details = self._manifest_cache(self._manifest_payload, self._manifest_signature)
+        if self._preferred_installer_url:
+            details["preferred_installer_url"] = self._preferred_installer_url
+        return details
 
     @staticmethod
     def _valid_file(path: Path, size: int, digest: str) -> bool:
@@ -349,7 +362,18 @@ class UpdateService:
         asset = self.manifest.asset_for("windows-x86_64")
         errors = []
         installer = None
-        if asset.parts:
+        if self._preferred_installer_url:
+            try:
+                self._download_from_urls(
+                    [self._preferred_installer_url],
+                    self.paths.updates_dir / asset.filename,
+                    asset.size,
+                    asset.sha256,
+                )
+                installer = self.paths.updates_dir / asset.filename
+            except Exception as exc:
+                errors.append(f"服务器缓存下载失败: {exc}")
+        if installer is None and asset.parts:
             try:
                 installer = self._download_parts(asset)
             except Exception as exc:

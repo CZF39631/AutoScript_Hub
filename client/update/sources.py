@@ -51,12 +51,23 @@ def _asset_urls(release: dict):
 
 
 class DirectManifestSource:
-    def __init__(self, manifest_url: str, http_get: Callable[[str], bytes] = http_get_bytes):
+    def __init__(
+        self,
+        manifest_url: str,
+        http_get: Callable[[str], bytes] = http_get_bytes,
+        installer_base_url: str | None = None,
+    ):
         self.manifest_url = manifest_url
         self.http_get = http_get
+        self.installer_base_url = installer_base_url.rstrip("/") if installer_base_url else None
 
     def fetch(self) -> tuple[bytes, bytes]:
         return self.http_get(self.manifest_url), self.http_get(self.manifest_url + ".sig")
+
+    def preferred_installer_url(self, filename: str) -> str | None:
+        if self.installer_base_url is None:
+            return None
+        return f"{self.installer_base_url}/{filename}"
 
 
 class ReleaseSource:
