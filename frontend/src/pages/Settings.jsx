@@ -139,8 +139,8 @@ export default function Settings() {
           <Form.Item name="proxy" label="代理地址">
             <Input placeholder="如：http://127.0.0.1:7890" />
           </Form.Item>
-          <Form.Item name="pip_index_url" label="Python 依赖镜像（可选）">
-            <Input placeholder="如：https://pypi.tuna.tsinghua.edu.cn/simple" />
+          <Form.Item name="pip_index_url" label="Python 依赖镜像">
+            <Input placeholder="默认：https://pypi.tuna.tsinghua.edu.cn/simple" />
           </Form.Item>
           <Form.Item
             name="gitee_update_repository"

@@ -20,6 +20,9 @@ from client.runtime.paths import ClientPaths
 from client.runtime.python_runtime import PRIVATE_PYTHON_VERSION, private_python
 
 
+DEFAULT_PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+
 class EnvironmentUnavailable(RuntimeError):
     pass
 
@@ -60,7 +63,7 @@ def environment_fingerprint(
         "python": python_version,
         "platform": "windows-x86_64",
         "requirements": normalized_requirements(requirements),
-        "index_url": (index_url or "https://pypi.org/simple").rstrip("/"),
+        "index_url": (index_url or DEFAULT_PIP_INDEX_URL).rstrip("/"),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:32]
@@ -132,9 +135,14 @@ def _build_environment(
     _run([str(python_executable), "-m", "venv", str(staging)], timeout=180)
     environment_python = _environment_python(staging)
     if requirements:
-        install = [str(environment_python), "-m", "pip", "install"]
-        if index_url:
-            install.extend(["--index-url", index_url.rstrip("/")])
+        install = [
+            str(environment_python),
+            "-m",
+            "pip",
+            "install",
+            "--index-url",
+            (index_url or DEFAULT_PIP_INDEX_URL).rstrip("/"),
+        ]
         install.extend(requirements)
         _run(install, timeout=900)
     _run([str(environment_python), "-m", "pip", "check"], timeout=120)
@@ -179,7 +187,7 @@ def ensure_environment(
                 "fingerprint": fingerprint,
                 "python_version": PRIVATE_PYTHON_VERSION,
                 "requirements": normalized,
-                "index_url": (index_url or "https://pypi.org/simple").rstrip("/"),
+                "index_url": (index_url or DEFAULT_PIP_INDEX_URL).rstrip("/"),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             (staging / "environment.json").write_text(

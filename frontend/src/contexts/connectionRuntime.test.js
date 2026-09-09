@@ -1,7 +1,29 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { startConnectionPolling } from './connectionRuntime.js'
+import { AGENT_URLS, discoverAgent, startConnectionPolling } from './connectionRuntime.js'
+
+
+test('agent discovery falls back when the default port is unavailable', async () => {
+  const attempts = []
+  const api = {
+    defaults: {},
+    async get(url) {
+      attempts.push(url)
+      if (url.includes(':18080/')) throw new Error('port unavailable')
+      return { data: { agent_id: 'agent-1' } }
+    },
+  }
+
+  const response = await discoverAgent(api)
+
+  assert.equal(response.data.agent_id, 'agent-1')
+  assert.deepEqual(attempts, [
+    `${AGENT_URLS[0]}/local/connection`,
+    `${AGENT_URLS[1]}/local/connection`,
+  ])
+  assert.equal(api.defaults.baseURL, AGENT_URLS[1])
+})
 
 
 test('connection polling runs once immediately and then every 5 seconds', () => {

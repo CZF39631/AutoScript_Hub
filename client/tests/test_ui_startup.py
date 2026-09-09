@@ -1,4 +1,33 @@
+import errno
+
 from client.ui import main as ui
+
+
+def test_local_server_uses_next_port_when_default_is_unavailable(monkeypatch):
+    attempts = []
+
+    class FakeServer:
+        def __init__(self, address, _handler):
+            attempts.append(address[1])
+            if address[1] == 18081:
+                raise OSError(errno.EACCES, "port unavailable")
+
+        def serve_forever(self):
+            pass
+
+    class FakeThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(ui, "HTTPServer", FakeServer)
+    monkeypatch.setattr(ui.threading, "Thread", FakeThread)
+    monkeypatch.setattr(ui, "get_or_create_agent_token", lambda: "token")
+
+    assert ui.start_local_server("http://lan:8000") == 18082
+    assert attempts == [18081, 18082]
 
 
 def test_first_run_finishes_wizard_before_starting_the_main_webview(monkeypatch):
@@ -30,11 +59,13 @@ def test_configured_client_starts_one_main_webview(monkeypatch):
     window = Window()
     monkeypatch.setattr(ui, "is_setup_complete", lambda: True)
     monkeypatch.setattr(ui, "load_config", lambda: {"server_url": "http://lan:8000"})
-    monkeypatch.setattr(ui, "start_local_server", lambda url: events.append(("server", url)))
+    monkeypatch.setattr(
+        ui, "start_local_server", lambda url: events.append(("server", url)) or 18082
+    )
     monkeypatch.setattr(
         ui.webview,
         "create_window",
-        lambda *args, **kwargs: events.append("window") or window,
+        lambda *args, **kwargs: events.append(("window", args[1])) or window,
     )
 
     def start_webview():
@@ -50,7 +81,7 @@ def test_configured_client_starts_one_main_webview(monkeypatch):
     ) is True
     assert events == [
         ("server", "http://lan:8000"),
-        "window",
+        ("window", "http://127.0.0.1:18082/"),
         "main-webview",
         "loaded",
         "closed",
