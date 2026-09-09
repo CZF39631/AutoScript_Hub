@@ -45,7 +45,7 @@ BACKEND_URL = os.environ.get(
 )
 POLL_INTERVAL = 5
 LIVE_POLL_INTERVAL = 1
-LOCAL_PORT = 18080
+LOCAL_PORTS = (18080, *range(18091, 18100))
 
 # Local paths for script storage and logs (decoupled from backend)
 _SCRIPTS_DIR = os.environ.get(
@@ -1514,7 +1514,7 @@ def initialize_agent_runtime():
     _load_pending_log_uploads()
     _load_local_runs()
     server_thread = start_local_server(
-        LOCAL_PORT,
+        LOCAL_PORTS,
         _get_current_run_id,
         get_version_fn=get_version,
         api_token=get_or_create_agent_token(),

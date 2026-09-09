@@ -24,16 +24,23 @@ from shared.version import get_version
 
 
 logger = logging.getLogger(__name__)
+AGENT_PORTS = (18080, *range(18091, 18100))
 
 
 def _agent_request(path: str, *, method: str = "GET", data=None):
-    request = urllib.request.Request(
-        "http://127.0.0.1:18080" + path,
-        data=data,
-        method=method,
-        headers={"Authorization": "Bearer " + get_or_create_agent_token()},
-    )
-    return urllib.request.urlopen(request, timeout=2)
+    last_error = None
+    for port in AGENT_PORTS:
+        request = urllib.request.Request(
+            "http://127.0.0.1:{}{}".format(port, path),
+            data=data,
+            method=method,
+            headers={"Authorization": "Bearer " + get_or_create_agent_token()},
+        )
+        try:
+            return urllib.request.urlopen(request, timeout=1)
+        except Exception as exc:
+            last_error = exc
+    raise last_error or ConnectionError("本地 Agent 不可用")
 
 
 def _agent_is_running() -> bool:
@@ -86,6 +93,16 @@ def _request_agent_shutdown() -> bool:
         return False
 
 
+def _watch_agent(paths: ClientPaths, stop_event: threading.Event) -> None:
+    """Restart the packaged Agent when it exits and reconnect when it returns."""
+    while not stop_event.wait(5):
+        if not _agent_is_running():
+            try:
+                _start_agent(paths)
+            except Exception:
+                logger.exception("Failed to restart Agent")
+
+
 def _confirm_startup(
     paths: ClientPaths,
     version: str,
@@ -107,6 +124,7 @@ def _confirm_startup(
 
 def main():
     paths = ClientPaths.from_environment()
+    stop_event = threading.Event()
 
     def started():
         threading.Thread(
@@ -114,8 +132,13 @@ def main():
             args=(paths, get_version()),
             daemon=True,
         ).start()
+        threading.Thread(target=_watch_agent, args=(paths, stop_event), daemon=True).start()
 
-    if not start_ui(on_started=started, on_closed=_request_agent_shutdown) and is_setup_complete():
+    def closed():
+        stop_event.set()
+        _request_agent_shutdown()
+
+    if not start_ui(on_started=started, on_closed=closed) and is_setup_complete():
         subprocess.Popen([sys.executable], cwd=str(paths.install_dir), close_fds=True)
 
 
