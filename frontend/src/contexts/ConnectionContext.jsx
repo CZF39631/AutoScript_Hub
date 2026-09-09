@@ -1,13 +1,13 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
-import { localApi, startConnectionPolling } from './connectionRuntime'
+import { discoverAgent, localApi, startConnectionPolling } from './connectionRuntime'
 
 /**
  * Connection state for offline-mode UI (design §5.x offline support).
  *
  * Two endpoints matter:
  *   - Backend (via proxy /api/*): authoritative when online
- *   - Local Agent (http://127.0.0.1:18080/local/*): used when backend unreachable
+ *   - Local Agent (loopback fallback ports): used when backend unreachable
  *
  * Pages consult `useConnection()` to decide which source to call and whether to
  * show the offline banner.
@@ -43,9 +43,9 @@ export function ConnectionProvider({ children }) {
       setOnline(false)
     }
 
-    // 2) Local Agent reachable? (direct hit on 127.0.0.1:18080)
+    // 2) Discover the Local Agent across its loopback fallback ports.
     try {
-      const r = await localApi.get('/local/connection')
+      const r = await discoverAgent(localApi)
       setAgentOnline(true)
       setAgentId(r.data?.agent_id ?? null)
       setPendingSync(r.data?.pending_sync_count || 0)

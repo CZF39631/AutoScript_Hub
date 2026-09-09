@@ -13,6 +13,16 @@ def test_default_update_source_prefers_public_gitee_mirror(monkeypatch, tmp_path
     assert config["gitee_update_repository"] == "chuzifeng/auto-script_-hub"
     assert config["github_update_repository"] == "CZF39631/AutoScript_Hub"
     assert config["update_channel"] == "stable"
+    assert config["pip_index_url"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+
+def test_blank_saved_pip_source_uses_the_default_mirror(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
+    from client.ui import config_manager
+    config_manager = importlib.reload(config_manager)
+    config_manager.save_config({"pip_index_url": ""})
+
+    assert config_manager.load_config()["pip_index_url"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
 
 
 def test_config_manager_uses_mutable_client_data_root(monkeypatch, tmp_path):

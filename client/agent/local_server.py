@@ -82,7 +82,9 @@ def _detect_browsers():
 
 class AgentHandler(BaseHTTPRequestHandler):
     api_token = None
-    allowed_origin = "http://127.0.0.1:18081"
+    allowed_origins = {
+        "http://127.0.0.1:{}".format(port) for port in range(18081, 18091)
+    }
     get_status_fn = None
     get_version_fn = None
     # Offline execution callbacks (design §5.x offline mode): UI calls /local/* when backend unreachable
@@ -120,7 +122,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
     def _origin_allowed(self):
         origin = self.headers.get("Origin")
-        return origin is None or origin == type(self).allowed_origin
+        return origin is None or origin in type(self).allowed_origins
 
     def do_GET(self):
         if not self._origin_allowed():
@@ -271,7 +273,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         origin = self.headers.get("Origin")
-        if origin == type(self).allowed_origin:
+        if origin in type(self).allowed_origins:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.end_headers()
@@ -282,7 +284,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._json({"error": "forbidden origin"}, 403)
             return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", type(self).allowed_origin)
+        self.send_header("Access-Control-Allow-Origin", self.headers["Origin"])
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
@@ -329,6 +331,16 @@ def start_local_server(
     AgentHandler.get_runtime_info_fn = get_runtime_info_fn
     AgentHandler.request_shutdown_fn = request_shutdown_fn
     # 更新检查和安装可能持续数分钟；并发处理可确保连接状态、进度等接口仍可响应。
-    server = ThreadingHTTPServer(("127.0.0.1", port), AgentHandler)
+    ports = (port,) if isinstance(port, int) else tuple(port)
+    last_error = None
+    for candidate in ports:
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate), AgentHandler)
+            break
+        except OSError as exc:
+            last_error = exc
+    else:
+        raise last_error or OSError("没有可用的本地 Agent 端口")
     t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.server_port = candidate
     return t

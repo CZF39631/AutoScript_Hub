@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from client.runtime.environment_manager import (
+    DEFAULT_PIP_INDEX_URL,
     EnvironmentUnavailable,
     ensure_environment,
     environment_fingerprint,
@@ -30,6 +31,9 @@ def test_environment_fingerprint_is_stable_and_input_sensitive():
 
     assert first == reordered
     assert first != mirror
+    assert environment_fingerprint(["requests>=2.31"], "3.11.9", None) == environment_fingerprint(
+        ["requests>=2.31"], "3.11.9", DEFAULT_PIP_INDEX_URL
+    )
     assert len(first) == 32
 
 
@@ -59,7 +63,9 @@ def test_environment_build_is_transactional_and_reused(tmp_path, monkeypatch):
     assert reused.created is False
     assert created.path == reused.path
     assert len(builds) == 1
-    assert json.loads((created.path / "environment.json").read_text("utf-8"))["status"] == "ready"
+    metadata = json.loads((created.path / "environment.json").read_text("utf-8"))
+    assert metadata["status"] == "ready"
+    assert metadata["index_url"] == DEFAULT_PIP_INDEX_URL
     assert not list(paths.environments_dir.glob("*.tmp-*"))
 
 

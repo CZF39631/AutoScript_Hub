@@ -30,7 +30,7 @@ DEFAULT_CONFIG = {
     "default_browser_path": "",
     "browser_debug_port": 9222,
     "proxy": "",
-    "pip_index_url": "",
+    "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
     "gitee_update_repository": "chuzifeng/auto-script_-hub",
     "github_update_repository": "CZF39631/AutoScript_Hub",
     "update_channel": "stable",
@@ -67,6 +67,8 @@ def load_config():
     config = dict(DEFAULT_CONFIG)
     saved, source = _read_saved_config()
     config.update(saved)
+    if not str(config.get("pip_index_url", "")).strip():
+        config["pip_index_url"] = DEFAULT_CONFIG["pip_index_url"]
 
     # One-time migration from pre-1.1 plaintext passwords to Windows DPAPI.
     plaintext = str(saved.get("password", ""))

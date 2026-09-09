@@ -17,6 +17,26 @@ def _load_entry(monkeypatch):
     return module
 
 
+def test_agent_watchdog_restarts_a_stopped_agent(tmp_path, monkeypatch):
+    entry = _load_entry(monkeypatch)
+    events = []
+
+    class StopAfterOneCheck:
+        checks = 0
+
+        def wait(self, _seconds):
+            self.checks += 1
+            return self.checks > 1
+
+    monkeypatch.setattr(entry, "_agent_is_running", lambda: False)
+    monkeypatch.setattr(entry, "_start_agent", lambda paths: events.append(paths.install_dir))
+    paths = SimpleNamespace(install_dir=tmp_path)
+
+    entry._watch_agent(paths, StopAfterOneCheck())
+
+    assert events == [tmp_path]
+
+
 def test_startup_confirmation_does_not_write_marker_until_matching_agent_is_ready(
     tmp_path, monkeypatch
 ):
