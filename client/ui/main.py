@@ -12,7 +12,7 @@ from client.runtime.credentials import delete_credentials
 from client.runtime.local_auth import get_or_create_agent_token
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-LOCAL_PORT = 18081
+LOCAL_PORTS = range(18081, 18091)
 
 
 class LocalUIHandler(SimpleHTTPRequestHandler):
@@ -181,13 +181,22 @@ class Api:
 
 
 def start_local_server(backend_url):
-    """Start the local HTTP server that serves frontend + proxies API."""
+    """Start the local HTTP server on the first available desktop UI port."""
     LocalUIHandler.backend_url = backend_url
     LocalUIHandler.agent_api_token = get_or_create_agent_token()
-    server = HTTPServer(("127.0.0.1", LOCAL_PORT), LocalUIHandler)
+    last_error = None
+    for port in LOCAL_PORTS:
+        try:
+            server = HTTPServer(("127.0.0.1", port), LocalUIHandler)
+            break
+        except OSError as exc:
+            last_error = exc
+    else:
+        raise last_error or OSError("没有可用的本地 UI 端口")
+
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
-    return t
+    return port
 
 
 def start_ui(on_started=None, on_closed=None):
@@ -203,9 +212,9 @@ def start_ui(on_started=None, on_closed=None):
         return False
 
     # Start local server for frontend + API proxy
-    start_local_server(backend_url)
+    local_port = start_local_server(backend_url)
 
-    frontend_url = "http://127.0.0.1:{}/".format(LOCAL_PORT)
+    frontend_url = "http://127.0.0.1:{}/".format(local_port)
 
     api = Api()
     window = webview.create_window(

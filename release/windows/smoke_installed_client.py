@@ -52,6 +52,19 @@ def _wait_json(url: str, token_path: Path, timeout: float = 30) -> dict:
     raise RuntimeError(f"timed out waiting for {url}: {last_error}")
 
 
+def _wait_agent(path: str, token_path: Path, timeout: float = 30) -> tuple[str, dict]:
+    deadline = time.monotonic() + timeout
+    ports = (18080, *range(18091, 18100))
+    while time.monotonic() < deadline:
+        for port in ports:
+            base_url = f"http://127.0.0.1:{port}"
+            try:
+                return base_url, _wait_json(base_url + path, token_path, timeout=0.25)
+            except RuntimeError:
+                pass
+    raise RuntimeError("timed out waiting for Agent on fallback ports")
+
+
 def _wait_http(url: str, timeout: float = 30) -> bytes:
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
@@ -64,6 +77,18 @@ def _wait_http(url: str, timeout: float = 30) -> bytes:
             last_error = exc
         time.sleep(0.25)
     raise RuntimeError(f"timed out waiting for {url}: {last_error}")
+
+
+def _wait_desktop_ui(timeout: float = 30) -> tuple[str, bytes]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for port in range(18081, 18091):
+            url = f"http://127.0.0.1:{port}/"
+            try:
+                return url, _wait_http(url, timeout=0.25)
+            except RuntimeError:
+                pass
+    raise RuntimeError("timed out waiting for desktop UI on ports 18081-18090")
 
 
 def _wait_port_closed(url: str, token_path: Path | None = None, timeout: float = 10) -> None:
@@ -164,8 +189,8 @@ def main() -> int:
             startupinfo=startup,
         )
         started_pids.add(standalone.pid)
-        status = _wait_json("http://127.0.0.1:18080/status", token_path)
-        runtime = _wait_json("http://127.0.0.1:18080/local/runtime", token_path)
+        agent_url, status = _wait_agent("/status", token_path)
+        runtime = _wait_json(agent_url + "/local/runtime", token_path)
         if status.get("version") != args.expected_version:
             raise RuntimeError(f"unexpected installed Agent version: {status}")
         _assert_runtime(runtime)
@@ -173,7 +198,7 @@ def main() -> int:
         print("standalone_runtime=" + json.dumps(runtime, ensure_ascii=False, sort_keys=True))
         _terminate_pid(standalone.pid)
         started_pids.discard(standalone.pid)
-        _wait_port_closed("http://127.0.0.1:18080/status")
+        _wait_port_closed(agent_url + "/status", token_path)
 
         ui_process = subprocess.Popen(
             [str(ui)],
@@ -182,9 +207,9 @@ def main() -> int:
             startupinfo=startup,
         )
         started_pids.add(ui_process.pid)
-        html = _wait_http("http://127.0.0.1:18081/")
-        status = _wait_json("http://127.0.0.1:18080/status", token_path)
-        runtime = _wait_json("http://127.0.0.1:18080/local/runtime", token_path)
+        ui_url, html = _wait_desktop_ui()
+        agent_url, status = _wait_agent("/status", token_path)
+        runtime = _wait_json(agent_url + "/local/runtime", token_path)
         new_agents = _image_pids(agent.name) - baseline
         started_pids.update(new_agents)
         if b'id="root"' not in html:
@@ -193,12 +218,13 @@ def main() -> int:
             raise RuntimeError(f"UI-started Agent version mismatch: {status}")
         _assert_runtime(runtime)
         print(f"ui_pid={ui_process.pid}")
+        print(f"ui_url={ui_url}")
         print("ui_started_agent_status=" + json.dumps(status, ensure_ascii=False, sort_keys=True))
         print("ui_started_runtime=" + json.dumps(runtime, ensure_ascii=False, sort_keys=True))
         _terminate_pid(ui_process.pid)
         started_pids.discard(ui_process.pid)
-        _wait_port_closed("http://127.0.0.1:18081/")
-        status_after_ui_close = _wait_json("http://127.0.0.1:18080/status", token_path, timeout=10)
+        _wait_port_closed(ui_url)
+        status_after_ui_close = _wait_json(agent_url + "/status", token_path, timeout=10)
         if status_after_ui_close.get("version") != args.expected_version:
             raise RuntimeError(f"Agent stopped after forced UI termination: {status_after_ui_close}")
         print("agent_after_forced_ui_close=" + json.dumps(status_after_ui_close, ensure_ascii=False, sort_keys=True))

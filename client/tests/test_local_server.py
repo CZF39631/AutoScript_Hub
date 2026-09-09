@@ -6,6 +6,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
+from client.agent import local_server
 from client.agent.local_server import AgentHandler
 
 
@@ -21,6 +22,27 @@ def _server():
     server = ThreadingHTTPServer(("127.0.0.1", 0), AgentHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+def test_agent_server_uses_a_fallback_port(monkeypatch):
+    attempts = []
+
+    class FakeServer:
+        def __init__(self, address, _handler):
+            attempts.append(address[1])
+            if address[1] == 18080:
+                raise PermissionError("port unavailable")
+
+        def serve_forever(self):
+            pass
+
+    monkeypatch.setattr(local_server, "ThreadingHTTPServer", FakeServer)
+    thread = local_server.start_local_server(
+        (18080, 18091), lambda: None, api_token=TOKEN
+    )
+
+    assert thread.server_port == 18091
+    assert attempts == [18080, 18091]
 
 
 def test_status_endpoint_reports_running_state_and_agent_version():
@@ -59,15 +81,21 @@ def test_sensitive_endpoint_requires_token_and_rejects_foreign_origin():
         server.shutdown(); server.server_close()
 
 
-def test_preflight_only_allows_desktop_ui_origin():
+def test_preflight_allows_desktop_ui_fallback_ports_only():
     server = _server()
     try:
         base = "http://127.0.0.1:{}/local/execute".format(server.server_port)
-        request = urllib.request.Request(base, method="OPTIONS", headers={"Origin": "http://127.0.0.1:18081"})
-        with urllib.request.urlopen(request, timeout=3) as response:
-            assert response.status == 204
-            assert response.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:18081"
-            assert "Authorization" in response.headers["Access-Control-Allow-Headers"]
+        for origin in ("http://127.0.0.1:18081", "http://127.0.0.1:18082", "http://127.0.0.1:18090"):
+            request = urllib.request.Request(base, method="OPTIONS", headers={"Origin": origin})
+            with urllib.request.urlopen(request, timeout=3) as response:
+                assert response.status == 204
+                assert response.headers["Access-Control-Allow-Origin"] == origin
+                assert "Authorization" in response.headers["Access-Control-Allow-Headers"]
+
+        request = urllib.request.Request(base, method="OPTIONS", headers={"Origin": "http://127.0.0.1:18091"})
+        with pytest.raises(urllib.error.HTTPError) as foreign:
+            urllib.request.urlopen(request, timeout=3)
+        assert foreign.value.code == 403
 
         request = urllib.request.Request(base, method="OPTIONS", headers={"Origin": "https://evil.example"})
         with pytest.raises(urllib.error.HTTPError) as foreign:

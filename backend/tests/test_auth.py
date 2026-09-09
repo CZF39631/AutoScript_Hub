@@ -65,16 +65,30 @@ def test_protected_endpoint_no_token(client):
     assert resp.status_code == 401
 
 
-def test_desktop_ui_origin_is_allowed_for_direct_sse_requests(client):
+@pytest.mark.parametrize("port", [18081, 18082, 18090])
+def test_desktop_ui_origin_is_allowed_for_direct_sse_requests(client, port):
+    origin = "http://127.0.0.1:{}".format(port)
     response = client.options(
         "/api/runs/1/log/stream",
         headers={
-            "Origin": "http://127.0.0.1:18081",
+            "Origin": origin,
             "Access-Control-Request-Method": "GET",
         },
     )
     assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:18081"
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_origin_outside_desktop_ui_port_range_is_not_allowed(client):
+    response = client.options(
+        "/api/runs/1/log/stream",
+        headers={
+            "Origin": "http://127.0.0.1:18091",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
 
 
 def test_login_rate_limit_blocks_repeated_failures(client):
