@@ -100,7 +100,7 @@ export default function Issues() {
         onCancel={() => setDetailModal(null)} footer={null} width={700}>
         {detailModal && (
           <>
-            <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
+            <Descriptions bordered size="small" column={2} className="issue-detail__descriptions" style={{ marginBottom: 16 }}>
               <Descriptions.Item label="标题" span={2}>{detailModal.title}</Descriptions.Item>
               {detailModal.description && (
                 <Descriptions.Item label="描述" span={2}>{detailModal.description}</Descriptions.Item>
@@ -124,11 +124,13 @@ export default function Issues() {
               )}
               {detailModal.run_params && (
                 <Descriptions.Item label="执行参数" span={2}>
-                  <pre style={{ margin: 0, fontSize: 12 }}>{JSON.stringify(JSON.parse(detailModal.run_params), null, 2)}</pre>
+                  <pre className="issue-detail__params">{JSON.stringify(JSON.parse(detailModal.run_params), null, 2)}</pre>
                 </Descriptions.Item>
               )}
               {detailModal.resolve_note && (
-                <Descriptions.Item label="解决说明" span={2}>{detailModal.resolve_note}</Descriptions.Item>
+                <Descriptions.Item label="解决说明" span={2}>
+                  <div className="issue-detail__note">{detailModal.resolve_note}</div>
+                </Descriptions.Item>
               )}
             </Descriptions>
             {detailModal.run_id && (
