@@ -91,36 +91,48 @@ def run_update(
     store = UpdateStateStore(updates_dir)
     store.set_details(updater_pid=os.getpid())
     marker = updates_dir / "startup-ok.json"
-    try:
-        marker.unlink()
-    except FileNotFoundError:
-        pass
-    if not wait_for_processes(pids):
-        store.transition("rolled-back", error="等待客户端进程退出超时")
-        return EXIT_INSTALL_FAILED
 
-    installed = run_command(installer_command(installer))
-    if installed.returncode != 0:
+    def rollback(reason: str) -> int:
         if previous_installer.is_file() and run_command(installer_command(previous_installer)).returncode == 0:
             launch([str(ui_executable)])
-            store.transition("rolled-back", error=f"新安装器退出码 {installed.returncode}")
+            store.transition("rolled-back", error=reason)
             return EXIT_ROLLED_BACK
-        store.transition("rolled-back", error=f"新安装器退出码 {installed.returncode}，回退失败")
+        store.transition("rolled-back", error=f"{reason}，上一安装包回退失败")
         return EXIT_ROLLBACK_FAILED
 
-    store.transition("verifying-startup", version=expected_version)
-    launch([str(ui_executable)])
-    if wait_for_startup(marker, expected_version, 90):
-        shutil.copy2(installer, previous_installer)
-        store.transition("succeeded", version=expected_version)
-        return EXIT_OK
+    try:
+        try:
+            marker.unlink()
+        except FileNotFoundError:
+            pass
+        if not wait_for_processes(pids):
+            store.transition("rolled-back", error="等待客户端进程退出超时，未执行安装")
+            return EXIT_INSTALL_FAILED
 
-    if previous_installer.is_file() and run_command(installer_command(previous_installer)).returncode == 0:
-        launch([str(ui_executable)])
-        store.transition("rolled-back", error="新版本未写入启动成功标记")
-        return EXIT_ROLLED_BACK
-    store.transition("rolled-back", error="新版本启动失败且上一安装包回退失败")
-    return EXIT_ROLLBACK_FAILED
+        installed = run_command(installer_command(installer))
+        if installed.returncode != 0:
+            return rollback(f"新安装器退出码 {installed.returncode}")
+
+        store.transition("verifying-startup", version=expected_version, updater_pid=os.getpid())
+        try:
+            launch([str(ui_executable)])
+            started = wait_for_startup(marker, expected_version, 90)
+        except Exception as exc:
+            return rollback(f"新版本启动验证异常: {type(exc).__name__}: {exc}")
+        if started:
+            shutil.copy2(installer, previous_installer)
+            store.transition("succeeded", version=expected_version)
+            return EXIT_OK
+        return rollback("新版本未写入启动成功标记")
+    except Exception as exc:
+        # 'rolled-back' is the existing terminal failure state, not proof of
+        # restoration. In particular a command exception has unknown effects.
+        store.transition(
+            "rolled-back",
+            version=expected_version,
+            error=f"更新器异常退出: {type(exc).__name__}: {exc}；安装和数据回退未经确认",
+        )
+        return EXIT_ROLLBACK_FAILED
 
 
 def main(argv=None) -> int:

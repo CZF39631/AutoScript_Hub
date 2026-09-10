@@ -125,7 +125,7 @@ button, input, select, textarea { font: inherit; }
 .run-detail__descriptions .ant-descriptions-item-content { min-width: 0; overflow-wrap: anywhere; }
 .run-detail__params { margin: 0; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; }
 .issue-detail__descriptions .ant-descriptions-view table { width: 100%; table-layout: fixed; }
-.issue-detail__descriptions .ant-descriptions-item-label { width: 64px; }
+.issue-detail__descriptions .ant-descriptions-item-label { width: 96px; white-space: nowrap; }
 .issue-detail__descriptions .ant-descriptions-item-content { min-width: 0; overflow-wrap: anywhere; }
 .issue-detail__params { margin: 0; max-width: 100%; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; }
 .issue-detail__note { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }

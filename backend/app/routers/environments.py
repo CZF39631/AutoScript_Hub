@@ -62,14 +62,20 @@ class EnvItem(BaseModel):
 
 
 def _parse_extra(env):
-    """Parse extra_env JSON string to dict for response."""
-    item = EnvItem.model_validate(env)
-    if isinstance(env.extra_env, str):
+    """Normalize response data before validation without mutating the ORM row."""
+    extra = env.extra_env
+    if isinstance(extra, str):
         try:
-            item.extra_env = json.loads(env.extra_env)
-        except (json.JSONDecodeError, ValueError):
-            item.extra_env = {}
-    return item
+            extra = json.loads(extra)
+        except ValueError:
+            extra = {}
+        if not isinstance(extra, dict):
+            extra = {}
+    elif extra is not None and not isinstance(extra, dict):
+        extra = {}
+    data = {field: getattr(env, field) for field in EnvItem.model_fields}
+    data["extra_env"] = extra
+    return EnvItem.model_validate(data)
 
 
 @router.get("", response_model=list)

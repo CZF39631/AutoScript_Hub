@@ -1,4 +1,5 @@
 import os
+import pytest
 from pathlib import Path
 
 from client.updater_main import (
@@ -101,3 +102,55 @@ def test_run_update_persists_updater_pid(tmp_path):
     )
 
     assert seen_pids == [os.getpid()]
+
+
+@pytest.mark.parametrize("failure", ["launch", "run", "wait", "rollback-launch", "copy"])
+def test_update_exceptions_are_persisted_and_ownership_survives(tmp_path, monkeypatch, failure):
+    updates = tmp_path / "updates"
+    store = UpdateStateStore(updates)
+    for state in ("checking", "available", "downloading", "verified", "installing"):
+        store.transition(state)
+    installer = updates / "new.exe"
+    previous = updates / "previous.exe"
+    installer.write_bytes(b"new")
+    previous.write_bytes(b"old")
+    commands = []
+    launches = []
+
+    def run(command):
+        commands.append(command)
+        assert store.read()["updater_pid"] == os.getpid()
+        if failure == "run":
+            raise OSError("command failed")
+        return _Completed()
+
+    def launch(command):
+        launches.append(command)
+        assert store.read()["state"] == "verifying-startup"
+        assert store.read()["updater_pid"] == os.getpid()
+        if failure == "rollback-launch" or (failure == "launch" and len(launches) == 1):
+            raise OSError("launch failed")
+
+    def wait(*args):
+        assert store.read()["updater_pid"] == os.getpid()
+        if failure == "wait":
+            raise OSError("wait failed")
+        return failure == "copy"
+
+    if failure == "copy":
+        def fail_copy(*args):
+            raise OSError("copy failed")
+        monkeypatch.setattr("client.updater_main.shutil.copy2", fail_copy)
+
+    result = run_update(installer, previous, tmp_path / "ui.exe", "0.9.1", [], updates,
+                        run_command=run, launch=launch, wait_for_startup=wait)
+
+    assert store.read()["state"] == "rolled-back"
+    assert "failed" in store.read()["error"]
+    if failure in {"launch", "wait"}:
+        assert result == EXIT_ROLLED_BACK
+        assert commands == [installer_command(installer), installer_command(previous)]
+    else:
+        from client.updater_main import EXIT_ROLLBACK_FAILED
+        assert result == EXIT_ROLLBACK_FAILED
+        assert "回退未经确认" in store.read()["error"]
