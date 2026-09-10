@@ -160,7 +160,7 @@ class UpdateService:
             self.store.transition("idle", error="无法恢复已暂存更新，请重新下载")
 
     def _should_recover_installing(self, persisted: dict) -> bool:
-        """Decide whether a persisted *installing* state is stale and safe to recover.
+        """Decide whether an installing/verifying state is stale and safe to recover.
 
         Recovery conditions (never introduces ``installing -> idle`` directly;
         the caller drives ``installing -> rolled-back -> idle``):
@@ -188,7 +188,7 @@ class UpdateService:
         if target_version is not None:
             try:
                 return Version(target_version) < parse_update_version(self.current_version)
-            except InvalidVersion:
+            except (InvalidVersion, TypeError):
                 pass
         return False
 
@@ -201,10 +201,14 @@ class UpdateService:
             for key in ("manifest_payload_b64", "manifest_signature_b64")
             if key in persisted
         }
-        if current_state == "installing" and self._should_recover_installing(persisted):
+        if current_state in {"installing", "verifying-startup"} and self._should_recover_installing(persisted):
+            # Only release stale ownership; this does not roll back any files.
+            self.manifest = self.installer = self.pending_version = None
+            self._manifest_payload = self._manifest_signature = None
+            self._preferred_installer_url = None
             self.store.transition(
                 "rolled-back",
-                error="检测到陈旧的安装中状态，已自动恢复",
+                error="更新进程已退出，已解除更新状态锁定；安装和数据回退未经确认",
             )
             self.store.transition("idle")
             current_state = "idle"

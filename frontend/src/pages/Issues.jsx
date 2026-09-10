@@ -4,6 +4,7 @@ import { EyeOutlined } from '@ant-design/icons'
 import { useAuth } from '../contexts/AuthContext'
 import api from '../api/client'
 import { formatServerTime } from '../utils/dateTime'
+import { createIssueLogLoader, formatIssueParams } from '../utils/issueDetail'
 
 const statusMap = {
   open: { color: 'red', text: '待处理' },
@@ -21,6 +22,11 @@ export default function Issues() {
   const [detailModal, setDetailModal] = useState(null)
   const [detailLog, setDetailLog] = useState('')
   const [detailLoading, setDetailLoading] = useState(false)
+  const [detailLogLoader] = useState(() => createIssueLogLoader(
+    (url) => api.get(url), setDetailLog, setDetailLoading,
+  ))
+  useEffect(() => () => detailLogLoader.cancel(), [detailLogLoader])
+  const detailParams = formatIssueParams(detailModal?.run_params)
 
   const canResolve = user?.role === 'admin' || user?.role === 'developer'
 
@@ -35,13 +41,12 @@ export default function Issues() {
 
   const openDetail = (issue) => {
     setDetailModal(issue)
-    setDetailLog('')
-    if (issue.run_id) {
-      setDetailLoading(true)
-      api.get(`/api/issues/${issue.id}/log`).then(r => {
-        setDetailLog(r.data.log || '(暂无日志)')
-      }).catch(() => setDetailLog('(加载失败)')).finally(() => setDetailLoading(false))
-    }
+    void detailLogLoader.open(issue)
+  }
+
+  const closeDetail = () => {
+    void detailLogLoader.open(null)
+    setDetailModal(null)
   }
 
   const onResolve = async (values) => {
@@ -97,7 +102,7 @@ export default function Issues() {
 
       {/* Detail Modal */}
       <Modal title={`问题 #${detailModal?.id || ''}`} open={!!detailModal}
-        onCancel={() => setDetailModal(null)} footer={null} width={700}>
+        onCancel={closeDetail} footer={null} width={700}>
         {detailModal && (
           <>
             <Descriptions bordered size="small" column={2} className="issue-detail__descriptions" style={{ marginBottom: 16 }}>
@@ -122,9 +127,12 @@ export default function Issues() {
                   <pre style={{ margin: 0, color: '#ff4d4f', whiteSpace: 'pre-wrap', fontSize: 12 }}>{detailModal.error_msg}</pre>
                 </Descriptions.Item>
               )}
-              {detailModal.run_params && (
+              {detailParams.text !== '' && (
                 <Descriptions.Item label="执行参数" span={2}>
-                  <pre className="issue-detail__params">{JSON.stringify(JSON.parse(detailModal.run_params), null, 2)}</pre>
+                  {detailParams.invalid && (
+                    <p role="status">历史执行参数不是有效 JSON，以下按原始文本显示。</p>
+                  )}
+                  <pre className="issue-detail__params">{detailParams.text}</pre>
                 </Descriptions.Item>
               )}
               {detailModal.resolve_note && (

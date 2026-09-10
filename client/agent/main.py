@@ -64,6 +64,7 @@ _current_run_id = None
 # Async execution tracking (avoid blocking poll loop)
 _running_proc = None      # subprocess.Popen
 _running_info = {}        # {run_id, script_dir, log_path, timeout, start_time}
+_execution_start_lock = threading.Lock()  # local API and backend poll share one start gate
 
 # Agent lifecycle state (design §4.4, §5.9)
 _agent_id = None          # server-assigned agent id after register
@@ -420,47 +421,57 @@ def _start_script_subprocess(script_dir, params, log_path, timeout, env_vars=Non
     script_dir = os.path.abspath(script_dir)
     log_path = os.path.abspath(log_path)
 
-    # Write params to temp file (next to the log file)
-    params_file = os.path.join(os.path.dirname(log_path), "_params.json")
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(params_file, "w", encoding="utf-8") as f:
-        json.dump(params, f, ensure_ascii=False)
+    # Each process owns its parameter file, including during startup/cleanup races.
+    params_file = None
+    log_file = None
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix="params-", suffix=".json",
+            dir=os.path.dirname(log_path), delete=False,
+        ) as f:
+            params_file = f.name
+            json.dump(params, f, ensure_ascii=False)
 
-    code = (
-        "import sys, json, os; "
-        "sys.path.insert(0, sys.argv[1]); "
-        "_pf = os.path.join(os.path.dirname(sys.argv[2]), '_params.json'); "
-        "_params = json.load(open(_pf, encoding='utf-8')); "
-        "from main import main; "
-        "result = main(**_params); "
-        "sys.stdout.flush(); "
-        "sys.stdout.buffer.write(('\\n__RESULT__:' + repr(result) + '\\n').encode('utf-8')); "
-        "sys.stdout.buffer.flush()"
-    )
+        code = (
+            "import sys, json, os; "
+            "sys.path.insert(0, sys.argv[1]); "
+            "_pf = sys.argv[3]; "
+            "_params = json.load(open(_pf, encoding='utf-8')); "
+            "from main import main; "
+            "result = main(**_params); "
+            "sys.stdout.flush(); "
+            "sys.stdout.buffer.write(('\\n__RESULT__:' + repr(result) + '\\n').encode('utf-8')); "
+            "sys.stdout.buffer.flush()"
+        )
 
-    proc_env = os.environ.copy()
-    # Force child process to encode stdout/stderr as UTF-8 — Windows defaults to cp936 (GBK)
-    # which produces mojibake when the backend reads the log as UTF-8.
-    proc_env["PYTHONIOENCODING"] = "utf-8"
-    # Redirected stdout is block-buffered by default, which makes live logs appear
-    # empty until the script exits. Force every child script to stream output.
-    proc_env["PYTHONUNBUFFERED"] = "1"
-    if env_vars:
-        proc_env.update(env_vars)
+        proc_env = os.environ.copy()
+        # UTF-8 and unbuffered output keep Windows logs readable and live.
+        proc_env["PYTHONIOENCODING"] = "utf-8"
+        proc_env["PYTHONUNBUFFERED"] = "1"
+        if env_vars:
+            proc_env.update(env_vars)
 
-    python_bin = python_executable or sys.executable
-    # Open log in BINARY mode — the child writes bytes (UTF-8 thanks to PYTHONIOENCODING);
-    # text mode here would double-encode and corrupt non-ASCII output (Chinese paths, etc.)
-    log_file = open(log_path, "wb")
-
-    proc = subprocess.Popen(
-        [python_bin, "-c", code, script_dir, log_path],
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        cwd=script_dir,
-        env=proc_env,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+        python_bin = python_executable or sys.executable
+        # The child writes bytes; text mode would corrupt Chinese output.
+        log_file = open(log_path, "wb")
+        proc = subprocess.Popen(
+            [python_bin, "-c", code, script_dir, log_path, params_file],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd=script_dir,
+            env=proc_env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        if log_file is not None:
+            log_file.close()
+        if params_file is not None:
+            try:
+                os.remove(params_file)
+            except OSError:
+                logger.warning("无法清理未启动任务的参数文件")
+        raise
     # Store log_file so it can be closed later
     proc._log_file = log_file
     proc._params_file = params_file
@@ -759,10 +770,14 @@ def _save_local_runs():
         parent = os.path.dirname(_local_runs_file)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with open(_local_runs_file, "w", encoding="utf-8") as f:
+        temporary = _local_runs_file + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as f:
             json.dump(_local_runs, f, ensure_ascii=False)
+        os.replace(temporary, _local_runs_file)
+        return True
     except OSError as e:
         logger.warning("保存本地执行记录失败: %s", e)
+        return False
 
 
 def _load_local_runs():
@@ -896,6 +911,16 @@ def list_local_scripts():
 
 
 def start_local_run(req):
+    """Serialize local and online starts without blocking the local HTTP handler."""
+    if not _execution_start_lock.acquire(blocking=False):
+        return {"error": "another task is running"}
+    try:
+        return _start_local_run_locked(req)
+    finally:
+        _execution_start_lock.release()
+
+
+def _start_local_run_locked(req):
     """Start a script locally without going through the backend.
 
     req: {script_id, params, env_vars?}
@@ -1122,12 +1147,20 @@ def get_connection_status():
 
 
 def _sync_local_runs_to_backend():
-    """Push finished, unsynced local runs to backend when connectivity is back.
+    if not _execution_start_lock.acquire(blocking=False):
+        return
+    try:
+        _sync_local_runs_locked()
+    finally:
+        _execution_start_lock.release()
 
-    For each local run:
-      1. POST /api/runs/execute → creates a backend run record
-      2. PATCH /api/runs/{id}/status → back-fills final status + result
-      3. Mark local run as synced (with backend_run_id)
+
+def _sync_local_runs_locked():
+    """Resume each import at its persisted backend ID; retry logs separately.
+
+    Persist the ID before claim/upload, inspect ownership on retries, and always
+    attempt the terminal status even if logs fail so a log outage cannot occupy
+    the user's execution slot indefinitely.
     """
     if not _agent_id or not _last_online_time:
         return
@@ -1140,32 +1173,61 @@ def _sync_local_runs_to_backend():
         if rec.get("status") not in ("success", "failed"):
             continue
         try:
-            create_resp = requests.post(
-                "{}/api/runs/execute".format(BACKEND_URL),
-                json={
-                    "script_id": rec["script_id"],
-                    "params": rec.get("params") or {},
-                },
-                headers=_headers(),
-                timeout=10,
-            )
-            if create_resp.status_code != 200:
-                continue
-            backend_run_id = create_resp.json()["id"]
+            backend_run_id = rec.get("backend_run_id")
+            if backend_run_id is None:
+                create_resp = requests.post(
+                    "{}/api/runs/execute".format(BACKEND_URL),
+                    json={
+                        "script_id": rec["script_id"],
+                        "params": rec.get("params") or {},
+                    },
+                    headers=_headers(),
+                    timeout=10,
+                )
+                if create_resp.status_code != 200:
+                    continue
+                backend_run_id = create_resp.json()["id"]
+                rec["backend_run_id"] = backend_run_id
+                backend_status = "pending"
+            else:
+                detail_resp = requests.get(
+                    "{}/api/runs/{}".format(BACKEND_URL, backend_run_id),
+                    headers=_headers(), timeout=10,
+                )
+                if detail_resp.status_code != 200:
+                    continue
+                remote = detail_resp.json()
+                backend_status = remote.get("status")
+                if remote.get("agent_id") not in (None, _agent_id):
+                    continue  # Never take over a task claimed by another device.
+                if (backend_status not in ("pending", "cancelled")
+                        and remote.get("agent_id") != _agent_id):
+                    continue
+                # A pending import may be cancelled before claim. Keep that
+                # terminal state; its owner may still finish syncing the logs.
 
+            # Also retry a previous failed disk write before any network mutation.
+            if _save_local_runs() is False:
+                continue
             if not _agent_id:
                 continue
-            claim_resp = requests.post(
-                "{}/api/runs/{}/claim".format(BACKEND_URL, backend_run_id),
-                json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
-            )
-            if claim_resp.status_code != 200:
-                continue
+            if backend_status == "pending":
+                claim_resp = requests.post(
+                    "{}/api/runs/{}/claim".format(BACKEND_URL, backend_run_id),
+                    json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
+                )
+                if claim_resp.status_code != 200:
+                    continue
+                backend_status = "running"
 
-            if rec.get("log_path") and not _upload_log_delta(
-                backend_run_id, rec["log_path"], force=True, agent_id=_agent_id
-            ):
-                continue
+            logs_synced = True
+            if rec.get("log_path"):
+                try:
+                    logs_synced = _upload_log_delta(
+                        backend_run_id, rec["log_path"], force=True, agent_id=_agent_id
+                    )
+                except (requests.RequestException, OSError):
+                    logs_synced = False
 
             update = {"status": rec["status"]}
             if _agent_id:
@@ -1175,15 +1237,17 @@ def _sync_local_runs_to_backend():
             if rec.get("result_files"):
                 update["result_files"] = rec["result_files"]
 
-            patch_resp = requests.patch(
-                "{}/api/runs/{}/status".format(BACKEND_URL, backend_run_id),
-                json=update,
-                headers=_headers(),
-                timeout=10,
-            )
-            if patch_resp.status_code == 200:
+            status_synced = backend_status in ("success", "failed", "cancelled")
+            if backend_status == "running":
+                patch_resp = requests.patch(
+                    "{}/api/runs/{}/status".format(BACKEND_URL, backend_run_id),
+                    json=update,
+                    headers=_headers(),
+                    timeout=10,
+                )
+                status_synced = patch_resp.status_code == 200
+            if status_synced and logs_synced:
                 rec["synced"] = True
-                rec["backend_run_id"] = backend_run_id
                 _save_local_runs()
                 print("本地执行 {} 已同步为后端记录 {}".format(local_run_id, backend_run_id))
         except (requests.RequestException, OSError, KeyError, ValueError) as e:
@@ -1191,6 +1255,16 @@ def _sync_local_runs_to_backend():
 
 
 def poll_and_execute():
+    """Use the same start gate as the local API, including dependency preparation."""
+    if not _execution_start_lock.acquire(blocking=False):
+        return
+    try:
+        _poll_and_execute_locked()
+    finally:
+        _execution_start_lock.release()
+
+
+def _poll_and_execute_locked():
     """Non-blocking poll: check running process or start new run."""
     global _running_proc, _running_info, _current_run_id
     script_name = None
@@ -1253,8 +1327,8 @@ def poll_and_execute():
             _notify_execution_result(result_script_name, result["status"], result.get("error"))
         return  # Don't start new run yet (next poll cycle)
 
-    # 2) If already running, don't start another
-    if _running_proc is not None:
+    # 2) Local and online tasks share the same desktop and execution slot.
+    if _running_proc is not None or _local_run_proc is not None:
         return
 
     # GUI 已关闭时只排空当前任务，不再领取新任务。
@@ -1273,6 +1347,10 @@ def poll_and_execute():
 
         run = resp.json()[0]
         run_id = run["id"]
+        # A local history import must be resumed by the sync path, never executed.
+        if any(r.get("backend_run_id") == run_id and not r.get("synced")
+               for r in _local_runs.values()):
+            return
         _current_run_id = run_id
         if not _agent_id:
             _current_run_id = None
@@ -1304,7 +1382,11 @@ def poll_and_execute():
 
         script = script_resp.json()
         script_name = script.get("name") or "脚本 #{}".format(script_id)
-        ver = script["latest_version"]
+        ver = run.get("script_version")
+        if not isinstance(ver, int) or isinstance(ver, bool) or ver < 1:
+            _report_run_failure(run_id, "任务缺少有效的锁定脚本版本，请重新创建任务", script_name)
+            _current_run_id = None
+            return
         script_dir = os.path.join(_SCRIPTS_DIR, str(script_id), str(ver))
         os.makedirs(_LOGS_DIR, exist_ok=True)
 
