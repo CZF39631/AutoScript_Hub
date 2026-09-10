@@ -106,8 +106,9 @@ def test_release_workflow_passes_created_gitee_release_id():
     assert '--prerelease "$GITEE_PRERELEASE"' in workflow
     assert "verify_release_mirrors.py" in workflow
     assert "if: failure()" in workflow
-    assert "gitee_release.py delete" in workflow
-    assert "gh release delete" in workflow
+    assert "gitee_release.py delete" not in workflow
+    assert "gh release delete" not in workflow
+    assert "Preserve releases after publication failure" in workflow
 
 
 def test_release_workflow_allows_github_only_when_gitee_is_not_configured():
