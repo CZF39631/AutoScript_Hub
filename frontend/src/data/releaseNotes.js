@@ -1,8 +1,8 @@
 export const currentRelease = {
-  id: 'v1.2.4-review.2',
+  id: 'v1.2.4',
   important: false,
-  title: 'v1.2.4 Review 2：覆盖安装修复预览',
-  summary: '保留上一预览版修复，补齐安装前关闭确认、客户端与 Agent 退出顺序及结果检查。',
+  title: 'v1.2.4：执行、工单与覆盖安装稳定性修复',
+  summary: '修复任务版本、离线同步、运行环境与工单详情问题，并完善覆盖安装和客户端连接恢复。',
   sections: [
     {
       title: '覆盖安装',
