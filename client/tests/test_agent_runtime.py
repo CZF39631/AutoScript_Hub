@@ -277,7 +277,7 @@ def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
 
     def fake_post(url, json, **kwargs):
         requests_seen.append(("post", url, json))
-        return Response(200, {"id": 38, "script_id": 1, "params": "{}"})
+        return Response(200, {"id": 38, "script_id": 1, "script_version": 1, "params": "{}"})
 
     monkeypatch.setattr(agent.requests, "get", fake_get)
     monkeypatch.setattr(agent.requests, "post", fake_post)

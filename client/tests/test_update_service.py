@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import pytest
 import hashlib
 import json
 
@@ -560,6 +561,47 @@ def test_handoff_exception_transitions_to_rolled_back_not_installing(tmp_path):
     # Next check() can proceed normally via rolled-back -> idle -> checking
     result = service.check()
     assert result.state in {"idle", "available"}
+
+
+@pytest.mark.parametrize("current,pid,alive,recovered", [
+    ("0.9.0", 123, False, True),
+    ("0.9.1", 123, False, True),
+    ("0.9.2", 123, False, True),
+    ("0.9.0", 123, True, False),
+    ("0.9.2", 123, True, False),
+    ("0.9.0", None, False, False),
+    ("0.9.1", None, False, False),
+    ("0.9.2", None, False, True),
+])
+def test_verifying_startup_ownership_and_legacy_recovery(tmp_path, current, pid, alive, recovered):
+    service, _ = _service(tmp_path, idle=True)
+    service.check()
+    service.stage()
+    service.request_install()
+    details = {"updater_pid": pid} if pid is not None else {}
+    service.store.transition("verifying-startup", version="0.9.1", **details)
+    before = service.store.read()
+    service.current_version = current
+    service.is_pid_alive = lambda value: alive
+
+    result = service.check()
+
+    if not recovered:
+        assert result.state == "verifying-startup"
+        assert service.store.read() == before
+        with pytest.raises(RuntimeError):
+            service.request_install()
+    elif current == "0.9.0":
+        assert result.state == "available"
+        assert service.stage().state == "verified"
+        assert service.request_install().state == "installing"
+    else:
+        assert result.state == "idle"
+        assert service.manifest is None
+        with pytest.raises(RuntimeError):
+            service.request_install()
+        with pytest.raises(RuntimeError):
+            service.download()
 
 
 def test_installing_with_invalid_updater_pid_recovers(tmp_path):

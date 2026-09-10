@@ -58,6 +58,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Filename: "{app}\AutoScriptHub.exe"; Description: "启动 AutoScript Hub"; Flags: nowait postinstall skipifsilent
 
 [Code]
+#include "installer_processes.iss"
+
 function IsWebView2RuntimeInstalled: Boolean;
 var
   Version: String;
@@ -70,19 +72,8 @@ begin
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
-var
-  ResultCode: Integer;
 begin
-  { Agent is detached from the GUI, so Inno Setup cannot discover it through
-    CloseApplications. Stop its process tree before replacing installed files.
-    Exit code 128 simply means no matching process exists. }
-  Exec(
-    ExpandConstant('{sys}\taskkill.exe'),
-    '/F /T /IM AutoScriptAgent.exe',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode
-  );
-  Sleep(500);
-  Result := '';
+  Result := PrepareInstalledProcesses;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
