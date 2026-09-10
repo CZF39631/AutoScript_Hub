@@ -163,7 +163,7 @@ jobs:
           # GitHub 完整 EXE 上传成功后才签署清单，Gitee 仅镜像清单和签名。
           python release/scripts/make_update_manifest.py --version "$VERSION" --installer "$INSTALLER" --private-key update-private-key.pem --output release-output "${URLS[@]}"
           python release/scripts/write_checksums.py --directory release-output
-          gh release upload "$GITHUB_REF_NAME" release-output/autoscript-hub-update.json release-output/autoscript-hub-update.json.sig release-output/SHA256SUMS.txt --clobber
+          gh release upload "$GITHUB_REF_NAME" release-output/autoscript-hub-update.json release-output/autoscript-hub-update.json.sig release-output/SHA256SUMS.txt
           if [[ "$GITEE_ENABLED" == "true" ]]; then
             python release/scripts/gitee_release.py upload --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "${{ steps.release_hosts.outputs.gitee_release_id }}" --file release-output/autoscript-hub-update.json --file release-output/autoscript-hub-update.json.sig --file release-output/SHA256SUMS.txt
           fi
@@ -222,15 +222,10 @@ jobs:
           print(f'Gitee signed manifest verified: {manifest.version}')
           PY
           fi
-      - name: Remove partial releases after any publication failure
+      - name: Preserve releases after publication failure
         if: failure()
-        continue-on-error: true
         run: |
-          gh release delete "$GITHUB_REF_NAME" --yes || true
-          GITEE_RELEASE_ID="${{ steps.release_hosts.outputs.gitee_release_id }}"
-          if [ -n "$GITEE_RELEASE_ID" ]; then
-            python release/scripts/gitee_release.py delete --owner "$GITEE_OWNER" --repo "$GITEE_REPO" --token "$GITEE_TOKEN" --release-id "$GITEE_RELEASE_ID" || true
-          fi
+          echo '::error::Publication failed. Existing releases and assets are preserved; do not overwrite or delete published versions. Inspect retained drafts and logs before any recovery.'
 
   lan-sync:
     needs: publish
