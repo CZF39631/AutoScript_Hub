@@ -1,9 +1,18 @@
 export const currentRelease = {
-  id: 'v1.2.4-review.1',
+  id: 'v1.2.4-review.2',
   important: false,
-  title: 'v1.2.4 Review 1：稳定性修复预览',
-  summary: '本地预览版：修复任务版本、离线同步、执行互斥、运行环境和工单详情问题。',
+  title: 'v1.2.4 Review 2：覆盖安装修复预览',
+  summary: '保留上一预览版修复，补齐安装前关闭确认、客户端与 Agent 退出顺序及结果检查。',
   sections: [
+    {
+      title: '覆盖安装',
+      items: [
+        '检测到目标目录的旧客户端或 Agent 时，明确询问是否关闭，默认不关闭。',
+        '先停止客户端及其 Agent 守护，再停止 Agent 和脚本子进程，避免安装时被重新拉起。',
+        '按安装目录定位旧客户端和 Agent；无法确认退出时阻止文件替换并给出提示。',
+        '静默安装遇到运行中的旧程序时，必须显式允许关闭应用。',
+      ],
+    },
     {
       title: '执行与环境',
       items: [
