@@ -17,7 +17,7 @@ $Channel = if ($Version.Contains('-')) { 'beta' } elseif ($Version.StartsWith('1
 
 Push-Location $RepoRoot
 try {
-    & $PythonExe -m pip install -r backend/requirements.txt -r client/requirements.txt 'pytest==7.4.3' 'pyinstaller==6.11.1'
+    & $PythonExe -m pip install -r backend/requirements.txt -r client/requirements.txt 'pytest==7.4.3' 'pyinstaller==6.11.1' 'PyYAML==6.0.2'
     if ($LASTEXITCODE -ne 0) { throw 'build dependency install failed' }
     & $PythonExe -m pytest -q
     if ($LASTEXITCODE -ne 0) { throw 'pytest failed' }
