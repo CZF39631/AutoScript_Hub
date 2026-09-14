@@ -4,7 +4,7 @@ import re
 from typing import Optional
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models import ServerSettings, User, UserSettings
 from app.auth import get_current_user, require_role
 from app.services.audit import write_audit
+from app.services.diagnostic_policy import DiagnosticPolicy, load_diagnostic_policy
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -64,6 +65,50 @@ class ServerUpdateSettingsPayload(BaseModel):
         if not _REPOSITORY_PATTERN.fullmatch(value):
             raise ValueError("GitHub 仓库必须使用 owner/repository 格式")
         return value
+
+
+class DiagnosticSettingsUpdate(DiagnosticPolicy):
+    acknowledge_risk: bool = False
+
+
+@router.get("/diagnostics", response_model=DiagnosticPolicy)
+def get_diagnostic_settings(
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    return load_diagnostic_policy(db)
+
+
+@router.put("/diagnostics", response_model=DiagnosticPolicy)
+def update_diagnostic_settings(
+    req: DiagnosticSettingsUpdate,
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    row = _server_settings(db)
+    previous_json = row.diagnostic_policy_json
+    previous = load_diagnostic_policy(db)
+    policy = DiagnosticPolicy.model_validate(req.model_dump(exclude={"acknowledge_risk"}))
+    if policy.weakens(previous) and not req.acknowledge_risk:
+        raise HTTPException(status_code=409, detail="降低脱敏保护可能暴露凭据和业务数据，请明确确认风险")
+    updated = db.query(ServerSettings).filter(
+        ServerSettings.id == 1,
+        ServerSettings.diagnostic_policy_json == previous_json,
+    ).update({
+        ServerSettings.diagnostic_policy_json: policy.model_dump_json(),
+        ServerSettings.updated_by: current_user.id,
+    }, synchronize_session=False)
+    if updated != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="诊断配置已被其他操作修改，请重新读取后保存")
+    db.commit()
+    changed = [field for field, value in policy.model_dump().items() if previous.model_dump()[field] != value]
+    write_audit(
+        current_user.id, current_user.username, "update_diagnostic_settings",
+        target_type="server_settings", target_id=1,
+        detail="changed fields: " + (", ".join(changed) or "none"),
+    )
+    return policy
 
 
 class ServerUpdateSettingsResponse(ServerUpdateSettingsPayload):

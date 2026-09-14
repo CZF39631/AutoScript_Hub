@@ -278,5 +278,6 @@ class ServerSettings(Base):
     outbound_proxy = Column(String(2048), nullable=True)
     github_repository = Column(String(255), nullable=False, default="CZF39631/AutoScript_Hub")
     interval_hours = Column(Integer, nullable=False, default=6)
+    diagnostic_policy_json = Column(Text, nullable=False, default="{}", server_default="{}")
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
