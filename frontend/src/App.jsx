@@ -3,7 +3,7 @@ import { Layout, Menu, Button } from 'antd'
 import {
   DashboardOutlined, CodeOutlined, HistoryOutlined,
   UserOutlined, LogoutOutlined, AuditOutlined, BugOutlined, GlobalOutlined,
-  SettingOutlined, NotificationOutlined
+  SettingOutlined, NotificationOutlined, ScheduleOutlined
 } from '@ant-design/icons'
 import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
@@ -14,6 +14,7 @@ import Dashboard from './pages/Dashboard'
 import Scripts from './pages/Scripts'
 import ScriptDetail from './pages/ScriptDetail'
 import Runs from './pages/Runs'
+import Tasks from './pages/Tasks'
 import RunDetail from './pages/RunDetail'
 import Users from './pages/Users'
 import AuditLog from './pages/AuditLog'
@@ -57,6 +58,7 @@ function AppLayout() {
     { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
     { key: '/scripts', icon: <CodeOutlined />, label: '脚本管理' },
     { key: '/runs', icon: <HistoryOutlined />, label: '执行历史' },
+    { key: '/tasks', icon: <ScheduleOutlined />, label: '任务调度' },
     { key: '/issues', icon: <BugOutlined />, label: '问题工单' },
     { key: '/environments', icon: <GlobalOutlined />, label: '环境管理' },
     { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
@@ -74,6 +76,7 @@ function AppLayout() {
 
   const selectedKey = loc.pathname === '/dashboard' ? '/dashboard'
     : loc.pathname.startsWith('/runs') ? '/runs'
+    : loc.pathname.startsWith('/tasks') ? '/tasks'
     : loc.pathname.startsWith('/users') ? '/users'
     : loc.pathname.startsWith('/audit') ? '/audit'
     : loc.pathname.startsWith('/issues') ? '/issues'
@@ -122,6 +125,7 @@ function AppLayout() {
             <Route path="/scripts" element={<Scripts />} />
             <Route path="/scripts/:id" element={<ScriptDetail />} />
             <Route path="/runs" element={<Runs />} />
+            <Route path="/tasks" element={<Tasks />} />
             <Route path="/runs/:id" element={<RunDetail />} />
             <Route path="/users" element={<Users />} />
             <Route path="/audit" element={<AuditLog />} />

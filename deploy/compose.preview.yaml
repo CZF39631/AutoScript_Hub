@@ -1,0 +1,26 @@
+# 只用于独立测试实例，不是正式 compose.yaml 的覆盖文件。
+# 在独立测试目录使用单独 deploy/.env；禁止与正式 Compose 组合或 --remove-orphans。
+name: autoscript-hub-preview
+services:
+  preview_server:
+    image: ${AUTOSCRIPT_PREVIEW_IMAGE:?请指定已构建的测试镜像}
+    ports:
+      - "${AUTOSCRIPT_PREVIEW_BIND_ADDRESS:-127.0.0.1}:${AUTOSCRIPT_PREVIEW_PORT:?请指定独立测试端口}:8000"
+    volumes:
+      - preview_data:/data
+    environment:
+      DATA_DIR: /data
+      DATABASE_URL: sqlite:////data/autoscript.db
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: 8000
+      JWT_SECRET: ${AUTOSCRIPT_PREVIEW_JWT_SECRET:?必须使用独立测试密钥}
+      ADMIN_USERNAME: ${AUTOSCRIPT_PREVIEW_ADMIN_USERNAME:-preview-admin}
+      ADMIN_PASSWORD: ${AUTOSCRIPT_PREVIEW_ADMIN_PASSWORD:?必须使用独立测试密码}
+      EXTERNAL_AUTH_ENABLED: "false"
+    user: "${AUTOSCRIPT_PREVIEW_UID:-1000}:${AUTOSCRIPT_PREVIEW_GID:-1000}"
+    mem_limit: ${AUTOSCRIPT_PREVIEW_MEMORY_LIMIT:-512m}
+    cpus: "${AUTOSCRIPT_PREVIEW_CPUS:-1.0}"
+    init: true
+    restart: unless-stopped
+volumes:
+  preview_data:

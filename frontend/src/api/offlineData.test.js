@@ -64,6 +64,19 @@ test('offline runs, detail and logs use local Agent routes', async () => {
 })
 
 
+test('scheduled local history keeps using local APIs while the server is online', async () => {
+  const localApi = client({
+    '/local/runs/S-test': { local_run_id: 'S-test', status: 'success', params: {}, started_at: 100 },
+    '/local/runs/S-test/log': { log: 'scheduled-local' },
+  })
+  const api = client({})
+  const record = await loadRunDetail({ id: 'S-test', online: true, localApi, api })
+  assert.equal(record.local_only, true)
+  assert.equal(record.id, 'S-test')
+  assert.deepEqual(await loadRunLog({ id: 'S-test', localApi, api }), { log: 'scheduled-local' })
+})
+
+
 test('result helpers support historical paths and require the executing Agent', () => {
   assert.equal(firstResultPath('"C:/out/old.xlsx"'), 'C:/out/old.xlsx')
   assert.equal(firstResultPath('["C:/out/old-list.xlsx"]'), 'C:/out/old-list.xlsx')

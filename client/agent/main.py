@@ -9,7 +9,15 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+import uuid
+
+from client.runtime.task_store import TaskStore
+from client.runtime.task_device import TaskDevice
+from client.runtime.task_notifications import TaskNotifications
+from client.runtime.execution_control import ExecutionGate, ExecutionController, prepare_environment, check_conditions
+from client.runtime.process_tree import spawn_contained, ProcessTree, containment_name
+from client.runtime.diagnostics import configure_application_logging, collect_diagnostics, update_effective_policy
 
 import requests
 
@@ -18,9 +26,8 @@ from client.runtime.local_auth import get_or_create_agent_token
 from client.agent.script_parser import parse_script_config
 from shared.script_contract import extract_script_archive, validate_params
 from shared.version import get_version
-from client.runtime.environment_manager import EnvironmentUnavailable, ensure_environment
 from client.runtime.paths import ClientPaths
-from client.runtime.python_runtime import PrivatePythonUnavailable, private_python, python_runtime_info
+from client.runtime.python_runtime import PrivatePythonUnavailable, python_runtime_info
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +87,9 @@ _restart_requested = False
 _shutdown_when_idle = False
 _last_settings_sync_time = 0
 _last_script_access_sync_time = 0
+_task_notifications = None
+PENDING_RETRY_BATCH = 1
+LOG_CHUNK_BYTES = 256 * 1024
 
 _CLIENT_SETTING_KEYS = {
     "server_url",
@@ -131,88 +141,6 @@ def _install_downloaded_script(payload, script_dir):
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _get_venv_pip():
-    """Return the pip path for the project venv."""
-    venv_root = os.path.join(os.path.dirname(__file__), "..", "..", ".venv")
-    if sys.platform == "win32":
-        return os.path.join(venv_root, "Scripts", "pip.exe")
-    return os.path.join(venv_root, "bin", "pip")
-
-
-def _get_installed_packages(python_executable=None):
-    """Return a set of installed package names (lowercase)."""
-    python_bin = python_executable or sys.executable
-    try:
-        result = subprocess.run(
-            [python_bin, "-m", "pip", "list", "--format=json"],
-            capture_output=True, timeout=30, text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if result.returncode == 0:
-            pkgs = json.loads(result.stdout)
-            return {p["name"].lower() for p in pkgs}
-    except (subprocess.TimeoutExpired, OSError) as e:
-        logger.debug("pip list 失败: %s", e)
-    return set()
-
-
-def ensure_dependencies(script_config, python_executable=None):
-    """Check config requirements, install missing packages. Returns error string or None."""
-    requirements = script_config.get("requirements", [])
-    if not requirements:
-        return None
-
-    installed = _get_installed_packages(python_executable)
-
-    # Parse requirement strings: "package>=1.0" → "package"
-    missing = []
-    for req in requirements:
-        pkg_name = req.split(">=")[0].split("==")[0].split("<")[0].split(">")[0].strip().lower()
-        if pkg_name not in installed:
-            missing.append(req)
-
-    if not missing:
-        return None
-
-    python_bin = python_executable or sys.executable
-    print("正在安装缺失依赖: {}".format(", ".join(missing)))
-    try:
-        result = subprocess.run(
-            [python_bin, "-m", "pip", "install"] + missing,
-            capture_output=True, timeout=300, text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if result.returncode != 0:
-            return "Dependency install failed: {}".format(result.stderr[:500])
-        print("依赖安装成功")
-        return None
-    except subprocess.TimeoutExpired:
-        return "Dependency install timed out"
-    except Exception as e:
-        return "Dependency install error: {}".format(str(e))
-
-
-def prepare_script_environment(script_config, offline=False):
-    """Return the fingerprinted venv interpreter or an actionable error."""
-    try:
-        runtime = private_python(_CLIENT_PATHS)
-    except PrivatePythonUnavailable:
-        if getattr(sys, "frozen", False):
-            return None, "私有 Python 3.11.9 缺失，请修复或重新安装客户端"
-        runtime = Path(sys.executable)
-    try:
-        result = ensure_environment(
-            script_config.get("requirements", []),
-            _CLIENT_PATHS,
-            index_url=_client_config.get("pip_index_url") or None,
-            offline=offline,
-            python_executable=runtime,
-        )
-        return str(result.python_executable), None
-    except (EnvironmentUnavailable, RuntimeError, OSError, ValueError) as exc:
-        return None, "脚本环境准备失败: {}".format(exc)
-
-
 def _validate_run_params(param_defs, params):
     """Pre-execution parameter validation (design §5.2).
 
@@ -249,6 +177,7 @@ def authenticate(username, password):
             data = resp.json()
             _token = data["token"]
             _user_id = data["user"]["id"]
+            _sync_task_notifications()
             return True
         if resp.status_code in (401, 403):
             _invalidate_script_authorizations()
@@ -273,7 +202,7 @@ def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
             offset = 0
         with open(log_path, "rb") as f:
             f.seek(offset)
-            raw = f.read()
+            raw = f.read(LOG_CHUNK_BYTES)
     except OSError:
         return False
 
@@ -283,7 +212,7 @@ def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
     try:
         content = raw.decode("utf-8")
     except UnicodeDecodeError as e:
-        if not force and e.reason == "unexpected end of data" and e.start > 0:
+        if (not force or offset + len(raw) < size) and e.reason == "unexpected end of data" and e.start > 0:
             raw = raw[:e.start]
             content = raw.decode("utf-8")
         else:
@@ -304,7 +233,7 @@ def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
         data = resp.json()
         if resp.status_code == 200:
             _log_upload_offsets[run_id] = int(data["offset"])
-            return True
+            return _log_upload_offsets[run_id] >= size
         if resp.status_code == 409:
             detail = data.get("detail") or {}
             if "offset" in detail:
@@ -326,9 +255,11 @@ def _finish_log_upload(run_id, log_path, agent_id=None):
 
 
 def _flush_pending_log_uploads():
-    for run_id, path in list(_pending_log_uploads.items()):
-        if _upload_log_delta(run_id, path, force=True, agent_id=_agent_id):
-            _pending_log_uploads.pop(run_id, None)
+    for run_id, path in list(_pending_log_uploads.items())[:PENDING_RETRY_BATCH]:
+        complete = _upload_log_delta(run_id, path, force=True, agent_id=_agent_id)
+        _pending_log_uploads.pop(run_id, None)
+        if not complete:
+            _pending_log_uploads[run_id] = path  # Rotate partial/failed uploads for fairness.
     _save_pending_log_uploads()
 
 
@@ -410,6 +341,8 @@ def _sync_client_settings():
 
 
 def _get_current_run_id():
+    if _controller is not None and _controller.active is not None:
+        return _controller.active['body'].get('run_id', _controller.active['id'])
     return _current_run_id
 
 
@@ -455,8 +388,9 @@ def _start_script_subprocess(script_dir, params, log_path, timeout, env_vars=Non
         python_bin = python_executable or sys.executable
         # The child writes bytes; text mode would corrupt Chinese output.
         log_file = open(log_path, "wb")
-        proc = subprocess.Popen(
+        proc = spawn_contained(
             [python_bin, "-c", code, script_dir, log_path, params_file],
+            tree_name=containment_name(_CLIENT_PATHS, 'script'),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             cwd=script_dir,
@@ -492,82 +426,6 @@ def _notify_execution_result(script_name, status, error=None):
         show_system_notification("AutoScript Hub", message)
     except Exception as exc:
         logger.warning("通知失败: %s", exc)
-
-
-def _check_running_process():
-    """Check if the running process has finished. Returns result dict or None if still running."""
-    global _running_proc, _running_info, _current_run_id
-
-    if _running_proc is None:
-        return None
-
-    ret = _running_proc.poll()
-    if ret is None:
-        # Still running — check timeout
-        elapsed = time.time() - _running_info["start_time"]
-        if elapsed > _running_info["timeout"]:
-            _running_proc.kill()
-            _running_proc._log_file.close()
-            try:
-                os.remove(_running_proc._params_file)
-            except OSError:
-                pass
-            _running_proc = None
-            _current_run_id = None
-            info = dict(_running_info)
-            _running_info = {}
-            return {
-                "status": "failed",
-                "error": "Timeout after {}s".format(info["timeout"]),
-                "result": None,
-                "run_id": info.get("run_id"),
-                "log_path": info.get("log_path"),
-                "script_name": info.get("script_name"),
-            }
-        return None  # still running
-
-    # Process finished
-    _running_proc._log_file.close()
-    try:
-        os.remove(_running_proc._params_file)
-    except OSError:
-        pass
-
-    log_path = _running_info["log_path"]
-    run_id = _running_info["run_id"]
-
-    # Read log to find result
-    result_value = None
-    try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if line.startswith("__RESULT__:"):
-                    raw = line[len("__RESULT__:"):].strip()
-                    try:
-                        result_value = _parse_result_literal(raw)
-                    except Exception:
-                        result_value = raw
-                    break
-    except OSError:
-        pass
-
-    status = "success" if ret == 0 else "failed"
-    error = None if ret == 0 else "Exit code: {}".format(ret)
-
-    _running_proc = None
-    _current_run_id = None
-    info = dict(_running_info)
-    _running_info = {}
-
-    return {
-        "status": status,
-        "error": error,
-        "result": result_value,
-        "run_id": run_id,
-        "log_path": log_path,
-        "script_dir": info.get("script_dir"),
-        "script_name": info.get("script_name"),
-    }
 
 
 def _detect_machine_info():
@@ -629,6 +487,7 @@ def send_heartbeat():
         if resp.status_code in (401, 403):
             _invalidate_script_authorizations()
             _token = None
+            _sync_task_notifications()
     except (requests.RequestException, OSError):
         pass
     return False
@@ -709,7 +568,8 @@ def _flush_pending_reports():
     if not _pending_reports:
         return
     remaining = []
-    for item in _pending_reports:
+    batch = _pending_reports[:PENDING_RETRY_BATCH]
+    for item in batch:
         run_id = item.get("run_id")
         update = item.get("update", {})
         try:
@@ -721,7 +581,7 @@ def _flush_pending_reports():
                 remaining.append(item)
         except (requests.RequestException, OSError):
             remaining.append(item)
-    _pending_reports = remaining
+    _pending_reports = _pending_reports[len(batch):] + remaining
     _save_pending_reports()
 
 
@@ -910,205 +770,14 @@ def list_local_scripts():
     return result
 
 
-def start_local_run(req):
-    """Serialize local and online starts without blocking the local HTTP handler."""
-    if not _execution_start_lock.acquire(blocking=False):
-        return {"error": "another task is running"}
-    try:
-        return _start_local_run_locked(req)
-    finally:
-        _execution_start_lock.release()
-
-
-def _start_local_run_locked(req):
-    """Start a script locally without going through the backend.
-
-    req: {script_id, params, env_vars?}
-    Returns the local run record. Mutates state to track the subprocess.
-    """
-    global _local_run_counter, _local_run_proc, _local_run_info
-    if _shutdown_when_idle:
-        return {"error": "Agent 正在退出，不能启动新任务"}
-    # Same one-at-a-time rule as backend-triggered runs
-    if _local_run_proc is not None or _running_proc is not None:
-        return {"error": "another task is running"}
-
-    script_id = req.get("script_id")
-    params = req.get("params") or {}
-    if not script_id:
-        return {"error": "script_id required"}
-    try:
-        script_id = int(script_id)
-    except (TypeError, ValueError):
-        return {"error": "invalid script_id"}
-    authorized_ids = _load_authorized_script_ids()
-    if script_id not in authorized_ids:
-        return {"error": "脚本授权已失效，请联网刷新市场权限"}
-
-    script_dir = os.path.join(_SCRIPTS_DIR, str(script_id))
-    if not os.path.isdir(script_dir):
-        return {"error": "script not downloaded locally"}
-
-    versions = []
-    for v in os.listdir(script_dir):
-        try:
-            versions.append(int(v))
-        except ValueError:
-            continue
-    if not versions:
-        return {"error": "no script versions cached locally"}
-    latest_ver = max(versions)
-    run_script_dir = os.path.join(script_dir, str(latest_ver))
-
-    config_path = os.path.join(run_script_dir, "main.py")
-    script_config = {}
-    try:
-        script_config = parse_script_config(config_path) or {}
-    except Exception as e:
-        logger.warning("解析脚本配置失败: %s", e)
-
-    script_python = None
-    if script_config:
-        script_python, dep_error = prepare_script_environment(
-            script_config,
-            offline=not get_connection_status().get("online", False),
-        )
-        if dep_error:
-            return {"error": dep_error}
-
-    timeout = script_config.get("timeout", 600)
-
-    _local_run_counter += 1
-    local_run_id = "L{}".format(_local_run_counter)
-
-    os.makedirs(_LOGS_DIR, exist_ok=True)
-    log_path = os.path.join(_LOGS_DIR, "local_{}.log".format(local_run_id))
-
-    # UI can pass environment vars directly (offline: no Environment table access)
-    env_vars = req.get("env_vars") or None
-
-    proc = _start_script_subprocess(
-        run_script_dir, params, log_path, timeout,
-        env_vars=env_vars, python_executable=script_python,
-    )
-    _local_run_proc = proc
-    _local_run_info = {
-        "local_run_id": local_run_id,
-        "script_id": script_id,
-        "script_version": latest_ver,
-        "script_semantic_version": script_config.get("version"),
-        "script_name": script_config.get("name"),
-        "script_dir": run_script_dir,
-        "log_path": log_path,
-        "timeout": timeout,
-        "start_time": time.time(),
-        "params": params,
-    }
-
-    record = {
-        "local_run_id": local_run_id,
-        "script_id": script_id,
-        "script_version": latest_ver,
-        "script_semantic_version": script_config.get("version"),
-        "script_name": script_config.get("name"),
-        "params": params,
-        "status": "running",
-        "started_at": _local_run_info["start_time"],
-        "finished_at": None,
-        "duration_sec": None,
-        "error_msg": None,
-        "result_files": None,
-        "log_path": log_path,
-        "synced": False,
-        "backend_run_id": None,
-    }
-    _local_runs[local_run_id] = record
-    _save_local_runs()
-
-    print("本地执行已启动: {} (脚本 {} v{})".format(local_run_id, script_id, latest_ver))
-    return record
-
-
-def _check_local_runs():
-    """Advance the currently running local run's state if its subprocess exited."""
-    global _local_run_proc, _local_run_info
-    if _local_run_proc is None:
-        return None
-
-    ret = _local_run_proc.poll()
-    if ret is None:
-        elapsed = time.time() - _local_run_info["start_time"]
-        if elapsed > _local_run_info["timeout"]:
-            _local_run_proc.kill()
-            try:
-                _local_run_proc._log_file.close()
-                os.remove(_local_run_proc._params_file)
-            except (OSError, AttributeError):
-                pass
-            info = dict(_local_run_info)
-            _local_run_proc = None
-            _local_run_info = {}
-            _record_local_run_completion(info, status="failed", error="Timeout after {}s".format(info["timeout"]), result=None)
-            return info["local_run_id"]
-        return None
-
-    # Subprocess exited
-    try:
-        _local_run_proc._log_file.close()
-        os.remove(_local_run_proc._params_file)
-    except (OSError, AttributeError):
-        pass
-
-    info = dict(_local_run_info)
-    log_path = info["log_path"]
-
-    result_value = None
-    try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if line.startswith("__RESULT__:"):
-                    raw = line[len("__RESULT__:"):].strip()
-                    try:
-                        result_value = _parse_result_literal(raw)
-                    except Exception:
-                        result_value = raw
-                    break
-    except OSError:
-        pass
-
-    status = "success" if ret == 0 else "failed"
-    error = None if ret == 0 else "Exit code: {}".format(ret)
-
-    _local_run_proc = None
-    _local_run_info = {}
-    _record_local_run_completion(info, status=status, error=error, result=result_value)
-    return info["local_run_id"]
-
-
-def _record_local_run_completion(info, status, error, result):
-    """Update a local run record after its subprocess exits; pop a notification."""
-    local_run_id = info["local_run_id"]
-    if local_run_id not in _local_runs:
-        return
-    finished = time.time()
-    rec = _local_runs[local_run_id]
-    rec["status"] = status
-    rec["error_msg"] = error
-    rec["finished_at"] = finished
-    rec["duration_sec"] = int(finished - rec["started_at"]) if rec.get("started_at") else None
-    if result is not None:
-        rec["result_files"] = json.dumps(
-            _normalize_result_files(result, base_dir=info.get("script_dir")),
-            ensure_ascii=False,
-        )
-    _save_local_runs()
-
-    _notify_execution_result(rec.get("script_name"), status, error)
-
-
 def list_local_runs():
     """Return all local run records, newest first."""
-    items = list(_local_runs.values())
+    items = [dict(record) for record in _local_runs.values()]
+    if _controller is not None and _controller.active is not None:
+        active = _controller.active
+        for item in items:
+            if item.get('local_run_id') == active['id']:
+                item['status'] = active['state']
     items.sort(key=lambda r: r.get("started_at", 0) or 0, reverse=True)
     return items
 
@@ -1136,7 +805,7 @@ def get_connection_status():
     online = _last_online_time is not None and (time.time() - _last_online_time) < 90
     pending_sync = sum(
         1 for r in _local_runs.values()
-        if not r.get("synced") and r.get("status") in ("success", "failed")
+        if not r.get("synced") and r.get("status") in ("success", "failed", "cancelled")
     )
     return {
         "online": online,
@@ -1155,348 +824,479 @@ def _sync_local_runs_to_backend():
         _execution_start_lock.release()
 
 
-def _sync_local_runs_locked():
-    """Resume each import at its persisted backend ID; retry logs separately.
+# 1.3 execution entry points: all sources use the same durable controller.
+_task_store = None
+_task_device = None
+_controller = None
+_lifetime_gate = None
+_task_init_lock = threading.RLock()
 
-    Persist the ID before claim/upload, inspect ownership on retries, and always
-    attempt the terminal status even if logs fail so a log outage cannot occupy
-    the user's execution slot indefinitely.
-    """
-    if not _agent_id or not _last_online_time:
-        return
-    if time.time() - _last_online_time > 90:
-        return  # not online
 
-    for local_run_id, rec in list(_local_runs.items()):
-        if rec.get("synced"):
-            continue
-        if rec.get("status") not in ("success", "failed"):
-            continue
+def _task_request(method, route, body=None, extra_headers=None):
+    if not _token:
+        raise RuntimeError('设备操作需要在线认证')
+    response = requests.request(method, BACKEND_URL.rstrip('/') + route,
+                                json=body, headers={**_headers(), **(extra_headers or {})}, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
+def _initialize_tasks():
+    global _task_store, _task_device, _controller, _lifetime_gate
+    with _task_init_lock:
+        if _controller is not None:
+            return
         try:
-            backend_run_id = rec.get("backend_run_id")
-            if backend_run_id is None:
-                create_resp = requests.post(
-                    "{}/api/runs/execute".format(BACKEND_URL),
-                    json={
-                        "script_id": rec["script_id"],
-                        "params": rec.get("params") or {},
-                    },
-                    headers=_headers(),
-                    timeout=10,
-                )
-                if create_resp.status_code != 200:
-                    continue
-                backend_run_id = create_resp.json()["id"]
-                rec["backend_run_id"] = backend_run_id
-                backend_status = "pending"
-            else:
-                detail_resp = requests.get(
-                    "{}/api/runs/{}".format(BACKEND_URL, backend_run_id),
-                    headers=_headers(), timeout=10,
-                )
-                if detail_resp.status_code != 200:
-                    continue
-                remote = detail_resp.json()
-                backend_status = remote.get("status")
-                if remote.get("agent_id") not in (None, _agent_id):
-                    continue  # Never take over a task claimed by another device.
-                if (backend_status not in ("pending", "cancelled")
-                        and remote.get("agent_id") != _agent_id):
-                    continue
-                # A pending import may be cancelled before claim. Keep that
-                # terminal state; its owner may still finish syncing the logs.
-
-            # Also retry a previous failed disk write before any network mutation.
-            if _save_local_runs() is False:
-                continue
-            if not _agent_id:
-                continue
-            if backend_status == "pending":
-                claim_resp = requests.post(
-                    "{}/api/runs/{}/claim".format(BACKEND_URL, backend_run_id),
-                    json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
-                )
-                if claim_resp.status_code != 200:
-                    continue
-                backend_status = "running"
-
-            logs_synced = True
-            if rec.get("log_path"):
-                try:
-                    logs_synced = _upload_log_delta(
-                        backend_run_id, rec["log_path"], force=True, agent_id=_agent_id
-                    )
-                except (requests.RequestException, OSError):
-                    logs_synced = False
-
-            update = {"status": rec["status"]}
-            if _agent_id:
-                update["agent_id"] = _agent_id
-            if rec.get("error_msg"):
-                update["error_msg"] = rec["error_msg"]
-            if rec.get("result_files"):
-                update["result_files"] = rec["result_files"]
-
-            status_synced = backend_status in ("success", "failed", "cancelled")
-            if backend_status == "running":
-                patch_resp = requests.patch(
-                    "{}/api/runs/{}/status".format(BACKEND_URL, backend_run_id),
-                    json=update,
-                    headers=_headers(),
-                    timeout=10,
-                )
-                status_synced = patch_resp.status_code == 200
-            if status_synced and logs_synced:
-                rec["synced"] = True
-                _save_local_runs()
-                print("本地执行 {} 已同步为后端记录 {}".format(local_run_id, backend_run_id))
-        except (requests.RequestException, OSError, KeyError, ValueError) as e:
-            logger.debug("同步 {} 失败: {}".format(local_run_id, e))
+            _initialize_tasks_locked()
+        except BaseException:
+            if _task_store is not None:
+                _task_store.close()
+            if _lifetime_gate is not None:
+                _lifetime_gate.close()
+            _task_store = _task_device = _controller = _lifetime_gate = None
+            raise
 
 
-def poll_and_execute():
-    """Use the same start gate as the local API, including dependency preparation."""
-    if not _execution_start_lock.acquire(blocking=False):
+def _initialize_tasks_locked():
+    global _task_store, _task_device, _controller, _lifetime_gate
+    if _controller is not None:
         return
+    _lifetime_gate = ExecutionGate(_CLIENT_PATHS.runs_dir / 'execution.lock')
+    # Reopen named jobs: lifetime lock alone does not prove asynchronous kill-on-close finished.
+    if os.name == 'nt':
+        for kind in ('prepare', 'script'):
+            tree = ProcessTree(containment_name(_CLIENT_PATHS, kind))
+            try:
+                tree.stop()
+                tree.confirm_stopped()
+            finally:
+                tree.close()
+    _task_store = TaskStore(_CLIENT_PATHS.runs_dir / 'tasks.sqlite3')
+    _task_device = TaskDevice(_CLIENT_PATHS.config_dir / 'task-device.bin', _task_request,
+                              get_version(), BACKEND_URL.rstrip('/') + '|' + str(_client_config.get('username', '')))
+    for attempt in _task_store.recover():
+        _task_store.enqueue_report('remote:' + attempt['execution_id'],
+                                  '/executions/' + attempt['execution_id'] + '/report',
+                                  {'attempt_id': attempt['attempt_id'], 'state': 'unknown',
+                                   'stopped': True, 'error_msg': 'Agent 重启，业务结果不确定；禁止自动重跑'})
+    for record in _local_runs.values():
+        if record.get('status') in ('running', 'preparing'):
+            record.update(status='unknown', error_msg='Agent 重启，业务结果不确定；禁止自动重跑')
+    _save_local_runs()
+    _controller = ExecutionController(_task_store, _prepare_task, _spawn_task, _complete_task,
+                                     lambda item: _task_device.call('POST', '/executions/' +
+                                         str(item['body']['execution_id']) + '/start',
+                                         {'attempt_id': item['body']['attempt_id']}).get('can_start') is True)
+
+
+def _fixed_script(body, local=False):
+    if not isinstance(body, dict):
+        raise ValueError('任务必须是对象')
+    script_id, version = body.get('script_id'), body.get('script_version')
+    if any(type(v) is not int or v < 1 for v in (script_id, version)):
+        raise ValueError('必须指定数值 script_id 与固定 script_version')
+    if local and script_id not in _load_authorized_script_ids():
+        raise ValueError('脚本授权已失效，请联网刷新市场权限')
+    directory = os.path.join(_SCRIPTS_DIR, str(script_id), str(version))
+    if not os.path.isfile(os.path.join(directory, 'main.py')):
+        if local:
+            raise ValueError('指定版本未缓存')
+        response = requests.get('{}/api/scripts/{}/download?version={}'.format(BACKEND_URL, script_id, version),
+                                headers=_headers(), timeout=30)
+        response.raise_for_status()
+        _install_downloaded_script(response.content, directory)
+    config = parse_script_config(os.path.join(directory, 'main.py'))
+    if not isinstance(config, dict):
+        raise ValueError('无法解析固定版本脚本配置')
+    params = body.get('params', {})
+    if isinstance(params, str):
+        params = json.loads(params)
+    if not isinstance(params, dict):
+        raise ValueError('params 必须是对象')
+    errors = _validate_run_params(config.get('params', []), params)
+    if errors:
+        raise ValueError('参数校验失败: ' + '; '.join(errors))
+    body['params'] = params
+    return directory, config
+
+
+def _prepare_task(item):
+    body = item['body']
+    if item['source'] == 'remote':
+        execution_id = body['execution_id']
+        attempt = _task_store.attempt(execution_id, body)
+        body['attempt_id'] = attempt
+        try:
+            claimed = _task_device.call('POST', '/executions/' + str(execution_id) + '/claim', {'attempt_id': attempt})
+        except requests.HTTPError as exc:
+            if exc.response is not None and 400 <= exc.response.status_code < 500:
+                body['claim_rejected'] = True
+                _task_store.attempt_state(execution_id, 'rejected', body)
+            raise
+        if claimed.get('state') != 'claimed':
+            raise RuntimeError('领取状态不允许启动')
+        body.update(claimed, execution_id=execution_id, attempt_id=attempt)
+        _task_store.attempt_state(execution_id, 'claimed', body)
+        timeout = body.get('timeout_seconds')
+        if type(timeout) is not int or not 1 <= timeout <= 86400:
+            raise ValueError('远程任务超时无效')
+        item['deadline'] = item['started_monotonic'] + timeout
+    elif item['source'] == 'legacy':
+        run_id = body['run_id']
+        claimed = _task_request('POST', '/api/runs/{}/claim'.format(run_id), {'agent_id': _agent_id})
+        body.update(claimed, run_id=run_id)
+    directory, config = _fixed_script(body, local=item['source'] == 'local')
+    if item['source'] == 'legacy':
+        timeout = config.get('timeout', 600)
+        if type(timeout) is not int or not 1 <= timeout <= 86400:
+            raise ValueError('脚本超时配置无效')
+        item['deadline'] = item['started_monotonic'] + timeout
+    from client.agent.local_server import _detect_browsers
+    check_conditions(body, _detect_browsers)
+    remaining = item['deadline'] - time.monotonic()
+    if remaining <= 0 or item['cancel'].is_set():
+        raise InterruptedError('准备已取消或超时')
+    executable = prepare_environment(config, _CLIENT_PATHS, _client_config.get('pip_index_url') or None,
+                                     not get_connection_status()['online'], item['cancel'], timeout=remaining)
+    item.update(script_dir=directory, script_name=config.get('name'),
+                log_path=os.path.join(_LOGS_DIR, item['id'] + '.log'))
+    return executable
+
+
+def _safe_legacy_environment(body):
+    # Keep explicit application settings, never remote interpreter/loader overrides.
+    env = {}
+    if body.get('environment_id'):
+        value = _task_request('GET', '/api/environments/' + str(int(body['environment_id'])))
+        for key, target in [('browser_port', 'BROWSER_PORT'), ('browser_path', 'BROWSER_PATH'),
+                            ('output_dir', 'OUTPUT_DIR'), ('proxy', 'http_proxy')]:
+            if value.get(key):
+                env[target] = str(value[key])
+        if 'http_proxy' in env:
+            env['https_proxy'] = env['http_proxy']
+    return env
+
+
+def _spawn_task(item, executable):
+    if item['source'] == 'local':
+        record = _local_runs[item['id']]
+        record.update(status='running', log_path=item['log_path'], script_name=item.get('script_name'))
+        if not _save_local_runs():
+            raise RuntimeError('启动状态无法持久化')
+    env = _safe_legacy_environment(item['body']) if item['source'] == 'legacy' else None
+    _controller._guard(item)
+    return _start_script_subprocess(item['script_dir'], item['body']['params'], item['log_path'],
+                                    item['body'].get('timeout_seconds', 600), env_vars=env,
+                                    python_executable=executable)
+
+
+def _log_tail(path):
     try:
-        _poll_and_execute_locked()
+        with open(path, 'rb') as stream:
+            start = max(0, stream.seek(0, 2) - 65536)
+            stream.seek(start)
+            raw = stream.read(65536)
+            if start:
+                # 丢弃首条残缺行，避免截断掉凭据字段名后只上传其值。
+                raw = raw.split(b'\n', 1)[1] if b'\n' in raw else b''
+            return raw.decode('utf-8', errors='ignore')
+    except (OSError, TypeError):
+        return ''
+
+
+def _complete_task(item):
+    from client.runtime.execution_output import bounded_execution_output
+    body, state = item['body'], item['state']
+    try:
+        tail = _log_tail(item.get('log_path'))
+    except Exception:
+        tail = ''
+        logger.warning('无法读取结果日志；保留执行终态')
+    files = []
+    try:
+        for line in tail.splitlines():
+            if line.startswith('__RESULT__:'):
+                files = [v['path'] for v in _normalize_result_files(_parse_result_literal(line[11:]), item.get('script_dir'))]
+    except Exception:
+        logger.warning('忽略无效脚本结果标记；保留执行终态')
+    output = bounded_execution_output(item.get('error_msg'), files, tail)
+    files = output['result_files']
+    if item['source'] == 'remote':
+        if not body.get('attempt_id') or body.get('claim_rejected'):
+            return  # No claim exists; do not retain an impossible attempt report.
+        payload = {'attempt_id': body['attempt_id'], 'state': state, 'stopped': True, **output}
+        _task_store.finish_attempt(body['execution_id'], body, payload)
+    elif item['source'] == 'legacy':
+        if item.get('log_path'):
+            try:
+                _finish_log_upload(body['run_id'], item['log_path'], agent_id=_agent_id)
+            except Exception:
+                logger.warning('日志上传异常；继续记录执行终态')
+        _task_store.enqueue_report('legacy:' + str(body['run_id']), '/api/runs/' + str(body['run_id']) + '/status',
+                                   {'status': state, 'error_msg': output['error_msg'],
+                                    'result_files': json.dumps(files), 'agent_id': _agent_id})
+    else:
+        rec = _local_runs.get(item['id'])
+        if rec is not None:
+            finished = time.time()
+            rec.update(status=state, finished_at=finished, error_msg=output['error_msg'],
+                       duration_sec=max(0, int(finished - rec['started_at'])),
+                       log_path=item.get('log_path'), result_files=files)
+            if not _save_local_runs():
+                raise RuntimeError('完成记录持久化失败，保留执行槽')
+    _notify_execution_result(item.get('script_name'), state, item.get('error_msg'))
+
+
+def start_local_run(req, *, event_id=None):
+    if not _execution_start_lock.acquire(blocking=False):
+        return {'error': 'another task is running'}
+    try:
+        if _controller is not None and _controller.active is not None:
+            return {'error': 'another task is running'}
+        if _running_proc is not None or _local_run_proc is not None:
+            return {'error': 'another task is running'}
+        return _submit_local_run(req, event_id=event_id)
+    except Exception as exc:
+        return {'error': str(exc)}
     finally:
         _execution_start_lock.release()
 
 
-def _poll_and_execute_locked():
-    """Non-blocking poll: check running process or start new run."""
-    global _running_proc, _running_info, _current_run_id
-    script_name = None
-
-    # Upload live log bytes before other polling work.
-    if _running_proc is not None and _running_info.get("run_id") and _running_info.get("log_path"):
-        _upload_log_delta(
-            _running_info["run_id"], _running_info["log_path"], agent_id=_agent_id
-        )
-
-    # 0) Cancel propagation (design §5.1): cancel only flips backend status — the Agent
-    #    must independently notice and kill its subprocess, otherwise the cancelled run
-    #    blocks every subsequent run indefinitely (_running_proc never clears).
-    if _running_proc is not None and _running_info.get("run_id"):
-        try:
-            check_resp = requests.get(
-                "{}/api/runs/{}".format(BACKEND_URL, _running_info["run_id"]),
-                headers=_headers(), timeout=5,
-            )
-            if check_resp.status_code == 200 and check_resp.json().get("status") == "cancelled":
-                print("后端已取消任务 {},终止子进程".format(_running_info["run_id"]))
-                try:
-                    _running_proc.kill()
-                    _running_proc.wait(timeout=5)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-                try:
-                    _running_proc._log_file.close()
-                    os.remove(_running_proc._params_file)
-                except (OSError, AttributeError):
-                    pass
-                cancelled_name = _running_info.get("script_name")
-                _running_proc = None
-                _current_run_id = None
-                _running_info = {}
-                _notify_execution_result(cancelled_name, "cancelled")
-                return  # next cycle picks up new pending runs
-        except (requests.RequestException, OSError):
-            pass  # best-effort: if check fails, normal timeout watchdog still applies
-
-    # 1) Check running process
-    result = _check_running_process()
-    if result:
-        run_id = result.pop("run_id", None)
-        actual_log_path = result.pop("log_path", None)
-        result_script_dir = result.pop("script_dir", None)
-        result_script_name = result.pop("script_name", None)
-        if run_id:
-            if actual_log_path:
-                _finish_log_upload(run_id, actual_log_path, agent_id=_agent_id)
-            update = {"status": result["status"]}
-            if result.get("error"):
-                update["error_msg"] = result["error"]
-            if result.get("result"):
-                update["result_files"] = json.dumps(
-                    _normalize_result_files(result["result"], base_dir=result_script_dir),
-                    ensure_ascii=False,
-                )
-            _report_run_status(run_id, update)
-            _notify_execution_result(result_script_name, result["status"], result.get("error"))
-        return  # Don't start new run yet (next poll cycle)
-
-    # 2) Local and online tasks share the same desktop and execution slot.
-    if _running_proc is not None or _local_run_proc is not None:
-        return
-
-    # GUI 已关闭时只排空当前任务，不再领取新任务。
+def _submit_local_run(req, *, event_id=None):
     if _shutdown_when_idle:
-        return
-
-    # 3) Look for pending run
-    try:
-        resp = requests.get(
-            "{}/api/runs?status=pending&limit=1&mine_only=true".format(BACKEND_URL),
-            headers=_headers(),
-            timeout=10,
-        )
-        if resp.status_code != 200 or not resp.json():
-            return
-
-        run = resp.json()[0]
-        run_id = run["id"]
-        # A local history import must be resumed by the sync path, never executed.
-        if any(r.get("backend_run_id") == run_id and not r.get("synced")
-               for r in _local_runs.values()):
-            return
-        _current_run_id = run_id
-        if not _agent_id:
-            _current_run_id = None
-            return
-        claim_resp = requests.post(
-            "{}/api/runs/{}/claim".format(BACKEND_URL, run_id),
-            json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
-        )
-        if claim_resp.status_code != 200:
-            _current_run_id = None
-            return
-        run = claim_resp.json()
-        script_id = run["script_id"]
-
-        # Get script info
-        script_resp = requests.get(
-            "{}/api/scripts/{}".format(BACKEND_URL, script_id),
-            headers=_headers(),
-            timeout=10,
-        )
-        if script_resp.status_code != 200:
-            _report_run_failure(
-                run_id,
-                "Failed to load script metadata",
-                "脚本 #{}".format(script_id),
-            )
-            _current_run_id = None
-            return
-
-        script = script_resp.json()
-        script_name = script.get("name") or "脚本 #{}".format(script_id)
-        ver = run.get("script_version")
-        if not isinstance(ver, int) or isinstance(ver, bool) or ver < 1:
-            _report_run_failure(run_id, "任务缺少有效的锁定脚本版本，请重新创建任务", script_name)
-            _current_run_id = None
-            return
-        script_dir = os.path.join(_SCRIPTS_DIR, str(script_id), str(ver))
-        os.makedirs(_LOGS_DIR, exist_ok=True)
-
-        # Download script files if not present locally
-        if not os.path.isdir(script_dir):
-            print("正在下载脚本 {} v{}...".format(script_id, ver))
-            dl_resp = requests.get(
-                "{}/api/scripts/{}/download?version={}".format(BACKEND_URL, script_id, ver),
-                headers=_headers(), timeout=30, stream=True,
-            )
-            if dl_resp.status_code == 200:
-                _install_downloaded_script(dl_resp.content, script_dir)
-                print("脚本已下载到 {}".format(script_dir))
-            else:
-                _report_run_failure(run_id, "Failed to download script files", script_name)
-                _current_run_id = None
-                return
-
-        log_path = os.path.join(_LOGS_DIR, "{}.log".format(run_id))
-
-        # Apply environment config
-        env_vars = {}
-        python_executable = None
-        env_id = run.get("environment_id")
-        if env_id:
-            try:
-                env_resp = requests.get(
-                    "{}/api/environments/{}".format(BACKEND_URL, env_id),
-                    headers=_headers(), timeout=10,
-                )
-                if env_resp.status_code == 200:
-                    env_cfg = env_resp.json()
-                    if env_cfg.get("browser_port"):
-                        env_vars["BROWSER_PORT"] = str(env_cfg["browser_port"])
-                    if env_cfg.get("browser_path"):
-                        env_vars["BROWSER_PATH"] = env_cfg["browser_path"]
-                    if env_cfg.get("output_dir"):
-                        env_vars["OUTPUT_DIR"] = env_cfg["output_dir"]
-                    if env_cfg.get("proxy"):
-                        env_vars["http_proxy"] = env_cfg["proxy"]
-                        env_vars["https_proxy"] = env_cfg["proxy"]
-                    if env_cfg.get("extra_env"):
-                        for k, v in env_cfg["extra_env"].items():
-                            env_vars[k] = str(v)
-                    if env_cfg.get("python_executable"):
-                        python_executable = env_cfg["python_executable"]
-                    print("使用环境: {} ({} 个变量, python={})".format(
-                        env_cfg.get("name"), len(env_vars),
-                        python_executable or "default"))
-            except Exception as e:
-                print("加载环境配置失败: {}".format(e))
-
-        # Check and install dependencies
-        script_config = {}
-        config_path = os.path.join(script_dir, "main.py")
+        return {'error': 'Agent 正在退出，不能启动新任务'}
+    body = dict(req)
+    if body.get('script_id') not in _load_authorized_script_ids():
+        return {'error': '脚本授权已失效，请联网刷新市场权限'}
+    _initialize_tasks()
+    if 'env_vars' in body or 'python_executable' in body:
+        raise ValueError('本机任务不接受环境变量或解释器覆盖')
+    if set(body) - {'script_id', 'script_version', 'params', 'timeout_seconds', 'requires_desktop',
+                    'requires_browser', 'name', 'trigger'}:
+        raise ValueError('本机任务包含不允许的字段')
+    if 'script_version' not in body:
+        match = next((s for s in list_local_scripts() if s['id'] == body.get('script_id')), None)
+        if match:
+            body['script_version'] = match['latest_version']
+    _, config = _fixed_script(body, local=True)
+    body.setdefault('timeout_seconds', config.get('timeout', 600))
+    ident = event_id or 'L' + str(uuid.uuid4())
+    with _controller.lock:
+        if _controller.active is not None:
+            return {'error': 'another task is running'}
+        record = {'local_run_id': ident, 'request_id': str(uuid.uuid4()), **body,
+                  'status': 'preparing', 'started_at': time.time(), 'finished_at': None, 'synced': False}
+        _local_runs[ident] = record
+        if not _save_local_runs():
+            _local_runs.pop(ident, None)
+            raise RuntimeError('执行意图无法持久化')
         try:
-            script_config = parse_script_config(config_path) or {}
-        except Exception as e:
-            logger.warning("解析脚本配置失败: %s", e)
+            result = _controller.submit(ident, body)
+        except Exception as exc:
+            if event_id is not None:
+                _local_runs.pop(ident, None)  # No execution was accepted; event owns skipped/cancelled fact.
+            else:
+                record.update(status='failed', error_msg=str(exc), finished_at=time.time())
+            _save_local_runs()
+            raise
+        return record if 'error' not in result else result
 
-        if script_config:
-            script_python, dep_error = prepare_script_environment(script_config, offline=False)
-            if dep_error:
-                _report_run_failure(run_id, dep_error, script_name)
-                _current_run_id = None
+
+def _check_local_runs():
+    if _controller is None:
+        return
+    _task_store.tick()
+    if _controller.active is None and not _shutdown_when_idle:
+        for event in _task_store.queued():
+            try:
+                result = start_local_run(event['body'], event_id=event['id'])
+                if result.get('error') and result['error'] != 'another task is running':
+                    _task_store.fail_queued(event['id'], result['error'])
+            except Exception as exc:
+                _task_store.fail_queued(event['id'], str(exc))
+
+
+def poll_and_execute():
+    if not _execution_start_lock.acquire(blocking=False):
+        return
+    try:
+        if _running_proc is not None or _local_run_proc is not None:
+            return
+        _poll_tasks_once()
+    finally:
+        _execution_start_lock.release()
+
+
+def _poll_tasks_once():
+    if _controller is None or _shutdown_when_idle:
+        return
+    def send(route, body):
+        try:
+            if route.startswith('/api/runs/'):
+                _task_request('PATCH', route, body)
+            else:
+                _task_device.call('POST', route, body)
+                execution_id = route.split('/')[2]
+                _task_store.attempt_state(execution_id, 'reported')
+            return True
+        except Exception:
+            return False
+    try:
+        if not _task_device.registered:
+            _task_device.register()
+        _task_device.call('POST', '/heartbeat', {})
+        _sync_task_notifications()
+    except Exception as exc:
+        logger.debug('任务设备心跳暂不可用: %s', type(exc).__name__)
+    _task_store.flush(send)  # Legacy reports must still drain against pre-1.3 servers.
+    try:
+        pending = _task_device.call('GET', '/pending')
+        active = _controller.active
+        for execution in pending:
+            ident = 'R' + str(execution['id'])
+            if active and active['id'] == ident and execution['state'] == 'cancel_requested':
+                _controller.cancel(ident)
+            if _controller.active is None and execution['state'] == 'queued':
+                if any(a['execution_id'] == str(execution['id']) for a in _task_store.attempts()):
+                    continue
+                _controller.submit(ident, {**execution, 'execution_id': execution['id']}, 'remote')
                 return
-            python_executable = script_python
+    except Exception as exc:
+        logger.debug('任务设备同步暂不可用: %s', type(exc).__name__)
+    if _controller.active is not None:
+        item = _controller.active
+        if item['source'] == 'legacy':
+            try:
+                if item.get('log_path'):
+                    _upload_log_delta(item['body']['run_id'], item['log_path'], agent_id=_agent_id)
+                run = _task_request('GET', '/api/runs/' + str(item['body']['run_id']))
+                if run.get('status') == 'cancelled':
+                    _controller.cancel(item['id'])
+            except Exception:
+                pass
+        return
+    if not _agent_id:
+        return
+    try:
+        runs = _task_request('GET', '/api/runs?status=pending&limit=1&mine_only=true')
+        if runs:
+            run = runs[0]
+            if any(rec.get('backend_run_id') == run['id'] for rec in _local_runs.values()):
+                return  # Pre-1.3 history imports must never become executable work.
+            ident = 'B' + str(run['id'])
+            if any(e['id'] == ident for e in _task_store.events()):
+                return
+            _controller.submit(ident, {**run, 'run_id': run['id']}, 'legacy')
+    except Exception as exc:
+        logger.debug('旧任务轮询暂不可用: %s', type(exc).__name__)
 
-            # Pre-execution parameter validation (design §5.2): file/folder existence etc.
-            param_defs = script_config.get("params", [])
-            if param_defs:
-                params_for_check = json.loads(run["params"]) if run.get("params") else {}
-                val_errors = _validate_run_params(param_defs, params_for_check)
-                if val_errors:
-                    _report_run_failure(
-                        run_id,
-                        "参数校验失败: " + "; ".join(val_errors),
-                        script_name,
-                    )
-                    _current_run_id = None
-                    return
 
-        timeout = script_config.get("timeout", 600)
+def _sync_local_runs_locked():
+    if not get_connection_status()['online']:
+        return
+    candidates = [(ident, rec) for ident, rec in list(_local_runs.items())
+                  if not rec.get('synced') and rec.get('status') in ('success', 'failed', 'cancelled')]
+    candidates.sort(key=lambda pair: pair[1].get('last_import_attempt', 0))
+    for ident, rec in candidates[:1]:  # Bound network work so heartbeat cannot be starved by history.
+        try:
+            rec['last_import_attempt'] = time.time()
+            if rec.get('backend_run_id') is not None:
+                remote = _task_request('GET', '/api/runs/' + str(rec['backend_run_id']))
+                if (remote.get('script_id') != rec['script_id'] or
+                        remote.get('script_version') != rec['script_version'] or
+                        remote.get('agent_id') not in (None, _agent_id)):
+                    rec['sync_error'] = '旧导入记录身份不匹配，需要人工核对'
+                elif remote.get('status') in ('success', 'failed', 'cancelled', 'running'):
+                    if remote.get('status') == 'running' and (not _agent_id or remote.get('agent_id') != _agent_id):
+                        rec['sync_error'] = '旧记录不属于当前 Agent，需要人工核对'
+                    else:
+                        logs_synced = True
+                        try:
+                            if rec.get('log_path'):
+                                logs_synced = _finish_log_upload(rec['backend_run_id'], rec['log_path'], agent_id=_agent_id)
+                        except Exception:
+                            logs_synced = False
+                        if remote.get('status') == 'running':
+                            _task_request('PATCH', '/api/runs/' + str(rec['backend_run_id']) + '/status',
+                                          {'status': rec['status'], 'agent_id': _agent_id,
+                                           'error_msg': rec.get('error_msg'),
+                                           'result_files': rec['result_files'] if isinstance(rec.get('result_files'), str)
+                                                           else json.dumps(rec.get('result_files') or [])})
+                        rec['synced'] = logs_synced  # Never overwrite an already-terminal remote result.
+                else:
+                    rec['sync_error'] = '旧导入记录尚未结束，需要人工核对；不会重新执行'
+                _save_local_runs()
+                continue
+            if not _task_device or not _task_device.registered:
+                continue  # Old servers may reconcile existing IDs, but cannot import new history.
+            if not rec.get('import_payload'):
+                rec.setdefault('request_id', str(uuid.uuid4()))
+                files = rec.get('result_files') or []
+                if isinstance(files, str):
+                    files = json.loads(files)
+                files = [v if isinstance(v, str) else v['path'] for v in files]
+                payload = {k: rec[k] for k in ('request_id', 'script_id', 'script_version', 'status')}
+                from client.runtime.execution_output import bounded_execution_output
+                payload.update(device_id=_task_device.registered['id'], params=rec.get('params') or {},
+                               started_at=datetime.fromtimestamp(rec['started_at'], timezone.utc).isoformat(),
+                               finished_at=datetime.fromtimestamp(rec['finished_at'], timezone.utc).isoformat(),
+                               **bounded_execution_output(rec.get('error_msg'), files, _log_tail(rec.get('log_path'))))
+                rec['import_payload'] = json.loads(json.dumps(payload))
+            if not _save_local_runs():
+                continue
+            payload = rec['import_payload']
+            result = _task_request('POST', '/api/runs/import-local', payload,
+                                   {'X-Device-Token': _task_device.identity['device_secret']})
+            rec.update(synced=True, backend_run_id=result['run_id'])
+            _save_local_runs()
+        except (requests.RequestException, OSError, ValueError, KeyError, TypeError):
+            logger.debug('本机完成历史导入暂不可用: %s', ident)
 
-        # Start subprocess asynchronously
-        params = json.loads(run["params"]) if run.get("params") else {}
-        proc = _start_script_subprocess(
-            script_dir, params, log_path, timeout,
-            env_vars=env_vars or None, python_executable=python_executable,
-        )
 
-        _running_proc = proc
-        _running_info = {
-            "run_id": run_id,
-            "script_dir": script_dir,
-            "log_path": log_path,
-            "timeout": timeout,
-            "start_time": time.time(),
-            "script_name": script_name,
-        }
-        print("脚本执行已启动 (PID {}, 任务 {})".format(proc.pid, run_id))
-
-    except Exception as e:
-        if _current_run_id:
-            _report_run_failure(
-                _current_run_id,
-                str(e),
-                script_name,
-            )
-        _current_run_id = None
+def _local_task_api(method, path, body=None):
+    _initialize_tasks()
+    if method == 'GET':
+        if path == '/local/schedules':
+            return _task_store.tasks()
+        if path == '/local/schedule-events':
+            return [dict(e, task_name=e['body'].get('name') or e['body'].get('task_name'),
+                         script_id=e['body'].get('script_id'), script_version=e['body'].get('script_version'),
+                         run_id=e['body'].get('run_id'),
+                         local_run_id=e['id'] if e['id'] in _local_runs else None) for e in _task_store.events()]
+        if path == '/local/task-device':
+            return _task_device.public()
+        if path == '/local/device-grants':
+            return _task_device.grants() if _task_device.registered else []
+        if path == '/local/diagnostics':
+            return collect_diagnostics(_CLIENT_PATHS, _agent_id, get_connection_status()['online'])
+    if method == 'POST':
+        if path == '/local/schedules':
+            allowed = {'name', 'script_id', 'script_version', 'params', 'trigger', 'timeout_seconds',
+                       'requires_desktop', 'requires_browser'}
+            if set(body) - allowed:
+                raise ValueError('任务包含不允许的字段')
+            _fixed_script(body, local=True)
+            timeout = body.get('timeout_seconds', 600)
+            if type(timeout) is not int or not 1 <= timeout <= 86400:
+                raise ValueError('无效超时')
+            for key in ('requires_desktop', 'requires_browser'):
+                if type(body.get(key, False)) is not bool:
+                    raise ValueError('运行条件必须是布尔值')
+            return _task_store.create(body)
+        parts = path.strip('/').split('/')
+        if len(parts) == 4 and parts[:2] == ['local', 'schedules'] and parts[3] == 'action':
+            with _controller.lock:
+                result = _task_store.action(parts[2], body)
+                active = _controller.active
+                if body.get('action') in ('pause', 'delete') and active is not None:
+                    if any(e['id'] == active['id'] and e['task_id'] == parts[2] for e in _task_store.events()):
+                        _controller.cancel(active['id'])
+                return result
+        if len(parts) == 4 and parts[:2] == ['local', 'device-grants'] and parts[3] == 'decision':
+            return _task_device.decision(parts[2], body)
+        if len(parts) == 4 and parts[:2] == ['local', 'runs'] and parts[3] == 'cancel':
+            return _controller.cancel(parts[2])
+    raise ValueError('未知本机任务接口')
 
 
 def _compare_versions(local_ver, remote_ver):
@@ -1516,7 +1316,7 @@ def _check_and_stage_update():
     local_version = get_version()
     return check_and_stage_update(
         current_version=local_version,
-        runtime_is_idle=lambda: _running_proc is None and _local_run_proc is None,
+        runtime_is_idle=_runtime_is_idle,
     )
 
 
@@ -1551,10 +1351,12 @@ def _run_update_install_worker():
     try:
         result = install_staged_update(
             current_version=get_version(),
-            runtime_is_idle=lambda: _running_proc is None and _local_run_proc is None,
+            runtime_is_idle=_runtime_is_idle,
         )
         if result.get("state") == "installing":
             _restart_requested = True
+            if _task_notifications is not None:
+                _task_notifications.stop()
     except Exception:
         logger.exception("后台更新下载或安装启动失败")
 
@@ -1584,10 +1386,12 @@ def request_shutdown_when_idle():
     """Stop accepting work and exit after all current scripts finish."""
     global _shutdown_when_idle
     _shutdown_when_idle = True
+    if _task_notifications is not None:
+        _task_notifications.stop()
 
 
 def _runtime_is_idle():
-    return _running_proc is None and _local_run_proc is None
+    return (_controller is None or _controller.active is None) and _running_proc is None and _local_run_proc is None
 
 
 def initialize_agent_runtime():
@@ -1595,6 +1399,8 @@ def initialize_agent_runtime():
     _load_pending_reports()
     _load_pending_log_uploads()
     _load_local_runs()
+    configure_application_logging('agent', _CLIENT_PATHS)
+    _initialize_tasks()
     server_thread = start_local_server(
         LOCAL_PORTS,
         _get_current_run_id,
@@ -1612,6 +1418,7 @@ def initialize_agent_runtime():
         install_update_fn=_install_staged_update,
         get_runtime_info_fn=_get_runtime_info,
         request_shutdown_fn=request_shutdown_when_idle,
+        task_api_fn=_local_task_api,
     )
     server_thread.daemon = True
     server_thread.start()
@@ -1623,33 +1430,51 @@ def agent_iteration(username, password):
     global _last_update_check_time, _restart_requested, _last_settings_sync_time
     global _last_script_access_sync_time
 
+    _check_local_runs()  # Scheduler and process worker remain functional with no network.
     if not _token:
         if not authenticate(username, password):
-            _check_local_runs()
+            update_effective_policy({})
             _check_offline_notification()
             return False
         print("Agent 已认证为 {},每 {} 秒轮询一次".format(username, POLL_INTERVAL))
         register_agent()
 
+    heartbeat_ok = send_heartbeat()  # Business liveness precedes retries/settings traffic.
+    _sync_task_notifications()
     now = time.time()
     if _last_update_check_time == 0 or now - _last_update_check_time >= UPDATE_CHECK_INTERVAL_SEC:
         _last_update_check_time = now
         _check_and_stage_update()
     if now - _last_settings_sync_time >= 60:
+        try:
+            update_effective_policy(_task_request('GET', '/api/settings/diagnostics/effective'))
+        except Exception:
+            update_effective_policy({})
         if _sync_client_settings():
             _last_settings_sync_time = now
     if now - _last_script_access_sync_time >= 60:
         if _sync_script_authorizations():
             _last_script_access_sync_time = now
 
-    _flush_pending_reports()
-    _flush_pending_log_uploads()
     _check_local_runs()
     poll_and_execute()
-    send_heartbeat()
+    _flush_pending_reports()
+    _flush_pending_log_uploads()
     _sync_local_runs_to_backend()
     _check_offline_notification()
-    return True
+    return heartbeat_ok
+
+
+def _sync_task_notifications():
+    if _task_notifications is None:
+        return
+    account = str(_client_config.get('username', ''))
+    scope = BACKEND_URL.rstrip('/') + '|' + account
+    identity = _task_device.notification_identity(scope) if _task_device is not None else None
+    if not _token or identity is None or _shutdown_when_idle or _restart_requested:
+        _task_notifications.configure()
+    else:
+        _task_notifications.configure(BACKEND_URL, (account, _user_id), _token, *identity)
 
 
 def _next_poll_interval():
@@ -1657,20 +1482,29 @@ def _next_poll_interval():
 
 
 def run_agent(username, password):
-    global _restart_requested, _shutdown_when_idle
+    global _restart_requested, _shutdown_when_idle, _task_notifications
     _restart_requested = False
     _shutdown_when_idle = False
     initialize_agent_runtime()
-
-    while not _restart_requested:
-        agent_iteration(username, password)
-        if _shutdown_when_idle and _runtime_is_idle():
-            print("GUI 已关闭，Agent 已完成当前任务并退出")
-            break
-        time.sleep(_next_poll_interval())
+    _task_notifications = TaskNotifications()
+    _task_notifications.start()
+    try:
+        while not _restart_requested:
+            _sync_task_notifications()
+            agent_iteration(username, password)
+            _sync_task_notifications()
+            if _shutdown_when_idle and _runtime_is_idle():
+                print("GUI 已关闭，Agent 已完成当前任务并退出")
+                break
+            _task_notifications.wait(_next_poll_interval())
+    finally:
+        _task_notifications.stop()
+        _task_notifications = None
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     if len(sys.argv) >= 3:
         username = sys.argv[1]
         password = sys.argv[2]

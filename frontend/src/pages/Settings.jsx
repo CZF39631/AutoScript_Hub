@@ -5,6 +5,8 @@ import { Link } from 'react-router-dom'
 import api from '../api/client'
 import { checkUpdate, downloadAndInstallUpdate, loadUpdateStatus } from '../api/localUpdate'
 import { useConnection } from '../contexts/ConnectionContext'
+import { useAuth } from '../contexts/AuthContext'
+import DiagnosticSettings from '../components/DiagnosticSettings'
 
 const updateStateSummary = {
   available: '发现可用更新（尚未下载）',
@@ -23,6 +25,7 @@ const updateStateColor = {
 }
 
 export default function Settings() {
+  const { user } = useAuth()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [updateBusy, setUpdateBusy] = useState(false)
@@ -175,6 +178,8 @@ export default function Settings() {
           </div>
         </Form>
       </Card>
+
+      {user?.role === 'admin' && <DiagnosticSettings />}
 
       <Card
         title="客户端更新"

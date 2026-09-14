@@ -37,7 +37,8 @@ def diagnostics(client, fresh_db, op_token, tmp_path, monkeypatch):
 def create(client, diagnostics, **extra):
     run_id, _, auth = diagnostics
     return client.post("/api/issues", headers=auth,
-                       json={"run_id": run_id, "title": "failure", **extra})
+                       json={"run_id": run_id, "title": "failure", "include_run_summary": True,
+                             "include_run_log": True, "diagnostics_consent": True, **extra})
 
 
 def test_snapshot_survives_log_removal_and_pins_executed_version(client, diagnostics, fresh_db):
@@ -138,7 +139,8 @@ def test_disabling_redaction_never_bypasses_log_authorization_or_size_limit(clie
     run_id, path, operator = diagnostics
     path.write_text("large line\n" * 20000, encoding="utf-8")
     issue = client.post("/api/issues", headers=admin,
-                        json={"run_id": run_id, "title": "admin report"}).json()
+                        json={"run_id": run_id, "title": "admin report", "include_run_summary": True,
+                              "include_run_log": True, "diagnostics_consent": True}).json()
     assert client.get(f"/api/issues/{issue['id']}/log", headers=operator).status_code == 404
     log = client.get(f"/api/issues/{issue['id']}/log", headers=admin).json()["log"]
     assert len(log.encode("utf-8")) <= MAX_LOG_BYTES
@@ -179,7 +181,9 @@ def test_policy_concurrent_change_is_not_overwritten(client, diagnostics, fresh_
 
 
 def test_deleted_run_and_oversized_issue_are_rejected(client, diagnostics, fresh_db):
-    assert create(client, diagnostics, title="x" * 201).status_code == 422
+    invalid_title = create(client, diagnostics, title="x" * 201)
+    assert invalid_title.status_code == 422
+    assert isinstance(invalid_title.json()['detail'], str)  # Legacy UI cannot render error objects.
     assert create(client, diagnostics, description="x" * 8001).status_code == 422
     Session, _ = fresh_db
     with Session() as db:

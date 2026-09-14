@@ -1,13 +1,16 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Descriptions, Tag, Spin, Button, Space, Modal, Input, Form, message } from 'antd'
+import { Alert, Descriptions, Tag, Spin, Button, Space, message, Popconfirm } from 'antd'
 import { FolderOpenOutlined, StopOutlined, ReloadOutlined, BugOutlined } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import api from '../api/client'
 import LogViewer from '../components/LogViewer'
+import DiagnosticReport from '../components/DiagnosticReport'
 import { useConnection } from '../contexts/ConnectionContext'
 import { canOpenResultLocally, firstResultPath, loadRunDetail } from '../api/offlineData'
 import { formatScriptVersion } from '../utils/scriptVersion'
 import { formatServerTime } from '../utils/dateTime'
+import { taskError } from '../utils/taskScheduling'
+import { formatIssueParams } from '../utils/issueDetail'
 
 const statusMap = {
   pending: { color: 'blue', text: '等待中' },
@@ -15,17 +18,22 @@ const statusMap = {
   success: { color: 'green', text: '成功' },
   failed: { color: 'red', text: '失败' },
   cancelled: { color: 'default', text: '已取消' },
+  queued: { color: 'blue', text: '等待领取' },
+  claimed: { color: 'processing', text: '准备中' },
+  preparing: { color: 'processing', text: '准备中' },
+  cancel_requested: { color: 'orange', text: '正在取消' },
+  unknown: { color: 'warning', text: '结果未知' },
+  skipped: { color: 'default', text: '已跳过' },
 }
+const activeStates = ['pending', 'queued', 'claimed', 'preparing', 'running', 'cancel_requested', 'unknown']
 
 export default function RunDetail() {
   const { id } = useParams()
   const [run, setRun] = useState(null)
   const [loading, setLoading] = useState(true)
   const [issueModal, setIssueModal] = useState(false)
-  const [issueForm] = Form.useForm()
-  const [submitting, setSubmitting] = useState(false)
   const { online, agentOnline, agentId, localApi } = useConnection()
-  const localOnly = String(id).startsWith('L') || !online
+  const localOnly = /^[LS]/.test(String(id)) || !online
   const runStatus = run?.status
 
   const load = useCallback(() => {
@@ -44,34 +52,22 @@ export default function RunDetail() {
   useEffect(load, [load])
 
   useEffect(() => {
-    if (!localOnly || !['pending', 'running'].includes(runStatus)) return undefined
+    if (!activeStates.includes(runStatus)) return undefined
+    let active = true
     const interval = setInterval(() => {
-      loadRunDetail({ id, online: false, api, localApi }).then(setRun).catch(() => {})
-    }, 1000)
-    return () => clearInterval(interval)
-  }, [id, localOnly, localApi, runStatus])
+      loadRunDetail({ id, online, api, localApi }).then(value => { if (active) setRun(value) }).catch(() => {})
+    }, localOnly ? 1000 : 5000)
+    return () => { active = false; clearInterval(interval) }
+  }, [id, online, localOnly, localApi, runStatus])
 
   const onCancel = async () => {
     try {
-      await api.post(`/api/runs/${id}/cancel`)
-      message.success('已取消')
+      const endpoint = localOnly ? `/local/runs/${id}/cancel` : run.task_execution_id ? `/api/tasks/executions/${run.task_execution_id}/cancel` : `/api/runs/${id}/cancel`
+      await (localOnly ? localApi : api).post(endpoint, {})
+      message.success('取消请求已发送，请等待执行端确认停止')
       load()
     } catch (e) {
-      message.error(e.response?.data?.detail || '取消失败')
-    }
-  }
-
-  const onSubmitIssue = async (values) => {
-    setSubmitting(true)
-    try {
-      await api.post('/api/issues', { run_id: parseInt(id), ...values })
-      message.success('问题已上报')
-      setIssueModal(false)
-      issueForm.resetFields()
-    } catch (e) {
-      message.error(e.response?.data?.detail || '上报失败')
-    } finally {
-      setSubmitting(false)
+      message.error(taskError(e))
     }
   }
 
@@ -89,7 +85,7 @@ export default function RunDetail() {
   if (!run) return <div>记录不存在</div>
 
   const sm = statusMap[run.status] || { color: 'default', text: run.status }
-  const isAlive = run.status === 'pending' || run.status === 'running'
+  const isAlive = activeStates.includes(run.status)
 
   return (
     <div>
@@ -97,14 +93,17 @@ export default function RunDetail() {
         <h2 style={{ margin: 0 }}>执行详情 #{run.id}</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-          {isAlive && !localOnly && (
-            <Button danger icon={<StopOutlined />} onClick={onCancel}>取消执行</Button>
+          {isAlive && (
+            <Popconfirm title="请求取消此次执行？" description="只有执行端确认整个进程树停止后，才能确认取消。" onConfirm={onCancel}>
+              <Button danger icon={<StopOutlined />} disabled={run.status === 'cancel_requested'}>取消执行</Button>
+            </Popconfirm>
           )}
           {!localOnly && (run.status === 'failed' || run.status === 'success') && (
-            <Button icon={<BugOutlined />} onClick={() => { setIssueModal(true); issueForm.resetFields() }}>上报问题</Button>
+            <Button icon={<BugOutlined />} onClick={() => setIssueModal(true)}>上报问题</Button>
           )}
         </Space>
       </div>
+      {run.status === 'unknown' && <Alert type="warning" showIcon title="执行结果未知，请核对目标电脑；不要直接重复运行。" style={{ marginBottom: 16 }} />}
       <Descriptions bordered size="small" column={2} className="run-detail__descriptions" style={{ marginBottom: 16 }}>
         <Descriptions.Item label="脚本ID">{run.script_id}</Descriptions.Item>
         <Descriptions.Item label="版本">{formatScriptVersion(run.script_semantic_version, run.script_version)}</Descriptions.Item>
@@ -122,7 +121,7 @@ export default function RunDetail() {
         )}
         {run.params && (
           <Descriptions.Item label="参数" span={2}>
-            <pre className="run-detail__params">{JSON.stringify(JSON.parse(run.params), null, 2)}</pre>
+            <pre className="run-detail__params">{formatIssueParams(run.params).text}</pre>
           </Descriptions.Item>
         )}
       </Descriptions>
@@ -134,17 +133,8 @@ export default function RunDetail() {
         localApi={localApi}
       />
 
-      <Modal title="上报问题" open={issueModal} onCancel={() => setIssueModal(false)}
-        confirmLoading={submitting} onOk={() => issueForm.submit()} okText="提交">
-        <Form form={issueForm} layout="vertical" onFinish={onSubmitIssue}>
-          <Form.Item name="title" label="问题标题" rules={[{ required: true, message: '请填写' }]}>
-            <Input placeholder="简要描述问题" />
-          </Form.Item>
-          <Form.Item name="description" label="详细描述">
-            <Input.TextArea rows={4} placeholder="详细说明遇到的问题，日志会自动附带" />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <DiagnosticReport key={id} open={issueModal} onCancel={() => setIssueModal(false)}
+        runId={localOnly ? undefined : id} scriptVersion={formatScriptVersion(run.script_semantic_version, run.script_version)} />
     </div>
   )
 }

@@ -173,6 +173,79 @@ class Run(Base):
     user = relationship("User", back_populates="runs", foreign_keys=[user_id])  # type: ignore[call-arg]
 
 
+class TaskDevice(Base):
+    __tablename__ = "task_devices"
+    id = Column(Integer, primary_key=True)
+    device_uuid = Column(String(36), unique=True, nullable=False)
+    secret_hash = Column(String(64), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String(200), nullable=False)
+    agent_version = Column(String(40))
+    status = Column(String(20), nullable=False, default="online")
+    last_heartbeat = Column(DateTime, nullable=False, default=_utcnow)
+    active_execution_id = Column(Integer, nullable=True)
+
+
+class DeviceGrant(Base):
+    __tablename__ = "device_grants"
+    __table_args__ = (UniqueConstraint("device_id", "requester_id", "script_id", "script_version", name="uq_device_grant"),)
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("task_devices.id"), nullable=False)
+    requester_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    script_id = Column(Integer, ForeignKey("scripts.id"), nullable=False)
+    script_version = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+
+
+class ScheduledTask(Base):
+    __tablename__ = "scheduled_tasks"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    requester_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    device_id = Column(Integer, ForeignKey("task_devices.id"), nullable=False)
+    script_id = Column(Integer, ForeignKey("scripts.id"), nullable=False)
+    script_version = Column(Integer, nullable=False)
+    params = Column(Text, nullable=False, default="{}")
+    trigger = Column(Text, nullable=False)
+    timeout_seconds = Column(Integer, nullable=False, default=600)
+    requires_desktop = Column(Boolean, nullable=False, default=False)
+    requires_browser = Column(Boolean, nullable=False, default=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    is_deleted = Column(Boolean, nullable=False, default=False)
+    revision = Column(Integer, nullable=False, default=1)
+    next_fire_at = Column(DateTime)
+
+
+class TaskExecution(Base):
+    __tablename__ = "task_executions"
+    __table_args__ = (
+        UniqueConstraint("task_id", "revision", "scheduled_for", name="uq_task_occurrence"),
+        UniqueConstraint("task_id", "request_id", name="uq_task_request"),
+    )
+    id = Column(Integer, primary_key=True)
+    task_id = Column(Integer, ForeignKey("scheduled_tasks.id"), nullable=False)
+    device_id = Column(Integer, ForeignKey("task_devices.id"), nullable=False)
+    run_id = Column(Integer, ForeignKey("runs.id"), unique=True, nullable=False)
+    revision = Column(Integer, nullable=False)
+    scheduled_for = Column(DateTime)
+    request_id = Column(String(36))
+    attempt_id = Column(String(36))
+    state = Column(String(20), nullable=False, default="queued")
+    error_msg = Column(Text)
+    claimed_at = Column(DateTime)
+    stopped = Column(Boolean, nullable=False, default=False)
+
+
+class LocalRunImport(Base):
+    __tablename__ = "local_run_imports"
+    __table_args__ = (UniqueConstraint("device_id", "request_id", name="uq_local_run_import"),)
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("task_devices.id"), nullable=False)
+    request_id = Column(String(36), nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    run_id = Column(Integer, ForeignKey("runs.id"), unique=True, nullable=False)
+
+
 class UserScript(Base):
     __tablename__ = "user_scripts"
     __table_args__ = (UniqueConstraint("user_id", "script_id", name="uq_user_script"),)

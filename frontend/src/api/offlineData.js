@@ -72,7 +72,7 @@ export async function loadRunList({ online, api, localApi, query = '' }) {
 
 
 export async function loadRunDetail({ id, online, api, localApi }) {
-  const localOnly = String(id).startsWith('L') || !online
+  const localOnly = /^[LS]/.test(String(id)) || !online
   if (localOnly) {
     const response = await localApi.get(`/local/runs/${id}`)
     return normalizeLocalRun(response.data)
@@ -83,7 +83,7 @@ export async function loadRunDetail({ id, online, api, localApi }) {
 
 
 export async function loadRunLog({ id, localOnly, api, localApi }) {
-  if (localOnly || String(id).startsWith('L')) {
+  if (localOnly || /^[LS]/.test(String(id))) {
     const response = await localApi.get(`/local/runs/${id}/log`)
     return response.data
   }

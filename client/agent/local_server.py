@@ -2,12 +2,24 @@ import hmac
 import json
 import logging
 import os
+import socket
 import threading
 import winreg
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer as _ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Callable
 
 logger = logging.getLogger(__name__)
+
+
+class ThreadingHTTPServer(_ThreadingHTTPServer):
+    # Windows SO_REUSEADDR permits two processes to bind the same loopback port.
+    # That defeats fallback discovery and can route a token to another Agent.
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if os.name == 'nt':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def _detect_browsers():
@@ -82,6 +94,31 @@ def _detect_browsers():
 
 class AgentHandler(BaseHTTPRequestHandler):
     api_token = None
+    task_api_fn = None
+
+    def _task_route(self, method):
+        exact = {'/local/schedules', '/local/schedule-events', '/local/task-device',
+                 '/local/device-grants', '/local/diagnostics'}
+        action = (self.path.startswith('/local/schedules/') and self.path.endswith('/action')) or (
+            self.path.startswith('/local/device-grants/') and self.path.endswith('/decision')) or (
+            self.path.startswith('/local/runs/') and self.path.endswith('/cancel'))
+        if self.path not in exact and not action:
+            return False
+        callback = type(self).task_api_fn
+        if callback is None:
+            self._json({'error': '任务功能不可用'}, 503)
+            return True
+        body = self._read_json() if method == 'POST' else None
+        if method == 'POST' and body is None:
+            return True
+        try:
+            self._json(callback(method, self.path, body))
+        except (ValueError, TypeError, KeyError) as exc:
+            self._json({'error': str(exc)}, 400)
+        except Exception:
+            logger.exception('本机任务接口暂不可用')
+            self._json({'error': '任务操作暂不可用，请检查在线状态'}, 503)
+        return True
     allowed_origins = {
         "http://127.0.0.1:{}".format(port) for port in range(18081, 18091)
     }
@@ -129,6 +166,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._json({"error": "forbidden origin"}, 403)
             return
         if not self._authorized():
+            return
+        if self._task_route('GET'):
             return
         if self.path == "/status":
             callback = type(self).get_status_fn
@@ -183,6 +222,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._json({"error": "forbidden origin"}, 403)
             return
         if not self._authorized():
+            return
+        if self._task_route('POST'):
             return
         if self.path == "/lifecycle/shutdown":
             if not self._consume_body():
@@ -253,8 +294,13 @@ class AgentHandler(BaseHTTPRequestHandler):
     def _read_json(self):
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if not 0 < length <= 1024 * 1024:
+                raise ValueError('invalid body size')
             body = self.rfile.read(length)
-            return json.loads(body)
+            value = json.loads(body)
+            if not isinstance(value, dict):
+                raise ValueError('JSON object required')
+            return value
         except (json.JSONDecodeError, ValueError, OSError):
             self._json({"error": "invalid json"}, 400)
             return None
@@ -312,9 +358,11 @@ def start_local_server(
     install_update_fn=None,
     get_runtime_info_fn=None,
     request_shutdown_fn=None,
+    task_api_fn=None,
 ):
     if not api_token:
         raise ValueError("Agent API token is required")
+    AgentHandler.task_api_fn = task_api_fn
     AgentHandler.api_token = api_token
     AgentHandler.get_status_fn = get_status_fn
     AgentHandler.get_version_fn = get_version_fn

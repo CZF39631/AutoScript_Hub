@@ -71,6 +71,14 @@ class DiagnosticSettingsUpdate(DiagnosticPolicy):
     acknowledge_risk: bool = False
 
 
+@router.get("/diagnostics/effective", response_model=DiagnosticPolicy)
+def effective_diagnostic_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return load_diagnostic_policy(db)
+
+
 @router.get("/diagnostics", response_model=DiagnosticPolicy)
 def get_diagnostic_settings(
     current_user: User = Depends(require_role("admin")),

@@ -9,6 +9,7 @@ from shared.diagnostics import redact_data, redact_text, sensitive_values
 class DiagnosticPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
+    retention_days: int = Field(default=30, ge=1, le=365)
     enabled: bool = True
     redact_logs: bool = True
     redact_params: bool = True
@@ -42,9 +43,10 @@ class DiagnosticPolicy(BaseModel):
         return redact_data(value, secrets, self.custom_sensitive_fields) if self.protects("params") else value
 
     def weakens(self, previous):
-        return any(previous.protects(section) and not self.protects(section)
+        return (previous.enabled and not self.enabled) or any(previous.protects(section) and not self.protects(section)
                    for section in ("logs", "params", "summary")) or (
-            previous.enabled and bool(set(previous.custom_sensitive_fields) - set(self.custom_sensitive_fields))
+            bool({field.casefold() for field in previous.custom_sensitive_fields}
+                 - {field.casefold() for field in self.custom_sensitive_fields})
         )
 
 

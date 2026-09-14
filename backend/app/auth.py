@@ -41,8 +41,13 @@ def get_current_user(
     # No credentials provided at all → 401 (not 403, which would imply "authenticated but forbidden")
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")
+    return authenticate_access_token(credentials.credentials, db)
+
+
+def authenticate_access_token(token: str, db: Session):
+    """HTTP 与设备 WS 共用 JWT 和实时用户状态校验。"""
     try:
-        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user_id = int(payload.get("sub"))
     except (InvalidTokenError, ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的令牌")

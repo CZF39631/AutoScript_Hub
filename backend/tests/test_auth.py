@@ -23,10 +23,12 @@ def test_startup_seeds_admin_user_for_login(monkeypatch, tmp_path):
     monkeypatch.setattr(scheduler_module, "start_scheduler", lambda: None)
     monkeypatch.setattr(config_module, "JWT_SECRET", "test-secret-that-is-longer-than-thirty-two-characters")
     monkeypatch.setattr(config_module, "ADMIN_PASSWORD", "test-admin-password")
+    monkeypatch.setattr(init_db_module, "ADMIN_USERNAME", "admin")
+    monkeypatch.setattr(init_db_module, "ADMIN_PASSWORD", "test-admin-password")
 
     try:
         with TestClient(main_module.app) as client:
-            resp = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+            resp = client.post("/api/auth/login", json={"username": "admin", "password": "test-admin-password"})
         assert resp.status_code == 200
         assert resp.json()["user"]["username"] == "admin"
     finally:

@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files, copy_metadata
 
 
 ROOT = Path.cwd()
@@ -10,11 +10,12 @@ webview_datas, webview_binaries, webview_hidden = collect_all("webview")
 common_datas = [
     (str(ROOT / "frontend" / "dist"), "client/ui/static"),
     (str(ROOT / "client" / "update" / "update-public-key.b64"), "client/update"),  # client/update/update-public-key.b64
-] + webview_datas
+] + webview_datas + collect_data_files("tzdata") + copy_metadata("websocket-client")
 common_binaries = webview_binaries
 common_hidden = webview_hidden + [
     "client.ui.wizard",
     "client.agent.notifier",
+    "websocket",
     "plyer",
     "plyer.platforms.win.notification",
 ]

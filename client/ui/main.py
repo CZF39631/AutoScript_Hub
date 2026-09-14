@@ -200,6 +200,9 @@ def start_local_server(backend_url):
 
 
 def start_ui(on_started=None, on_closed=None):
+    from client.runtime.diagnostics import configure_application_logging
+    from client.runtime.paths import ClientPaths
+    configure_application_logging('desktop', ClientPaths.from_environment())
     config = load_config()
     backend_url = config.get("server_url", "http://127.0.0.1:8000")
 

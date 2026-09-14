@@ -1,10 +1,10 @@
 """Background scheduler for periodic server-side tasks.
 
-Runs in a daemon thread started from FastAPI startup event. Two jobs:
-  1. Heartbeat scan (design §5.1): every 30s, mark agents with >90s stale heartbeat
-     as offline, and fail their running runs (server-side watchdog).
-  2. Log cleanup (design §5.12): daily at 03:00, archive logs older than 30 days,
-     delete archives older than 90 days.
+Runs in a daemon thread started from FastAPI startup event. Independent jobs:
+  - Legacy Agent heartbeat scan, excluding managed task executions.
+  - Device task stale detection (unknown, never assumed stopped) and due dispatch.
+  - Bounded diagnostic retention cleanup on each scan.
+  - Daily log archival and archive retention cleanup.
 """
 import logging
 import os
@@ -16,7 +16,7 @@ from typing import Optional
 
 from app.config import LOGS_DIR, LOG_ARCHIVE_DIR, LOG_RETENTION_DAYS, LOG_ARCHIVE_RETENTION_DAYS, LOG_CLEANUP_HOUR
 from app.database import SessionLocal
-from app.models import Agent, Run
+from app.models import Agent, Run, TaskExecution
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +57,50 @@ def _scheduler_loop() -> None:
     # Give the app a moment to finish startup before first scan
     time.sleep(5)
     while True:
-        try:
-            _heartbeat_scan()
-            _maybe_log_cleanup()
-        except Exception:
-            logger.exception("Scheduler iteration failed")
+        _scheduler_iteration()
         time.sleep(SCAN_INTERVAL_SEC)
+
+
+def _scheduler_iteration() -> None:
+    # 一个业务任务异常不能阻断失联检查或敏感快照清理。
+    for job in (_heartbeat_scan, _task_stale_scan, _task_dispatch, _diagnostic_cleanup, _maybe_log_cleanup):
+        try:
+            job()
+        except Exception:
+            logger.exception("Scheduler job failed: %s", job.__name__)
+
+
+def _task_stale_scan() -> None:
+    from app.services.task_service import mark_stale_tasks
+    with SessionLocal() as db:
+        try:
+            mark_stale_tasks(db, datetime.now(timezone.utc))
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+
+def _task_dispatch() -> None:
+    from app.services.task_service import dispatch_due_tasks
+    with SessionLocal() as db:
+        try:
+            dispatch_due_tasks(db, datetime.now(timezone.utc))
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+
+def _diagnostic_cleanup() -> None:
+    from app.services.issue_diagnostics import cleanup_issue_diagnostics
+    with SessionLocal() as db:
+        try:
+            cleanup_issue_diagnostics(db, datetime.now(timezone.utc))
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
 
 def _heartbeat_scan() -> None:
@@ -88,6 +126,8 @@ def _heartbeat_scan() -> None:
         # Fail their running runs
         stuck_runs = db.query(Run).filter(
             Run.agent_id.in_(stale_agent_ids),
+            # 受管任务必须进入 unknown，只有设备确认停止才能释放执行槽。
+            ~Run.id.in_(db.query(TaskExecution.run_id)),
             Run.status == "running",
             Run.is_deleted == False,
         ).all()

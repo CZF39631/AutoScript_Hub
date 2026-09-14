@@ -1,18 +1,21 @@
 import json
+import asyncio
 import os
 import time
 from typing import List, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, Script, ScriptVersion, Run, Agent, Environment, Group
-from app.schemas import ExecuteRequest, RunBrief, RunDetail
-from app.auth import get_current_user, require_role
+from app.models import User, Script, ScriptVersion, Run, Agent, Environment, Group, TaskExecution, LocalRunImport
+from app.schemas import ExecuteRequest, RunBrief, RunDetail, LocalRunImportRequest
+from app.auth import get_current_user
+from app.request_limits import RunJsonRoute
 from app.config import LOGS_DIR, PROJECT_ROOT
 from app.services.audit import write_audit
 from app.services.script_access import (
@@ -23,7 +26,20 @@ from app.services.script_access import (
 )
 from shared.script_contract import validate_params
 
-router = APIRouter(prefix="/api/runs", tags=["runs"])
+router = APIRouter(prefix="/api/runs", tags=["runs"], route_class=RunJsonRoute)
+
+
+def _reject_managed(db, run_id):
+    if (db.query(TaskExecution.id).filter_by(run_id=run_id).first()
+            or db.query(LocalRunImport.id).filter_by(run_id=run_id).first()):
+        raise HTTPException(409, "受管执行或导入历史不能由旧执行接口修改")
+
+
+@router.post("/import-local")
+def import_local(req: LocalRunImportRequest, current_user: User = Depends(get_current_user),
+                 db: Session = Depends(get_db), x_device_token: str | None = Header(default=None)):
+    from app.services.task_service import import_local as import_completed
+    return import_completed(db, current_user, x_device_token, req)
 
 
 def _ensure_aware(dt):
@@ -101,6 +117,8 @@ def _enrich_run(run, db, detail=False):
     item.username = user.display_name if user else None
     item.script_name = script.name if script else None
     item.script_semantic_version = version.semantic_version if version else None
+    execution = db.query(TaskExecution.id).filter(TaskExecution.run_id == run.id).first()
+    item.task_execution_id = execution.id if execution else None
     return item
 
 
@@ -203,6 +221,11 @@ def list_runs(
         q = q.filter(Run.script_id == script_id)
     if status:
         q = q.filter(Run.status == status)
+        if status == 'pending':
+            # Old Agents fetch only one pending row; never let managed/history
+            # rows block their legacy queue, even after a bad historical state.
+            q = q.filter(~Run.id.in_(db.query(TaskExecution.run_id)),
+                         ~Run.id.in_(db.query(LocalRunImport.run_id)))
     if user_id:
         q = q.filter(Run.user_id == user_id)
     if date_from:
@@ -266,6 +289,7 @@ def claim_run(
     db: Session = Depends(get_db),
 ):
     """Atomically bind a pending run to exactly one Agent before execution."""
+    _reject_managed(db, run_id)
     agent = db.query(Agent).filter(
         Agent.id == claim.agent_id,
         Agent.user_id == current_user.id,
@@ -313,6 +337,7 @@ def update_run_status(
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
         raise HTTPException(status_code=404, detail="执行记录不存在")
+    _reject_managed(db, run_id)
     if run.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="仅任务所属用户可更新状态")
 
@@ -355,6 +380,7 @@ def cancel_run(
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
         raise HTTPException(status_code=404, detail="执行记录不存在")
+    _reject_managed(db, run_id)
     if run.user_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="无权限取消该任务")
     if run.status not in ("pending", "running"):
@@ -388,7 +414,34 @@ def get_run_log(
         return {"log": f.read()}
 
 
+def _authorize_log_upload(db, run_id, current_user):
+    _reject_managed(db, run_id)
+    run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="执行记录不存在")
+    if run.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权限上报该任务日志")
+    return run
+
+
 @router.post("/{run_id}/log/chunk")
+async def receive_legacy_log(
+    run_id: int, request: Request,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    # No automatic Body parameter: reject unauthenticated/foreign/managed runs
+    # before receiving the potentially large 1.2.4 legacy log payload.
+    await run_in_threadpool(_authorize_log_upload, db, run_id, current_user)
+    try:
+        payload = await asyncio.wait_for(request.json(), timeout=30)
+        chunk = RunLogChunk.model_validate(payload)
+    except asyncio.TimeoutError:
+        raise HTTPException(408, "日志请求接收超时")
+    except (ValueError, ValidationError):
+        raise HTTPException(422, "日志请求格式无效")
+    return await run_in_threadpool(append_run_log_chunk, run_id, chunk, current_user, db)
+
+
 def append_run_log_chunk(
     run_id: int,
     chunk: RunLogChunk,
@@ -396,11 +449,7 @@ def append_run_log_chunk(
     db: Session = Depends(get_db),
 ):
     """Append an Agent log delta using an idempotent UTF-8 byte offset."""
-    run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="执行记录不存在")
-    if run.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权限上报该任务日志")
+    run = _authorize_log_upload(db, run_id, current_user)
     if run.agent_id is not None and chunk.agent_id != run.agent_id:
         raise HTTPException(status_code=403, detail="仅领取任务的 Agent 可上报日志")
 

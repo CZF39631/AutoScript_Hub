@@ -32,6 +32,8 @@ from app.routers import agents as agents_router
 from app.routers import presets as presets_router
 from app.routers import release_cache as release_cache_router
 from app.routers import groups as groups_router
+from app.routers import tasks as tasks_router
+from app.routers import task_events as task_events_router
 app = FastAPI(title="AutoScript Hub", version=get_version())
 
 # The packaged desktop UI uses the first available port in this loopback range
@@ -60,6 +62,8 @@ app.include_router(agents_router.router)
 app.include_router(presets_router.router)
 app.include_router(release_cache_router.router)
 app.include_router(groups_router.router)
+app.include_router(tasks_router.router)
+app.include_router(task_events_router.router)
 
 
 def _initialize_app():
@@ -144,4 +148,4 @@ if os.path.isdir(_STATIC_DIR):
 if __name__ == "__main__":
     import uvicorn
     from app.config import BACKEND_HOST, BACKEND_PORT
-    uvicorn.run(app, host=str(BACKEND_HOST), port=int(BACKEND_PORT))
+    uvicorn.run(app, host=str(BACKEND_HOST), port=int(BACKEND_PORT), ws_max_size=1024, ws_max_queue=4)

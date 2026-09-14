@@ -8,6 +8,8 @@ import pytest
 
 from client.agent import main as agent
 from client.agent.executor import execute_script
+from client.tests.test_task_agent import agent as controlled_agent, cache
+from client.tests.test_agent_preview import legacy
 
 
 @pytest.fixture(autouse=True)
@@ -59,32 +61,21 @@ def test_shutdown_request_enters_drain_mode_and_rejects_new_local_runs():
         agent._shutdown_when_idle = False
 
 
-def test_connected_run_completion_reports_status_and_shows_notification(monkeypatch):
-    reports = []
-    notifications = []
-    monkeypatch.setattr(agent, "_check_running_process", lambda: {
-        "status": "success",
-        "error": None,
-        "result": None,
-        "run_id": 21,
-        "log_path": None,
-        "script_dir": None,
-        "script_name": "通知测试脚本",
-    })
-    monkeypatch.setattr(agent, "_report_run_status", lambda run_id, update: reports.append((run_id, update)))
-    monkeypatch.setattr(agent, "_notify_execution_result", lambda name, status, error=None: notifications.append((name, status, error)))
-
-    agent.poll_and_execute()
-
-    assert reports == [(21, {"status": "success"})]
-    assert notifications == [("通知测试脚本", "success", None)]
+def test_connected_run_completion_reports_status_and_shows_notification(controlled_agent, monkeypatch):
+    reports, notifications = [], []
+    monkeypatch.setattr(agent, '_notify_execution_result', lambda *a: notifications.append(a))
+    agent._complete_task({'id': 'B21', 'source': 'legacy', 'body': {'run_id': 21},
+                          'state': 'success', 'script_name': '通知测试脚本'})
+    agent._task_store.flush(lambda route, payload: reports.append((route, payload)) or True)
+    assert reports[0][0] == '/api/runs/21/status'
+    assert reports[0][1]['status'] == 'success'
+    assert notifications == [('通知测试脚本', 'success', None)]
 
 
 def test_poll_does_not_claim_new_backend_work_while_draining(monkeypatch):
     agent._shutdown_when_idle = True
     agent._running_proc = None
     agent._running_info = {}
-    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
     monkeypatch.setattr(
         agent.requests,
         "get",
@@ -219,135 +210,55 @@ def test_upload_log_delta_uses_server_offset_after_conflict(tmp_path, monkeypatc
     assert calls[1] == {"offset": 0, "content": "complete"}
 
 
-def test_poll_skips_script_download_when_another_agent_claims_first(monkeypatch):
-    requests_seen = []
-
-    class Response:
-        def __init__(self, status_code, payload):
-            self.status_code = status_code
-            self._payload = payload
-
-        def json(self):
-            return self._payload
-
-    def fake_get(url, **kwargs):
-        requests_seen.append(("get", url))
-        return Response(200, [{"id": 37, "script_id": 1}])
-
-    def fake_post(url, json, **kwargs):
-        requests_seen.append(("post", url, json))
-        return Response(409, {"detail": "任务已被领取"})
-
-    monkeypatch.setattr(agent.requests, "get", fake_get)
-    monkeypatch.setattr(agent.requests, "post", fake_post)
-    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
-    agent._running_proc = None
-    agent._running_info = {}
-    agent._current_run_id = None
-    agent._agent_id = 11
-
+def test_poll_skips_script_download_when_another_agent_claims_first(controlled_agent, monkeypatch):
+    run = {'id': 37, 'script_id': 1}
+    legacy(agent, monkeypatch, run)
+    seen = []
+    def request(method, route, body=None):
+        seen.append((method, route))
+        if route.endswith('/claim'):
+            raise agent.requests.HTTPError('409 already claimed')
+        return [run]
+    monkeypatch.setattr(agent, '_task_request', request)
+    monkeypatch.setattr(agent, '_fixed_script', lambda *a, **kw: pytest.fail('must claim before cache/download'))
     agent.poll_and_execute()
-
-    assert requests_seen == [
-        ("get", "{}/api/runs?status=pending&limit=1&mine_only=true".format(agent.BACKEND_URL)),
-        ("post", "{}/api/runs/37/claim".format(agent.BACKEND_URL), {"agent_id": 11}),
-    ]
-    assert agent._current_run_id is None
+    agent._controller.worker.join(2)
+    assert [method for method, _ in seen] == ['GET', 'POST']
+    assert seen[1][1] == '/api/runs/37/claim'
+    assert agent._controller.active is None
 
 
-def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
-    requests_seen = []
+def test_poll_claims_before_loading_or_starting_a_script(controlled_agent, monkeypatch):
+    run = {'id': 38, 'script_id': 1, 'script_version': 1, 'params': {}}
+    seen = legacy(agent, monkeypatch, run)
+    def fixed(body, local=False):
+        assert seen[-1][1] == '/api/runs/38/claim'
+        seen.append(('cache', '', None))
+        return '.', {}
+    monkeypatch.setattr(agent, '_fixed_script', fixed)
+    monkeypatch.setattr(agent, 'prepare_environment', lambda *a, **kw: 'mock-python')
     started = []
-
-    class Response:
-        def __init__(self, status_code, payload):
-            self.status_code = status_code
-            self._payload = payload
-
-        def json(self):
-            return self._payload
-
-    def fake_get(url, **kwargs):
-        requests_seen.append(("get", url))
-        if "status=pending" in url:
-            return Response(200, [{"id": 38, "script_id": 1}])
-        if url.endswith("/api/scripts/1"):
-            return Response(200, {"latest_version": 1})
-        raise AssertionError("unexpected GET: {}".format(url))
-
-    def fake_post(url, json, **kwargs):
-        requests_seen.append(("post", url, json))
-        return Response(200, {"id": 38, "script_id": 1, "script_version": 1, "params": "{}"})
-
-    monkeypatch.setattr(agent.requests, "get", fake_get)
-    monkeypatch.setattr(agent.requests, "post", fake_post)
-    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
-    monkeypatch.setattr(agent.os.path, "isdir", lambda path: True)
-    monkeypatch.setattr(agent, "parse_script_config", lambda path: {})
-    fake_process = type("FakeProcess", (), {"pid": 1234})()
-    monkeypatch.setattr(agent, "_start_script_subprocess", lambda *args, **kwargs: started.append(args) or fake_process)
-    monkeypatch.setattr(agent, "_LOGS_DIR", str(tmp_path))
-    agent._running_proc = None
-    agent._running_info = {}
-    agent._current_run_id = None
-    agent._agent_id = 12
-
+    def spawn(item, executable):
+        assert seen[-1][0] == 'cache'
+        started.append(item['id'])
+        raise RuntimeError('mock startup stops')
+    monkeypatch.setattr(agent._controller, 'spawn', spawn)
     agent.poll_and_execute()
-
-    assert requests_seen[:2] == [
-        ("get", "{}/api/runs?status=pending&limit=1&mine_only=true".format(agent.BACKEND_URL)),
-        ("post", "{}/api/runs/38/claim".format(agent.BACKEND_URL), {"agent_id": 12}),
-    ]
-    assert requests_seen[2] == ("get", "{}/api/scripts/1".format(agent.BACKEND_URL))
-    assert len(started) == 1
-    assert agent._running_proc is fake_process
-    assert agent._current_run_id == 38
+    agent._controller.worker.join(2)
+    assert started == ['B38']
+    assert [item[0] for item in seen[:3]] == ['GET', 'POST', 'cache']
 
 
-def test_poll_fails_a_claimed_run_when_script_metadata_cannot_be_loaded(monkeypatch):
-    status_updates = []
-
-    class Response:
-        def __init__(self, status_code, payload):
-            self.status_code = status_code
-            self._payload = payload
-
-        def json(self):
-            return self._payload
-
-    def fake_get(url, **kwargs):
-        if "status=pending" in url:
-            return Response(200, [{"id": 39, "script_id": 1}])
-        if url.endswith("/api/scripts/1"):
-            return Response(404, {})
-        raise AssertionError("unexpected GET: {}".format(url))
-
-    def fake_post(url, json, **kwargs):
-        assert url.endswith("/api/runs/39/claim")
-        return Response(200, {"id": 39, "script_id": 1, "params": "{}"})
-
-    def fake_patch(url, json, **kwargs):
-        status_updates.append((url, json))
-        return Response(200, {})
-
-    monkeypatch.setattr(agent.requests, "get", fake_get)
-    monkeypatch.setattr(agent.requests, "post", fake_post)
-    monkeypatch.setattr(agent.requests, "patch", fake_patch)
-    monkeypatch.setattr(agent, "_check_running_process", lambda: None)
-    agent._running_proc = None
-    agent._running_info = {}
-    agent._current_run_id = None
-    agent._agent_id = 13
-
+def test_poll_fails_a_claimed_run_when_script_metadata_cannot_be_loaded(controlled_agent, monkeypatch):
+    cache(agent, monkeypatch)
+    legacy(agent, monkeypatch, {'id': 39, 'script_id': 1, 'script_version': 1, 'params': {}})
+    monkeypatch.setattr(agent, 'parse_script_config', lambda path: None)
     agent.poll_and_execute()
-
-    assert status_updates == [
-        (
-            "{}/api/runs/39/status".format(agent.BACKEND_URL),
-            {"status": "failed", "error_msg": "Failed to load script metadata", "agent_id": 13},
-        )
-    ]
-    assert agent._current_run_id is None
+    agent._controller.worker.join(2)
+    reports = []
+    agent._task_store.flush(lambda route, payload: reports.append(payload) or True)
+    assert reports[0]['status'] == 'failed'
+    assert '配置' in reports[0]['error_msg']
 
 
 def test_normalize_result_files_keeps_metadata_only(tmp_path):
@@ -441,6 +352,9 @@ def test_agent_iteration_stays_alive_offline_and_recovers_authentication(monkeyp
     monkeypatch.setattr(agent, "_check_and_stage_update", lambda: {"state": "idle"})
     monkeypatch.setattr(agent, "_get_update_status", lambda: {"state": "idle"})
     monkeypatch.setattr(agent, "_sync_script_authorizations", lambda: False)
+    monkeypatch.setattr(agent, "_sync_client_settings", lambda: False)
+    monkeypatch.setattr(agent, "_task_request", lambda *a, **kw: {})
+    monkeypatch.setattr(agent, "_flush_pending_log_uploads", lambda: None)
     agent._token = None
     agent._agent_id = None
     agent._last_update_check_time = 0
@@ -450,7 +364,7 @@ def test_agent_iteration_stays_alive_offline_and_recovers_authentication(monkeyp
     assert "poll" not in events
 
     assert agent.agent_iteration("operator", "secret") is True
-    assert events[-6:] == ["reports", "local-runs", "poll", "heartbeat", "sync", "notify"]
+    assert events[-6:] == ["heartbeat", "local-runs", "poll", "reports", "sync", "notify"]
     assert "registered" in events
 
 
@@ -560,43 +474,21 @@ def test_sync_client_settings_merges_allowed_fields_and_preserves_identity(tmp_p
     }
 
 
-def test_sync_local_run_uploads_final_log_before_marking_synced(monkeypatch):
+def test_sync_local_run_uploads_final_log_before_marking_synced(controlled_agent, monkeypatch):
+    from client.tests.test_agent_preview import online, local_record
+    online(agent, monkeypatch)
+    agent._local_runs['L1'] = local_record()
+    monkeypatch.setattr(agent, '_log_tail', lambda path: 'final-log')
     uploaded = []
-
-    class Response:
-        def __init__(self, status_code, payload=None):
-            self.status_code = status_code
-            self._payload = payload or {}
-
-        def json(self):
-            return self._payload
-
-    monkeypatch.setattr(agent.requests, "post", lambda *args, **kwargs: Response(200, {"id": 88}))
-    monkeypatch.setattr(agent.requests, "patch", lambda *args, **kwargs: Response(200))
-    monkeypatch.setattr(
-        agent,
-        "_upload_log_delta",
-        lambda run_id, path, force=False, agent_id=None: uploaded.append((run_id, path, force, agent_id)) or True,
-    )
-    monkeypatch.setattr(agent, "_save_local_runs", lambda: None)
-    agent._agent_id = 3
-    agent._last_online_time = agent.time.time()
-    agent._local_runs = {
-        "L1": {
-            "local_run_id": "L1",
-            "script_id": 4,
-            "params": {},
-            "status": "success",
-            "log_path": r"C:\logs\local_L1.log",
-            "result_files": None,
-            "synced": False,
-        }
-    }
-
+    def request(method, route, payload, headers):
+        assert not agent._local_runs['L1']['synced']
+        assert agent._local_runs['L1']['import_payload']['log_tail'] == 'final-log'
+        uploaded.append(payload['log_tail'])
+        return {'run_id': 88}
+    monkeypatch.setattr(agent, '_task_request', request)
     agent._sync_local_runs_to_backend()
-
-    assert uploaded == [(88, r"C:\logs\local_L1.log", True, 3)]
-    assert agent._local_runs["L1"]["synced"] is True
+    assert uploaded == ['final-log']
+    assert agent._local_runs['L1']['synced'] is True
 
 
 def test_failed_final_log_upload_is_retried(monkeypatch):

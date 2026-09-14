@@ -407,6 +407,27 @@ def list_versions(
     ).order_by(ScriptVersion.version.desc()).all()
 
 
+@router.get("/{script_id}/versions/{version}/config")
+def version_config(
+    script_id: int,
+    version: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """任务编辑必须读取所选固定版本，不能用 latest 参数定义代替。"""
+    get_accessible_script_or_404(db, current_user, script_id)
+    stored = db.query(ScriptVersion).filter_by(script_id=script_id, version=version).first()
+    if stored is None:
+        raise HTTPException(404, "脚本版本不存在")
+    try:
+        config = json.loads(stored.config_json)
+        if not isinstance(config, dict):
+            raise ValueError("invalid config")
+    except (TypeError, ValueError):
+        raise HTTPException(409, "该版本配置不可用，请联系脚本维护者")
+    return {"version": version, "config": config}
+
+
 @router.post("/{script_id}/disable")
 def disable_script(
     script_id: int,

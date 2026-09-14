@@ -17,6 +17,12 @@ const statusMap = {
   success: { color: 'green', text: '成功' },
   failed: { color: 'red', text: '失败' },
   cancelled: { color: 'default', text: '已取消' },
+  queued: { color: 'blue', text: '等待领取' },
+  claimed: { color: 'processing', text: '准备中' },
+  preparing: { color: 'processing', text: '准备中' },
+  cancel_requested: { color: 'orange', text: '正在取消' },
+  unknown: { color: 'warning', text: '结果未知' },
+  skipped: { color: 'default', text: '已跳过' },
 }
 
 const statusOptions = Object.entries(statusMap).map(([k, v]) => ({ label: v.text, value: k }))
@@ -57,7 +63,7 @@ export default function Runs() {
 
   useEffect(load, [load])
 
-  const hasAlive = useMemo(() => runs.some(r => r.status === 'pending' || r.status === 'running'), [runs])
+  const hasAlive = useMemo(() => runs.some(r => ['pending', 'queued', 'claimed', 'preparing', 'running', 'cancel_requested', 'unknown'].includes(r.status)), [runs])
 
   // Track previous statuses so we can fire a toast when a run finishes.
   const prevStatusRef = useRef({})
