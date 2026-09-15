@@ -1,4 +1,37 @@
 export const currentRelease = {
+  id: 'v1.3.0-preview.2',
+  version: '1.3.0-preview.2',
+  important: false,
+  title: '1.3.0 Preview 2：中英文界面与双语说明',
+  summary: '为主界面增加简体中文 / English 切换，保留独立 Preview 安装、数据与更新边界。此版本仅供测试，不是正式升级目标。',
+  sections: [
+    {
+      title: '界面语言',
+      items: [
+        '登录页和主界面侧栏可切换简体中文 / English，并在当前页面来源记住选择。',
+        '主页面固定文案、日期控件和常用提示支持双语；切换不清空已填写的设置和脚本参数。',
+        '脚本自带文字、原始日志和历史更新说明保留原文；原生初始化向导和桌面通知暂未翻译。',
+      ],
+    },
+    {
+      title: '文档与显示',
+      items: [
+        '整理中文 README，新增 English README，明确正式版、开发预览与数据安全边界。',
+        '改善英文按钮换行、矮窗口侧栏滚动和固定表格列的文字重叠。',
+      ],
+    },
+    {
+      title: '体验版边界',
+      items: [
+        '继续使用独立 Preview 安装目录、数据根、Agent 和桌面 UI 端口，不接管正式版数据。',
+        'Preview 暂停在线更新；本包通过手动安装升级，仅运行可信测试脚本。',
+        '不改变脚本参数 key、接口状态、权限和任务时区，也不引入尚未实现的商业授权功能。',
+      ],
+    },
+  ],
+}
+
+const stableRelease124 = {
   id: 'v1.2.4',
   important: false,
   title: 'v1.2.4：执行、工单与覆盖安装稳定性修复',
@@ -44,6 +77,14 @@ export const currentRelease = {
 }
 
 export const releaseHistory = [
+  {
+    id: 'v1.3.0-preview.1',
+    version: '1.3.0-preview.1',
+    title: '独立体验版与调度预览',
+    summary: '独立 Preview 安装与数据隔离，提供诊断、设备任务调度和长连接通知的测试入口。',
+    sections: [],
+  },
+  { ...stableRelease124, version: '1.2.4' },
   {
     id: 'v1.2.3',
     version: '1.2.3',

@@ -9,7 +9,7 @@
 - **当前正式版：v1.2.4**。[GitHub Release：Windows 安装包与部署资产](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4)
 - [Gitee 代码镜像](https://gitee.com/chuzifeng/auto-script_-hub) · [Gitee v1.2.4 镜像资产](https://gitee.com/chuzifeng/auto-script_-hub/releases/tag/v1.2.4)
 - GitHub 是发布资产的真源，客户端依据签名更新清单校验安装包。Gitee 镜像代码、Tag、部署包、Skill 和签名清单，**不镜像 Windows EXE**；安装包仍从 GitHub 获取。
-- `1.3.0-preview.1` 是开发预览，**尚未公开 Release**，不是正式升级目标。当前开发源码与 v1.2.4 交付物不完全相同。
+- 当前分支对应 **`1.3.0-preview.2` 开发预览**，包含中英文界面，**尚未公开 Release**，不是正式升级目标。当前开发源码与 v1.2.4 交付物不完全相同。
 
 开发分支已接入 React 主界面的简体中文 / English 切换，入口在登录页和主界面侧栏；**尚未随正式版发布**。脚本自带文字、原始日志、历史更新正文和原生初始化向导仍保留原文，详见[多语言支持范围](docs/多语言支持.md)。
 
@@ -141,6 +141,7 @@ Linux CI 的 Python 测试范围为 `shared/tests backend/tests test/release`；
 - [人员分组、脚本市场与撤权规则](docs/人员分组与脚本市场.md)
 - [Preview 安装与数据隔离](docs/Preview安装与数据隔离.md)
 - [多语言支持与词条维护](docs/多语言支持.md)
+- [Preview 2 体验说明](docs/releases/1.3.0-preview.2-体验说明.md)
 - [Gitee 镜像与更新策略](docs/Gitee镜像与更新.md) · [更新说明维护](docs/更新说明维护.md)
 - [脚本编写 Skill 与契约](skills/autoscript-script-authoring/SKILL.md)
 

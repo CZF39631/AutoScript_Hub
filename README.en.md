@@ -9,7 +9,7 @@ A Python automation platform for teams: publish scripts centrally, control acces
 - **Current stable release: v1.2.4**. [GitHub Release: Windows installer and deployment assets](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4)
 - [Gitee source mirror](https://gitee.com/chuzifeng/auto-script_-hub) · [Gitee v1.2.4 mirrored assets](https://gitee.com/chuzifeng/auto-script_-hub/releases/tag/v1.2.4)
 - GitHub is the source of truth for release assets. The client verifies installers against signed update manifests. Gitee mirrors code, tags, deployment bundles, the Skill, and signed manifests, **not Windows EXE files**. Installers are downloaded from GitHub.
-- `1.3.0-preview.1` is a development preview with **no public Release yet**, not a stable upgrade target. Development source differs from the v1.2.4 deliverables.
+- This branch contains **`1.3.0-preview.2`, a development preview** with Chinese / English UI switching and **no public Release yet**. It is not a stable upgrade target. Development source differs from the v1.2.4 deliverables.
 
 The development branch supports Simplified Chinese / English switching for the React interface, available on the sign-in page and in the sidebar. **This has not shipped in a stable release.** Script-provided text, raw logs, historical release-note content, and the native setup wizard retain their original language. See [language support scope](docs/多语言支持.md).
 
@@ -144,6 +144,7 @@ Most detailed documents are currently in Chinese.
 - [Groups, catalog access, and revocation](docs/人员分组与脚本市场.md)
 - [Preview installation and data isolation](docs/Preview安装与数据隔离.md)
 - [Language support and translation maintenance](docs/多语言支持.md)
+- [Preview 2 testing notes](docs/releases/1.3.0-preview.2-体验说明.md)
 - [Gitee mirrors and updates](docs/Gitee镜像与更新.md) · [Maintaining release notes](docs/更新说明维护.md)
 - [Script authoring Skill and contract](skills/autoscript-script-authoring/SKILL.md)
 
