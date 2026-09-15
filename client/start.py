@@ -5,6 +5,7 @@ import urllib.request
 
 from client.runtime.local_auth import get_or_create_agent_token
 from client.runtime.paths import ClientPaths
+from client.runtime.profile import agent_ports
 from client.ui.config_manager import load_config
 
 _PATHS = ClientPaths.from_environment()
@@ -13,14 +14,19 @@ PROJECT_ROOT = str(_PATHS.install_dir)
 
 
 def _request_agent_shutdown():
-    request = urllib.request.Request(
-        "http://127.0.0.1:18080/lifecycle/shutdown",
-        data=b"{}",
-        method="POST",
-        headers={"Authorization": "Bearer " + get_or_create_agent_token()},
-    )
-    with urllib.request.urlopen(request, timeout=3) as response:
-        return response.status == 202
+    last_error = None
+    for port in agent_ports():
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/lifecycle/shutdown",
+            data=b"{}", method="POST",
+            headers={"Authorization": "Bearer " + get_or_create_agent_token()},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                return response.status == 202
+        except OSError as exc:
+            last_error = exc
+    raise last_error or ConnectionError("本安装身份的 Agent 不可用")
 
 
 def main():

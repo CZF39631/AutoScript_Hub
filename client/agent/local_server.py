@@ -8,6 +8,8 @@ import winreg
 from http.server import ThreadingHTTPServer as _ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Callable
 
+from client.runtime.profile import get_install_flavor, ui_ports
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,7 +122,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._json({'error': '任务操作暂不可用，请检查在线状态'}, 503)
         return True
     allowed_origins = {
-        "http://127.0.0.1:{}".format(port) for port in range(18081, 18091)
+        "http://127.0.0.1:{}".format(port) for port in ui_ports()
     }
     get_status_fn = None
     get_version_fn = None
@@ -177,6 +179,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 "running": run_id is not None,
                 "run_id": run_id,
                 "version": version_callback() if version_callback else None,
+                "install_flavor": get_install_flavor(),
             })
         elif self.path == "/detect-browsers":
             self._json(_detect_browsers())

@@ -99,7 +99,7 @@ def test_request_uses_token_origin_and_disables_proxy(monkeypatch):
     req, timeout = calls[0]
     assert req.full_url == 'http://127.0.0.1:12345/local/execute'
     assert req.get_header('Authorization') == 'Bearer synthetic-token'
-    assert req.get_header('Origin') == 'http://127.0.0.1:18081'
+    assert req.get_header('Origin') == 'http://127.0.0.1:18181'
     assert timeout == 2
 
 

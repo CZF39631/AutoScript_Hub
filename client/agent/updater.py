@@ -10,15 +10,24 @@ import threading
 from typing import Dict
 
 from client.runtime.paths import ClientPaths
+from client.runtime.profile import is_preview
 from client.update.service import UpdateService
 from client.update.sources import DirectManifestSource, GiteeReleaseSource
 from client.update.state import UpdateStateStore
 from client.update.trust import load_update_public_key
+from shared.version import is_preview_version
 
 
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _active_service = None
+
+
+PREVIEW_UPDATE_DISABLED = "Preview 暂不支持在线更新，请手动安装独立 Preview 安装包。"
+
+
+def _disabled_status() -> dict:
+    return {"state": "idle", "error": PREVIEW_UPDATE_DISABLED, "updates_enabled": False}
 
 
 def _detached_flags() -> int:
@@ -28,6 +37,10 @@ def _detached_flags() -> int:
 
 
 def _handoff(paths: ClientPaths, installer: Path, version: str) -> None:
+    if is_preview():
+        raise RuntimeError(PREVIEW_UPDATE_DISABLED)
+    if is_preview_version(version):
+        raise RuntimeError("正式客户端不能安装 Preview 更新，请手动安装独立 Preview 安装包")
     updater_executable = paths.install_dir / "AutoScriptUpdater.exe"
     ui_executable = paths.install_dir / "AutoScriptHub.exe"
     if updater_executable.is_file():
@@ -91,6 +104,8 @@ def _service(
     current_version: str,
     runtime_is_idle=lambda: True,
 ) -> UpdateService:
+    if is_preview():
+        raise RuntimeError(PREVIEW_UPDATE_DISABLED)
     paths = ClientPaths.from_environment()
     from client.ui.config_manager import load_config
     config = load_config()
@@ -112,6 +127,8 @@ def check_and_stage_update(current_version: str, runtime_is_idle=lambda: True) -
     and the local check route must only discover an available manifest.
     """
     global _active_service
+    if is_preview():
+        return _disabled_status()
     try:
         with _lock:
             service = _service(current_version, runtime_is_idle)
@@ -124,6 +141,8 @@ def check_and_stage_update(current_version: str, runtime_is_idle=lambda: True) -
 
 
 def get_update_status() -> dict:
+    if is_preview():
+        return _disabled_status()
     paths = ClientPaths.from_environment()
     paths.ensure()
     return UpdateStateStore(paths.updates_dir).read()
@@ -132,6 +151,8 @@ def get_update_status() -> dict:
 def install_staged_update(current_version: str, runtime_is_idle=lambda: True) -> dict:
     """Download, validate, and install after an explicit local UI request."""
     global _active_service
+    if is_preview():
+        return _disabled_status()
     try:
         with _lock:
             service = _active_service or _service(current_version, runtime_is_idle)

@@ -1,10 +1,17 @@
 import axios from 'axios'
 
 
-export const AGENT_URLS = [
-  'http://127.0.0.1:18080',
-  ...Array.from({ length: 9 }, (_, index) => `http://127.0.0.1:${18091 + index}`),
-]
+export function agentUrls(flavor = 'stable') {
+  if (!['stable', 'preview'].includes(flavor)) throw new Error('无效的客户端安装身份')
+  const base = flavor === 'preview' ? 18180 : 18080
+  return [
+    `http://127.0.0.1:${base}`,
+    ...Array.from({ length: 9 }, (_, index) => `http://127.0.0.1:${base + 11 + index}`),
+  ]
+}
+export const AGENT_URLS = agentUrls(
+  typeof window !== 'undefined' ? window._INSTALL_FLAVOR || 'stable' : 'stable',
+)
 const agentToken = typeof window !== 'undefined' ? window._AGENT_API_TOKEN : ''
 export const localApi = axios.create({
   baseURL: AGENT_URLS[0],

@@ -10,10 +10,13 @@ $GeneratedRoot = Join-Path $OutputRoot 'autoscript-build'
 $RuntimeRoot = Join-Path $OutputRoot 'windows-runtime'
 $RuntimePython = Join-Path $RuntimeRoot 'python'
 
-if ($Version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
     throw "Version must be SemVer without a leading v: $Version"
 }
-$Channel = if ($Version.Contains('-')) { 'beta' } elseif ($Version.StartsWith('1.')) { 'stable' } else { 'beta' }
+# Only an explicit preview token in the original version selects isolation.
+# The stable installation family includes beta/rc; build metadata is not identity.
+$InstallFlavor = if ($Version.Split('+')[0] -match '(?i)(?:^|[.-])preview(?:\d+)?(?:[.-]|$)') { 'preview' } else { 'stable' }
+$Channel = if ($Version.Split('+')[0].Contains('-')) { 'beta' } elseif ($Version.StartsWith('1.')) { 'stable' } else { 'beta' }
 
 Push-Location $RepoRoot
 try {
@@ -56,7 +59,7 @@ try {
 
     New-Item -ItemType Directory -Force -Path $WindowsOutput | Out-Null
     New-Item -ItemType Directory -Force -Path $GeneratedRoot | Out-Null
-    $BuildInfo = "VERSION = '$Version'`nCHANNEL = '$Channel'`n"
+    $BuildInfo = "VERSION = '$Version'`nCHANNEL = '$Channel'`nINSTALL_FLAVOR = '$InstallFlavor'`n"
     [System.IO.File]::WriteAllText(
         (Join-Path $GeneratedRoot 'autoscript_build_info.py'),
         $BuildInfo,
@@ -95,7 +98,7 @@ try {
     if ($ActualChineseLanguageHash -ne $ChineseLanguageHash) {
         throw "ChineseSimplified.isl hash mismatch: $ActualChineseLanguageHash"
     }
-    & $ISCC "/DMyAppVersion=$Version" (Join-Path $PSScriptRoot 'installer.iss')
+    & $ISCC "/DMyAppVersion=$Version" "/DInstallFlavor=$InstallFlavor" (Join-Path $PSScriptRoot 'installer.iss')
     if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
 
     $Installer = Join-Path $OutputRoot "AutoScript-Hub-Setup-$Version.exe"

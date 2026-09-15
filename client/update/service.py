@@ -10,11 +10,17 @@ from typing import Callable, Iterable
 from packaging.version import InvalidVersion, Version
 
 from client.runtime.paths import ClientPaths
+from client.runtime.profile import is_preview
 from client.update.download import download_verified_file, sha256_file
 from client.update.sources import http_get_bytes
 from client.update.state import UpdateResult, UpdateStateStore
 from shared.update_manifest import UpdateManifest
-from shared.version import parse_update_version
+from shared.version import is_preview_version, parse_update_version
+
+
+def _require_updates_enabled() -> None:
+    if is_preview():
+        raise RuntimeError("Preview 暂不支持在线更新，请手动安装独立 Preview 安装包。")
 
 
 def _default_is_pid_alive(pid: int) -> bool:
@@ -53,6 +59,7 @@ class UpdateService:
         is_pid_alive: Callable[[int], bool] | None = None,
         http_download: Callable[[str, Path, int, str], None] | None = None,
     ):
+        _require_updates_enabled()
         paths.ensure()
         self.paths = paths
         self.current_version = current_version
@@ -78,6 +85,15 @@ class UpdateService:
         self._recover_discovered_update()
         self._recover_staged_update()
 
+    @staticmethod
+    def _validate_install_family(version: str) -> None:
+        # packaging 会将 preview 规范化为 rc，必须检查原始版本串。
+        # Beta 属于正式安装家族，不应因为 is_prerelease 而被拒绝。
+        if not isinstance(version, str):
+            raise ValueError("更新版本必须是字符串")
+        if is_preview_version(version):
+            raise ValueError("正式客户端不能安装 Preview 更新，请手动安装独立 Preview 安装包")
+
     def _recover_discovered_update(self) -> None:
         state = self.store.read()
         if state.get("state") not in {"available", "downloading"}:
@@ -94,6 +110,7 @@ class UpdateService:
             )
             if not channel_matches:
                 raise ValueError("缓存的更新通道不匹配")
+            self._validate_install_family(manifest.version)
             manifest.asset_for("windows-x86_64")
             self.manifest = manifest
             self.pending_version = manifest.version
@@ -147,6 +164,7 @@ class UpdateService:
         if state.get("state") not in {"verified", "waiting-for-idle"}:
             return
         try:
+            self._validate_install_family(state["version"])
             installer = Path(state["installer"])
             expected_size = int(state["size"])
             expected_hash = state["sha256"]
@@ -193,6 +211,7 @@ class UpdateService:
         return False
 
     def check(self) -> UpdateResult:
+        _require_updates_enabled()
         persisted = self.store.read()
         current_state = persisted["state"]
         cached_manifest = self.manifest if current_state == "available" else None
@@ -237,6 +256,7 @@ class UpdateService:
                     raise RuntimeError(
                         f"更新通道不匹配: 期望 {self.expected_channel}，收到 {manifest.channel}"
                     )
+                self._validate_install_family(manifest.version)
                 manifest.asset_for("windows-x86_64")
                 matched_manifests.append(manifest)
                 if manifest.is_newer_than(self.current_version):
@@ -355,8 +375,10 @@ class UpdateService:
             raise
 
     def download(self) -> UpdateResult:
+        _require_updates_enabled()
         if self.manifest is None:
             raise RuntimeError("尚未检查到可用更新")
+        self._validate_install_family(self.manifest.version)
         cache_details = self._cached_manifest_details()
         self.store.transition(
             "downloading",
@@ -418,8 +440,10 @@ class UpdateService:
         return self.download()
 
     def request_install(self) -> UpdateResult:
+        _require_updates_enabled()
         if self.pending_version is None or self.installer is None:
             raise RuntimeError("没有已验证的安装包")
+        self._validate_install_family(self.pending_version)
         if not self.runtime_is_idle():
             state = self.store.read()
             if state.get("state") != "waiting-for-idle":

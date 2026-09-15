@@ -10,9 +10,10 @@ import webview
 from client.ui.config_manager import load_config, save_config, is_setup_complete
 from client.runtime.credentials import delete_credentials
 from client.runtime.local_auth import get_or_create_agent_token
+from client.runtime.profile import application_name, get_install_flavor, is_preview, ui_ports
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-LOCAL_PORTS = range(18081, 18091)
+LOCAL_PORTS = ui_ports()
 
 
 class LocalUIHandler(SimpleHTTPRequestHandler):
@@ -74,8 +75,9 @@ class LocalUIHandler(SimpleHTTPRequestHandler):
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 import json
-                inject = '<script>window._BACKEND_URL={};window._AGENT_API_TOKEN={}</script>\n'.format(
-                    json.dumps(self.backend_url), json.dumps(self.agent_api_token)
+                inject = '<script>window._BACKEND_URL={};window._AGENT_API_TOKEN={};window._INSTALL_FLAVOR={}</script>\n'.format(
+                    json.dumps(self.backend_url), json.dumps(self.agent_api_token),
+                    json.dumps(get_install_flavor())
                 )
                 content = content.replace("</head>", inject + "</head>")
                 data = content.encode("utf-8")
@@ -221,7 +223,7 @@ def start_ui(on_started=None, on_closed=None):
 
     api = Api()
     window = webview.create_window(
-        "AutoScript Hub",
+        application_name(),
         frontend_url,
         js_api=api,
         width=1200,
@@ -230,7 +232,10 @@ def start_ui(on_started=None, on_closed=None):
     )
     if on_started:
         window.events.loaded += on_started
-    webview.start()
+    if is_preview():
+        webview.start(storage_path=str(ClientPaths.from_environment().data_dir / 'webview'))
+    else:
+        webview.start()
     if on_closed:
         on_closed()
     return True

@@ -10,7 +10,7 @@ from packaging.version import InvalidVersion, Version
 
 RELEASE_VERSION = "1.0.0"
 DEV_VERSION = RELEASE_VERSION + "-dev"
-_SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+_SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 _REVIEW_VERSION = re.compile(
     r"^(?P<base>\d+\.\d+\.\d+)"
     r"(?:-(?P<pre>alpha|beta|rc)\.(?P<pre_num>\d+))?"
@@ -54,6 +54,18 @@ def parse_update_version(value: str) -> Version:
         review_num = match.group("review_num")
         pre_value = "" if pre is None else {"alpha": "a", "beta": "b", "rc": "rc"}[pre.lower()] + pre_num
         return Version(f"{match.group('base')}{pre_value}.dev{review_num}")
+
+
+def is_preview_version(value: str) -> bool:
+    """Only explicit development preview labels select the isolated app family.
+
+    Do not use Version.is_prerelease: beta/rc share the stable installation,
+    and packaging normalizes the spelling 'preview' to 'rc'.
+    """
+    raw = value.strip().lstrip("v")
+    return bool(_SEMVER.fullmatch(raw) and re.search(
+        r"(?:^|[.-])preview(?:\d+)?(?:[.-]|$)", raw.split("+", 1)[0], re.IGNORECASE,
+    ))
 
 
 def get_channel() -> str:

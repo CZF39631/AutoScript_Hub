@@ -1,7 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { AGENT_URLS, discoverAgent, startConnectionPolling } from './connectionRuntime.js'
+import { AGENT_URLS, agentUrls, discoverAgent, startConnectionPolling } from './connectionRuntime.js'
+
+
+test('preview discovery never scans the stable Agent pool', () => {
+  const stable = agentUrls('stable')
+  const preview = agentUrls('preview')
+  assert.equal(preview[0], 'http://127.0.0.1:18180')
+  assert.equal(preview.length, 10)
+  assert.ok(preview.every(url => !stable.includes(url)))
+  assert.throws(() => agentUrls('beta')) // beta uses the stable installation identity
+})
 
 
 test('agent discovery falls back when the default port is unavailable', async () => {

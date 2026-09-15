@@ -55,7 +55,7 @@ def test_status_endpoint_reports_running_state_and_agent_version():
         )
         with urllib.request.urlopen(request, timeout=3) as response:
             payload = json.loads(response.read())
-        assert payload == {"running": False, "run_id": None, "version": "0.9.1"}
+        assert payload == {"running": False, "run_id": None, "version": "0.9.1", "install_flavor": "stable"}
     finally:
         server.shutdown(); server.server_close()
 

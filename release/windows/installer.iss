@@ -1,16 +1,33 @@
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
-#define MyAppName "AutoScript Hub"
+; stable is the shared Stable/Beta/RC installation family, not the update channel.
+; Only explicitly named Preview builds receive the isolated identity.
+#ifndef InstallFlavor
+  #define InstallFlavor "stable"
+#endif
+#if InstallFlavor == "preview"
+  #define MyAppName "AutoScript Hub Preview"
+  #define MyAppId "{{D67FAE91-F2B7-4C25-9A71-2646E46B7D90}"
+  #define MyDataDir "AutoScriptHubPreview"
+  #define OtherAppName "AutoScript Hub"
+#elif InstallFlavor == "stable"
+  #define MyAppName "AutoScript Hub"
+  #define MyAppId "{{A77DCEAD-026B-4E4E-9796-821C117A61B8}"
+  #define MyDataDir "AutoScriptHub"
+  #define OtherAppName "AutoScript Hub Preview"
+#else
+  #error Unknown InstallFlavor
+#endif
 #define MyAppPublisher "AutoScript Hub"
 
 [Setup]
-AppId={{A77DCEAD-026B-4E4E-9796-821C117A61B8}
+AppId={#MyAppId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\AutoScript Hub
-DefaultGroupName=AutoScript Hub
+DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\..\release-output
@@ -22,7 +39,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 SetupIconFile=app-icon.ico
 UninstallDisplayIcon={app}\AutoScriptHub.exe
-CloseApplications=yes
+; Only our exact-{app} PID handler may stop applications. Excluding all files
+; also prevents Restart Manager scanning if /CLOSEAPPLICATIONS overrides this flag.
+CloseApplications=no
+CloseApplicationsFilterExcludes=*
 RestartApplications=no
 LanguageDetectionMethod=none
 LicenseFile=..\..\LICENSE
@@ -32,14 +52,14 @@ Name: "chinesesimplified"; MessagesFile: "cache\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Dirs]
-Name: "{localappdata}\AutoScriptHub"
-Name: "{localappdata}\AutoScriptHub\config"
-Name: "{localappdata}\AutoScriptHub\scripts"
-Name: "{localappdata}\AutoScriptHub\environments"
-Name: "{localappdata}\AutoScriptHub\logs"
-Name: "{localappdata}\AutoScriptHub\runs"
-Name: "{localappdata}\AutoScriptHub\updates"
-Name: "{localappdata}\AutoScriptHub\output"
+Name: "{localappdata}\{#MyDataDir}"
+Name: "{localappdata}\{#MyDataDir}\config"
+Name: "{localappdata}\{#MyDataDir}\scripts"
+Name: "{localappdata}\{#MyDataDir}\environments"
+Name: "{localappdata}\{#MyDataDir}\logs"
+Name: "{localappdata}\{#MyDataDir}\runs"
+Name: "{localappdata}\{#MyDataDir}\updates"
+Name: "{localappdata}\{#MyDataDir}\output"
 
 [Files]
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
@@ -48,17 +68,52 @@ Source: "..\..\release-output\windows-runtime\python\*"; DestDir: "{app}\runtime
 Source: "cache\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
-Name: "{group}\AutoScript Hub"; Filename: "{app}\AutoScriptHub.exe"
-Name: "{userdesktop}\AutoScript Hub"; Filename: "{app}\AutoScriptHub.exe"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\AutoScriptHub.exe"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\AutoScriptHub.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式:"
 
 [Run]
-Filename: "{app}\AutoScriptHub.exe"; Description: "启动 AutoScript Hub"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\AutoScriptHub.exe"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+Type: files; Name: "{app}\autoscript-install-identity.txt"
 
 [Code]
 #include "installer_processes.iss"
+
+function ValidateInstallIdentity: String;
+var
+  Target, OtherDefault, Marker: String;
+  Identity: AnsiString;
+begin
+  Result := '';
+  Target := RemoveBackslashUnlessRoot(ExpandFileName(ExpandConstant('{app}')));
+  OtherDefault := RemoveBackslashUnlessRoot(ExpandFileName(
+    ExpandConstant('{localappdata}\Programs\{#OtherAppName}')));
+  if CompareText(Target, OtherDefault) = 0 then
+  begin
+    Result := '不能安装到另一安装身份的默认目录。请选择独立的安装目录。';
+    Exit;
+  end;
+  Marker := AddBackslash(Target) + 'autoscript-install-identity.txt';
+  if FileExists(Marker) then
+  begin
+    if not LoadStringFromFile(Marker, Identity) then
+      Result := '无法读取安装身份，尚未关闭进程或替换文件。'
+    else if Identity <> 'AutoScript Hub installation identity v1: {#InstallFlavor}' then
+      Result := '安装身份不同或标记无效，不能覆盖此安装目录。';
+  end
+  else if FileExists(AddBackslash(Target) + 'AutoScriptHub.exe') or
+          FileExists(AddBackslash(Target) + 'AutoScriptAgent.exe') or
+          FileExists(AddBackslash(Target) + 'AutoScriptUpdater.exe') then
+  begin
+    { Legacy installations without a marker belong exclusively to stable. }
+    if '{#InstallFlavor}' <> 'stable' then
+      Result := '此目录包含旧正式客户端，Preview 必须使用独立目录。';
+  end;
+end;
 
 function IsWebView2RuntimeInstalled: Boolean;
 var
@@ -73,6 +128,8 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
+  Result := ValidateInstallIdentity;
+  if Result <> '' then Exit;
   Result := PrepareInstalledProcesses;
 end;
 
@@ -83,6 +140,14 @@ var
   WebViewInstaller: String;
   ResultCode: Integer;
 begin
+  if CurStep = ssInstall then
+  begin
+    if not ForceDirectories(ExpandConstant('{app}')) then
+      RaiseException('Could not create installation directory');
+    if not SaveStringToFile(ExpandConstant('{app}\autoscript-install-identity.txt'),
+      'AutoScript Hub installation identity v1: {#InstallFlavor}', False) then
+      RaiseException('Could not write installation identity');
+  end;
   if CurStep = ssPostInstall then
   begin
     if not FileExists(ExpandConstant('{app}\AutoScriptAgent.exe')) then
@@ -104,8 +169,11 @@ begin
       if not IsWebView2RuntimeInstalled then
         RaiseException('Microsoft Edge WebView2 Runtime was not detected after installation');
     end;
-    PreviousInstaller := ExpandConstant('{localappdata}\AutoScriptHub\updates\previous-installer.exe');
+#if InstallFlavor == "stable"
+    PreviousInstaller := ExpandConstant('{localappdata}\{#MyDataDir}\updates\previous-installer.exe');
     if not FileExists(PreviousInstaller) then
       FileCopy(ExpandConstant('{srcexe}'), PreviousInstaller, False);
+#endif
+    { Preview has no online updater; leave empty data directories for runtime identity initialization. }
   end;
 end;

@@ -1,11 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
+import runpy
+import re
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, copy_metadata
 
 
 ROOT = Path.cwd()
 GENERATED = ROOT / "release-output" / "autoscript-build"
+build_info = runpy.run_path(str(GENERATED / "autoscript_build_info.py"))
+# Keep the raw version: packaging normalizes preview to rc, losing identity.
+expected_flavor = "preview" if re.search(
+    r"(?:^|[.-])preview(?:\d+)?(?:[.-]|$)", build_info["VERSION"].split("+", 1)[0], re.I
+) else "stable"
+if build_info.get("INSTALL_FLAVOR") != expected_flavor:
+    raise ValueError("INSTALL_FLAVOR does not match the release version")
 webview_datas, webview_binaries, webview_hidden = collect_all("webview")
 common_datas = [
     (str(ROOT / "frontend" / "dist"), "client/ui/static"),
@@ -27,7 +36,7 @@ def analysis(entry, include_ui_assets=True):
         pathex=[str(GENERATED), str(ROOT)],
         binaries=common_binaries if include_ui_assets else [],
         datas=common_datas if include_ui_assets else [],
-        hiddenimports=common_hidden if include_ui_assets else [],
+        hiddenimports=["autoscript_build_info"] + (common_hidden if include_ui_assets else []),
         hookspath=[],
         hooksconfig={},
         runtime_hooks=[],

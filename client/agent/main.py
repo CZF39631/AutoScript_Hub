@@ -26,6 +26,7 @@ from client.runtime.local_auth import get_or_create_agent_token
 from client.agent.script_parser import parse_script_config
 from shared.script_contract import extract_script_archive, validate_params
 from shared.version import get_version
+from client.runtime.profile import agent_ports, is_preview
 from client.runtime.paths import ClientPaths
 from client.runtime.python_runtime import PrivatePythonUnavailable, python_runtime_info
 
@@ -38,7 +39,7 @@ _PROJECT_ROOT = str(_CLIENT_PATHS.install_dir)
 _CLIENT_CONFIG_PATH = str(_CLIENT_PATHS.config_file)
 _LEGACY_CLIENT_CONFIG_PATH = os.path.join(_PROJECT_ROOT, "client_config.json")
 _client_config = {}
-_config_source = _CLIENT_CONFIG_PATH if os.path.isfile(_CLIENT_CONFIG_PATH) else _LEGACY_CLIENT_CONFIG_PATH
+_config_source = _CLIENT_CONFIG_PATH if os.path.isfile(_CLIENT_CONFIG_PATH) or is_preview() else _LEGACY_CLIENT_CONFIG_PATH
 if os.path.isfile(_config_source):
     try:
         with open(_config_source, "r", encoding="utf-8") as f:
@@ -46,23 +47,20 @@ if os.path.isfile(_config_source):
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("加载客户端配置失败: %s", e)
 
-BACKEND_URL = os.environ.get(
-    "BACKEND_URL",
-    _client_config.get("server_url", "http://127.0.0.1:8000"),
+BACKEND_URL = (
+    _client_config.get("server_url", "http://127.0.0.1:8765") if is_preview()
+    else os.environ.get("BACKEND_URL", _client_config.get("server_url", "http://127.0.0.1:8000"))
 )
 POLL_INTERVAL = 5
 LIVE_POLL_INTERVAL = 1
-LOCAL_PORTS = (18080, *range(18091, 18100))
+LOCAL_PORTS = agent_ports()
 
 # Local paths for script storage and logs (decoupled from backend)
-_SCRIPTS_DIR = os.environ.get(
-    "SCRIPTS_DIR",
-    _client_config.get("script_download_dir") or str(_CLIENT_PATHS.scripts_dir),
+_SCRIPTS_DIR = (
+    _client_config.get("script_download_dir") or str(_CLIENT_PATHS.scripts_dir) if is_preview()
+    else os.environ.get("SCRIPTS_DIR", _client_config.get("script_download_dir") or str(_CLIENT_PATHS.scripts_dir))
 )
-_LOGS_DIR = os.environ.get(
-    "LOGS_DIR",
-    str(_CLIENT_PATHS.logs_dir),
-)
+_LOGS_DIR = str(_CLIENT_PATHS.logs_dir) if is_preview() else os.environ.get("LOGS_DIR", str(_CLIENT_PATHS.logs_dir))
 
 _token = None
 _user_id = None
@@ -1364,6 +1362,8 @@ def _run_update_install_worker():
 def _install_staged_update():
     """Start download/verification in the background and return immediately."""
     global _update_worker
+    if is_preview():
+        return _get_update_status()
     with _update_worker_lock:
         if _update_worker is not None and _update_worker.is_alive():
             return _get_update_status()

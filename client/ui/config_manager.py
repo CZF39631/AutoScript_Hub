@@ -11,6 +11,7 @@ from client.runtime.credentials import (
 )
 from client.runtime.paths import ClientPaths
 from shared.version import get_version
+from client.runtime.profile import is_preview
 
 
 logger = logging.getLogger(__name__)
@@ -22,18 +23,18 @@ CONFIG_PATH = str(_PATHS.config_file)
 LEGACY_CONFIG_PATH = os.path.join(PROJECT_ROOT, "client_config.json")
 
 DEFAULT_CONFIG = {
-    "server_url": "http://127.0.0.1:8000",
+    "server_url": "http://127.0.0.1:8765" if is_preview() else "http://127.0.0.1:8000",
     "username": "",
     "remember_credentials": False,
     "script_download_dir": "",
     "output_dir": "",
     "default_browser_path": "",
-    "browser_debug_port": 9222,
+    "browser_debug_port": 9322 if is_preview() else 9222,
     "proxy": "",
     "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
     "gitee_update_repository": "chuzifeng/auto-script_-hub",
     "github_update_repository": "CZF39631/AutoScript_Hub",
-    "update_channel": "stable",
+    "update_channel": "beta" if is_preview() else "stable",
     "update_manifest_urls": [],
     "version": get_version(),
     "setup_completed": False,
@@ -41,7 +42,7 @@ DEFAULT_CONFIG = {
 
 
 def _read_saved_config():
-    source = CONFIG_PATH if os.path.isfile(CONFIG_PATH) else LEGACY_CONFIG_PATH
+    source = CONFIG_PATH if os.path.isfile(CONFIG_PATH) or is_preview() else LEGACY_CONFIG_PATH
     if not os.path.isfile(source):
         return {}, source
     try:

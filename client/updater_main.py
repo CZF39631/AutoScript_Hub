@@ -6,14 +6,19 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 from typing import Callable, Iterable
 
+from client.runtime.profile import is_preview
 from client.update.state import UpdateStateStore
+from shared.version import is_preview_version
 
 
 EXIT_OK = 0
 EXIT_INSTALL_FAILED = 10
+EXIT_UPDATES_DISABLED = 11
+PREVIEW_UPDATE_DISABLED = "Preview 暂不支持在线更新，请手动安装独立 Preview 安装包。"
 EXIT_ROLLED_BACK = 20
 EXIT_ROLLBACK_FAILED = 21
 
@@ -88,6 +93,13 @@ def run_update(
     launch: Callable = _default_launch,
     wait_for_startup: Callable = wait_for_startup_marker,
 ) -> int:
+    # 必须先于状态写入、进程等待、安装、启动和回退。
+    if is_preview():
+        print(PREVIEW_UPDATE_DISABLED, file=sys.stderr)
+        return EXIT_UPDATES_DISABLED
+    if is_preview_version(expected_version):
+        print("正式客户端不能安装 Preview 更新，请手动安装独立 Preview 安装包", file=sys.stderr)
+        return EXIT_UPDATES_DISABLED
     store = UpdateStateStore(updates_dir)
     store.set_details(updater_pid=os.getpid())
     marker = updates_dir / "startup-ok.json"
@@ -136,6 +148,9 @@ def run_update(
 
 
 def main(argv=None) -> int:
+    if is_preview():
+        print(PREVIEW_UPDATE_DISABLED, file=sys.stderr)
+        return EXIT_UPDATES_DISABLED
     parser = argparse.ArgumentParser()
     parser.add_argument("--installer", type=Path, required=True)
     parser.add_argument("--previous-installer", type=Path, required=True)

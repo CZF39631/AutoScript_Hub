@@ -7,10 +7,15 @@ import multiprocessing
 if __name__ == "__main__":
     multiprocessing.freeze_support()
 
+import autoscript_build_info
 from autoscript_build_info import CHANNEL, VERSION
+from shared.version import is_preview_version
 
 os.environ["AUTOSCRIPT_VERSION"] = VERSION
 os.environ["AUTOSCRIPT_CHANNEL"] = CHANNEL
+os.environ["AUTOSCRIPT_INSTALL_FLAVOR"] = getattr(
+    autoscript_build_info, "INSTALL_FLAVOR", "preview" if is_preview_version(VERSION) else "stable"
+)
 
 from client.agent.main import run_agent
 from client.ui.config_manager import load_config

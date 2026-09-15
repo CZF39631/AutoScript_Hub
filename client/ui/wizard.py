@@ -6,7 +6,9 @@ import sys
 import requests
 import webview
 
-from client.ui.config_manager import save_config
+from client.ui.config_manager import save_config, DEFAULT_CONFIG
+from client.runtime.profile import application_name, is_preview
+from client.runtime.paths import ClientPaths
 
 WIZARD_HTML = r"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -293,19 +295,28 @@ def run_wizard():
     """Run the first-run setup wizard. Blocks until complete."""
     api = WizardApi()
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wizard.html")
-    # Write HTML to temp file for pywebview to load
+    if is_preview():
+        preview_webview = ClientPaths.from_environment().data_dir / 'webview'
+        preview_webview.mkdir(parents=True, exist_ok=True)
+        html_path = str(preview_webview / 'wizard.html')
+    # Preview HTML and webview state must not use the stable application's paths.
     with open(html_path, "w", encoding="utf-8") as f:
-        f.write(WIZARD_HTML)
+        f.write(WIZARD_HTML.replace('AutoScript Hub', application_name()).replace(
+            'value="http://127.0.0.1:8000"', 'value="' + DEFAULT_CONFIG['server_url'] + '"'
+        ).replace('9222', str(DEFAULT_CONFIG['browser_debug_port'])))
 
     window = webview.create_window(
-        "AutoScript Hub - 初始化设置",
+        application_name() + " - 初始化设置",
         html_path,
         js_api=api,
         width=600,
         height=520,
         resizable=False,
     )
-    webview.start()
+    if is_preview():
+        webview.start(storage_path=str(preview_webview))
+    else:
+        webview.start()
 
     # Cleanup temp html
     try:

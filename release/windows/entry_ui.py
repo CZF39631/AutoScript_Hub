@@ -10,13 +10,19 @@ import threading
 import time
 import urllib.request
 
+import autoscript_build_info
 from autoscript_build_info import CHANNEL, VERSION
+from shared.version import is_preview_version
 
 os.environ["AUTOSCRIPT_VERSION"] = VERSION
 os.environ["AUTOSCRIPT_CHANNEL"] = CHANNEL
+os.environ["AUTOSCRIPT_INSTALL_FLAVOR"] = getattr(
+    autoscript_build_info, "INSTALL_FLAVOR", "preview" if is_preview_version(VERSION) else "stable"
+)
 
 from client.runtime.local_auth import get_or_create_agent_token
 from client.runtime.paths import ClientPaths
+from client.runtime.profile import agent_ports, get_install_flavor
 from client.ui.config_manager import is_setup_complete
 from client.ui.main import start_ui
 from client.updater_main import write_startup_marker
@@ -24,7 +30,12 @@ from shared.version import get_version
 
 
 logger = logging.getLogger(__name__)
-AGENT_PORTS = (18080, *range(18091, 18100))
+AGENT_PORTS = agent_ports()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
 
 
 def _agent_request(path: str, *, method: str = "GET", data=None):
@@ -37,7 +48,9 @@ def _agent_request(path: str, *, method: str = "GET", data=None):
             headers={"Authorization": "Bearer " + get_or_create_agent_token()},
         )
         try:
-            return urllib.request.urlopen(request, timeout=1)
+            return urllib.request.build_opener(
+                urllib.request.ProxyHandler({}), _NoRedirect()
+            ).open(request, timeout=1)
         except Exception as exc:
             last_error = exc
     raise last_error or ConnectionError("本地 Agent 不可用")
@@ -46,7 +59,8 @@ def _agent_request(path: str, *, method: str = "GET", data=None):
 def _agent_is_running() -> bool:
     try:
         with _agent_request("/status") as response:
-            return response.status == 200
+            payload = json.loads(response.read().decode("utf-8"))
+            return response.status == 200 and payload.get("install_flavor", "stable") == get_install_flavor()
     except Exception:
         return False
 
@@ -55,7 +69,8 @@ def _agent_has_version(expected_version: str) -> bool:
     try:
         with _agent_request("/status") as response:
             payload = json.loads(response.read().decode("utf-8"))
-        return response.status == 200 and payload.get("version") == expected_version
+        return (response.status == 200 and payload.get("version") == expected_version
+                and payload.get("install_flavor", "stable") == get_install_flavor())
     except (OSError, ValueError, json.JSONDecodeError):
         return False
 

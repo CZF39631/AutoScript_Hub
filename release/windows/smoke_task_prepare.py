@@ -63,7 +63,7 @@ def child_environment(data: Path, backend: str) -> dict[str, str]:
     env = {k: os.environ[k] for k in ('SystemRoot', 'WINDIR', 'COMSPEC') if k in os.environ}
     system = env.get('SystemRoot', r'C:\Windows')
     env.update(PATH=system + os.pathsep + str(Path(system) / 'System32'),
-               AUTOSCRIPT_CLIENT_DATA_DIR=str(data), BACKEND_URL=backend,
+               AUTOSCRIPT_CLIENT_DATA_DIR=str(data), AUTOSCRIPT_INSTALL_FLAVOR='preview', BACKEND_URL=backend,
                LOCALAPPDATA=str(data / 'profile'), APPDATA=str(data / 'profile'),
                USERPROFILE=str(data / 'profile'), HOME=str(data / 'profile'),
                TEMP=str(data / 'scratch'), TMP=str(data / 'scratch'),
@@ -105,7 +105,7 @@ def request(port: int, token: str, route: str, body=None):
     req = Request(f'http://127.0.0.1:{port}' + route,
                   data=None if body is None else json.dumps(body).encode(),
                   headers={'Authorization': 'Bearer ' + token,
-                           'Origin': 'http://127.0.0.1:18081', 'Content-Type': 'application/json'})
+                           'Origin': 'http://127.0.0.1:18181', 'Content-Type': 'application/json'})
     try:
         with build_opener(ProxyHandler({})).open(req, timeout=2) as response:
             return json.load(response)
@@ -130,6 +130,7 @@ def wait_for(callback, timeout=45):
 def seed(data: Path, backend: str, marker: str):
     for name in ('config', 'scripts', 'environments', 'profile', 'scratch', 'logs'):
         (data / name).mkdir(parents=True, exist_ok=True)
+    (data / '.install-flavor').write_text('preview\n', encoding='ascii')
     config = {'server_url': backend, 'username': 'synthetic-prepare-smoke',
               'password': 'synthetic-not-a-real-password', 'setup_completed': True,
               'github_update_repository': '', 'gitee_update_repository': '',
