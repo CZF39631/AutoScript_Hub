@@ -1,24 +1,84 @@
-# AutoScript Hub
+<div align="center">
+  <img src="frontend/public/app-icon.png" width="100" alt="AutoScript Hub 图标">
+  <h1>AutoScript Hub</h1>
+  <p><strong>把你写好的 Python 脚本，交到真正需要它的人手里。</strong></p>
 
-面向团队的 Python 自动化脚本管理与执行平台：集中发布脚本、分配权限和跟踪执行，在 Windows 客户端完成实际任务。
+![MIT](https://img.shields.io/badge/license-MIT-blue)
+![Windows](https://img.shields.io/badge/client-Windows-0078D4)
+![Python](https://img.shields.io/badge/Python-3.11-3776AB)
+![Stable 1.2.4](https://img.shields.io/badge/stable-1.2.4-238636)
 
 **简体中文** | [English](README.en.md)
+
+**[下载 Windows 正式版](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4)** · <a href="#quick-start">快速开始</a> · <a href="#features">功能一览</a>
+
+[GitHub](https://github.com/CZF39631/AutoScript_Hub) · [Gitee 镜像](https://gitee.com/chuzifeng/auto-script_-hub)
+
+</div>
+
+![Preview 2 任务调度演示](docs/images/任务调度-preview2-zh.png)
+
+*Preview 2 任务调度 · 演示数据（裁剪截图，非 v1.2.4 界面）*
+
+脚本写好了，交付却还没结束：同事不会装环境，参数得反复解释，出了错只能来回发截图。
+
+**写脚本的人**，发布一个带参数表单的版本，不必每次陪着安装、执行和排错。**用脚本的人**，在 Windows 客户端找到有权限的脚本，填好表单就能运行，不必先学 Python。
+
+## 从一个脚本，到一次完成的任务
+
+**发布脚本 → 填写表单 → 本机执行 → 查看日志与工单**
+
+编写者按脚本契约整理参数、依赖和版本说明，发布到脚本市场。使用者安装脚本、填写参数，由本机 Agent 准备依赖并执行；结果文件留在执行电脑供查看，运行记录、日志和失败工单帮助双方定位问题。
+
+本机执行不等于数据绝不上传，依赖隔离也不是安全沙盒。只运行可信脚本；参数、日志和诊断的数据边界见下方说明。
+
+<a id="features"></a>
+
+## 少一点交付成本，多一点可重复使用
+
+| 你遇到的问题 | AutoScript Hub 怎么帮忙 |
+| --- | --- |
+| 脚本散在聊天记录里，不知道该用哪个版本 | 脚本市场集中发布、安装、更新，保留版本和变更说明 |
+| 每台电脑都要重新教人装 Python | Windows 安装包自带私有运行时，按依赖指纹复用隔离环境 |
+| 参数只能靠口头解释 | 按脚本契约生成参数表单，使用者填表运行 |
+| 不同团队需要不同脚本 | 角色决定操作能力，分组限定资源范围 |
+| 执行失败，只能说“跑不动” | 实时日志、取消任务、执行历史、失败工单与结果文件入口 |
+| 临时断网还要完成工作 | 在已同步授权和缓存条件下受限离线执行，不绕过授权 |
+| 更新包来源不放心 | 校验 Ed25519 签名清单、安装包长度和 SHA-256 |
+
+**Preview 2 另有：任务调度、React 主界面中英文切换。** 这些是开发预览能力，不代表 stable 1.2.4 已支持；Preview 2 已本地构建，尚无公开 Release。
+
+<a id="quick-start"></a>
+
+## 先跑起来
+
+1. **团队已有服务端？** [下载 v1.2.4](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4)，核对 `SHA256SUMS.txt` 后安装 Windows 客户端；无需另装 Python、Node.js 或 Git。
+2. **打开初始化向导**，填写团队服务端地址和账号，安装有权限的脚本，填表执行。密码不要写进命令行。
+3. **你负责搭建或写脚本？** 下方保留完整安全部署步骤；编写者从[脚本编写 Skill 与契约](skills/autoscript-script-authoring/SKILL.md)开始。
+
+首次搭建请先完成安全配置，不要直接把默认服务暴露到公网。
 
 ## 下载与版本
 
 - **当前正式版：v1.2.4**。[GitHub Release：Windows 安装包与部署资产](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4)
 - [Gitee 代码镜像](https://gitee.com/chuzifeng/auto-script_-hub) · [Gitee v1.2.4 镜像资产](https://gitee.com/chuzifeng/auto-script_-hub/releases/tag/v1.2.4)
 - GitHub 是发布资产的真源，客户端依据签名更新清单校验安装包。Gitee 镜像代码、Tag、部署包、Skill 和签名清单，**不镜像 Windows EXE**；安装包仍从 GitHub 获取。
-- 当前分支对应 **`1.3.0-preview.2` 开发预览**，包含中英文界面，**尚未公开 Release**，不是正式升级目标。当前开发源码与 v1.2.4 交付物不完全相同。
+- 当前分支对应 **`1.3.0-preview.2` 开发预览**，包含任务调度和中英文界面，已完成本地构建，**尚未公开 Release**，不是正式升级目标。当前开发源码与 v1.2.4 交付物不完全相同。
 
 开发分支已接入 React 主界面的简体中文 / English 切换，入口在登录页和主界面侧栏；**尚未随正式版发布**。脚本自带文字、原始日志、历史更新正文和原生初始化向导仍保留原文，详见[多语言支持范围](docs/多语言支持.md)。
 
-## 架构与数据边界
+## 深入使用与安全边界
+
+<details>
+<summary><strong>架构、权限、离线与更新信任边界</strong></summary>
+
+### 架构与数据边界
 
 ```text
 服务端（Linux / Docker）             Windows 执行端
 FastAPI + React + SQLite   ← API →   桌面 UI + 后台 Agent + Updater
-脚本版本、权限、调度与历史             依赖环境、脚本执行与本机文件
+脚本版本、权限与历史                  依赖环境、脚本执行与本机文件
+调度（Preview）
 ```
 
 - **服务端**：单实例 SQLite，镜像支持 `linux/amd64` 与 `linux/arm64`；保存脚本包和版本、用户与分组、任务参数、运行记录，以及同步的日志和诊断信息。
@@ -26,15 +86,18 @@ FastAPI + React + SQLite   ← API →   桌面 UI + 后台 Agent + Updater
 - **不是“所有业务数据永不上传”**：参数、日志和工单诊断可能包含业务信息，脚本也可自行访问网络或上传文件。发布前应审查代码、参数和日志内容，按实际场景配置访问控制与脱敏。
 - **依赖隔离不是安全沙盒**：脚本以当前 Windows 用户权限运行，只执行可信代码。客户端保存的凭据使用 Windows DPAPI；服务端密钥和外部认证配置应保存在私有环境配置中。
 
-## 核心能力
+### 能力与权限细则
 
 - **脚本市场与版本管理**：发布、安装和更新脚本，记录版本及变更说明；提供脚本契约、验证工具和 AI 编写 Skill。
 - **角色与分组权限**：管理员管理全局资源，开发者管理所属分组脚本，操作员安装执行。角色决定操作能力，分组决定资源范围；用户和脚本可属于多个分组。
-- **执行与排障**：任务调度、实时日志、取消任务、执行历史、失败工单和结果文件入口。
+- **执行与排障**：任务调度（Preview）、实时日志、取消任务、执行历史、失败工单和结果文件入口。
 - **受限离线执行**：已缓存脚本需先联网同步授权，授权快照最长有效 7 天；撤权在下一次成功同步后生效，完全离线设备上的已下载文件无法即时召回。详见[权限与离线边界](docs/人员分组与脚本市场.md)。
 - **可验证更新**：Ed25519 签名清单、安装包长度和 SHA-256 校验；支持公开源及局域网缓存。内置账号可用，企业外部身份认证为可选配置。
 
-## 安全快速开始
+</details>
+
+<details>
+<summary><strong>安全安装与部署：服务端、Windows 客户端及 Preview 隔离</strong></summary>
 
 ### 1. 部署服务端
 
@@ -74,7 +137,12 @@ curl --fail http://127.0.0.1:8000/api/health/ready
 
 Preview 使用独立 AppId、安装目录、数据根 `%LOCALAPPDATA%\AutoScriptHubPreview` 和本地端口；默认开发服务地址为 `http://127.0.0.1:8765`，暂停在线更新，手动安装独立 Preview。**Beta / Stable 共用安装和数据，Beta 不是隔离测试环境**。用户主动指定的共享输出目录或正式服务不在默认隔离保证内。详见[Preview 安装与数据隔离](docs/Preview安装与数据隔离.md)。
 
-## 开发与验证
+</details>
+
+<details>
+<summary><strong>开发与验证：隔离环境、启动命令与测试</strong></summary>
+
+### 开发与验证
 
 使用 **Windows、Python 3.11、Node.js 20.19+（或 22.13+ / 24+）**。以下是开发源码示例，不用于升级正式安装。
 
@@ -134,7 +202,9 @@ npm run build
 
 Linux CI 的 Python 测试范围为 `shared/tests backend/tests test/release`；Windows 客户端相关验证应在 Windows 完成。
 
-## 文档入口
+</details>
+
+## 继续了解
 
 - [部署、备份、恢复与升级](docs/0.9-deployment-runbook.md)
 - [v1.2.4 发布记录](docs/releases/v1.2.4-发布记录.md)

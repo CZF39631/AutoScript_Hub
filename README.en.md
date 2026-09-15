@@ -1,25 +1,84 @@
-# AutoScript Hub
+<div align="center">
+  <img src="frontend/public/app-icon.png" width="100" alt="AutoScript Hub icon">
+  <h1>AutoScript Hub</h1>
+  <p><strong>Put the Python scripts you write into the hands of the people who need them.</strong></p>
 
-A Python automation platform for teams: publish scripts centrally, control access, and track runs while executing tasks on Windows clients.
+![MIT](https://img.shields.io/badge/license-MIT-blue)
+![Windows](https://img.shields.io/badge/client-Windows-0078D4)
+![Python](https://img.shields.io/badge/Python-3.11-3776AB)
+![Stable 1.2.4](https://img.shields.io/badge/stable-1.2.4-238636)
 
 [简体中文](README.md) | **English**
+
+**[Download for Windows](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4)** · <a href="#quick-start">Quick start</a> · <a href="#features">Features</a>
+
+[GitHub](https://github.com/CZF39631/AutoScript_Hub) · [Gitee mirror](https://gitee.com/chuzifeng/auto-script_-hub)
+
+</div>
+
+![Preview 2 task scheduling with demo data](docs/images/任务调度-preview2-en.png)
+
+*Preview 2 task scheduling · Demo data (cropped screenshot, not the v1.2.4 interface).*
+
+The script works. Sharing it is another job: setting up your colleague's environment, explaining parameters, and trading screenshots when something fails.
+
+**For script authors:** publish a version with a parameter form instead of walking everyone through setup and troubleshooting. **For script users:** find an authorized script in the Windows client, fill in the form, and run it—no Python knowledge required.
+
+## From a script to a completed task
+
+**Publish → Fill in a form → Run locally → Review logs and tickets**
+
+Authors define parameters, dependencies, and version notes using the script contract, then publish to the catalog. Users install the script and fill in its form. The local Agent prepares dependencies and executes it; result files stay on the execution computer for access, while run history, logs, and failure tickets help both sides troubleshoot.
+
+Local execution does not mean data can never leave the device, and dependency isolation is not a security sandbox. Run trusted scripts only; see the parameter, log, and diagnostic boundaries below.
+
+<a id="features"></a>
+
+## Less setup and support, more reuse
+
+| The problem | How AutoScript Hub helps |
+| --- | --- |
+| Scripts are buried in chat, with no clear current version | A central catalog for publishing, installing, and updating, with versions and change notes |
+| Every computer needs another Python setup walkthrough | A bundled private runtime and isolated environments reused by dependency fingerprint |
+| Parameters need a verbal explanation every time | Parameter forms generated from the script contract |
+| Different teams need access to different scripts | Roles define actions; groups define resource scope |
+| “It failed” gives the author nothing to work with | Live logs, cancellation, run history, failure tickets, and result-file access |
+| A temporary outage interrupts work | Bounded offline execution with cached scripts and previously synchronized authorization |
+| An update package needs a trustworthy origin | Ed25519 manifest signatures, installer length, and SHA-256 verification |
+
+**Preview 2 adds task scheduling and Chinese / English switching in the React interface.** These are development-preview features, not claims about stable 1.2.4. Preview 2 has been built locally but has no public Release.
+
+<a id="quick-start"></a>
+
+## Get started
+
+1. **Your team already has a server?** [Download v1.2.4](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4), verify `SHA256SUMS.txt`, and install the Windows client. No separate Python, Node.js, or Git installation is needed.
+2. **Open the setup wizard**, enter your team's server address and account, install an authorized script, and fill in its form to run it. Never put passwords in command-line arguments.
+3. **Setting up the server or writing scripts?** Expand the complete safe deployment instructions below; authors can start with the [script authoring Skill and contract](skills/autoscript-script-authoring/SKILL.md).
+
+For a new deployment, complete the security configuration first. Do not expose the default service directly to the public internet.
 
 ## Downloads and versions
 
 - **Current stable release: v1.2.4**. [GitHub Release: Windows installer and deployment assets](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4)
 - [Gitee source mirror](https://gitee.com/chuzifeng/auto-script_-hub) · [Gitee v1.2.4 mirrored assets](https://gitee.com/chuzifeng/auto-script_-hub/releases/tag/v1.2.4)
 - GitHub is the source of truth for release assets. The client verifies installers against signed update manifests. Gitee mirrors code, tags, deployment bundles, the Skill, and signed manifests, **not Windows EXE files**. Installers are downloaded from GitHub.
-- This branch contains **`1.3.0-preview.2`, a development preview** with Chinese / English UI switching and **no public Release yet**. It is not a stable upgrade target. Development source differs from the v1.2.4 deliverables.
+- This branch contains **`1.3.0-preview.2`, a development preview** with task scheduling and Chinese / English UI switching, built locally with **no public Release yet**. It is not a stable upgrade target. Development source differs from the v1.2.4 deliverables.
 
 The development branch supports Simplified Chinese / English switching for the React interface, available on the sign-in page and in the sidebar. **This has not shipped in a stable release.** Script-provided text, raw logs, historical release-note content, and the native setup wizard retain their original language. See [language support scope](docs/多语言支持.md).
 
-## Architecture and data boundaries
+## Further setup and safety boundaries
+
+<details>
+<summary><strong>Architecture, access, offline execution, and update trust</strong></summary>
+
+### Architecture and data boundaries
 
 ```text
 Server (Linux / Docker)              Windows execution client
 FastAPI + React + SQLite   ← API →   Desktop UI + background Agent + Updater
-Versions, access, scheduling         Dependency environments, execution,
-and run history                     and local files
+Versions, access, run history        Dependency environments, execution,
+scheduling (Preview)                and local files
 ```
 
 - **Server**: a single-instance SQLite deployment, with images for `linux/amd64` and `linux/arm64`. Stores script packages and versions, users and groups, task parameters, run records, and synchronized logs and diagnostics.
@@ -27,15 +86,18 @@ and run history                     and local files
 - **Not a promise that business data never leaves the device**: parameters, logs, and support diagnostics may contain business information; scripts can also access networks or upload files. Review code, parameters, and logging, and apply appropriate access controls and redaction.
 - **Dependency isolation is not a security sandbox**: scripts run with the current Windows user's permissions. Run trusted code only. Saved client credentials use Windows DPAPI; server secrets and external authentication settings belong in private environment configuration.
 
-## Core capabilities
+### Capability and access details
 
 - **Script catalog and versioning**: publish, install, and update scripts with version records and change notes; script contracts, validation tools, and an AI authoring Skill are included.
 - **Roles and groups**: administrators manage all resources, developers manage scripts in their groups, and operators install and run scripts. Roles determine actions; groups determine resource scope. Users and scripts can belong to multiple groups.
-- **Execution and troubleshooting**: scheduling, live logs, cancellation, run history, failure tickets, and access to result files.
+- **Execution and troubleshooting**: scheduling (Preview), live logs, cancellation, run history, failure tickets, and access to result files.
 - **Bounded offline execution**: cached scripts require a prior online authorization sync. Authorization snapshots last at most seven days; revocation takes effect after the next successful sync. Downloaded files cannot be recalled immediately from a fully offline device. See [access and offline boundaries](docs/人员分组与脚本市场.md).
 - **Verifiable updates**: Ed25519-signed manifests, installer length and SHA-256 checks, public sources, and LAN caching. Built-in accounts are supported; external enterprise authentication is optional.
 
-## Safe quick start
+</details>
+
+<details>
+<summary><strong>Safe installation and deployment: server, Windows client, and Preview isolation</strong></summary>
 
 ### 1. Deploy the server
 
@@ -75,7 +137,12 @@ Check for updates under Settings → Client Updates (`设置 → 客户端更新
 
 Preview has its own AppId, installation directory, data root (`%LOCALAPPDATA%\AutoScriptHubPreview`), and local ports. Its default development server is `http://127.0.0.1:8765`. Online updates are disabled; independent Preview builds are installed manually. **Beta and Stable share installation and data; Beta is not an isolated test environment.** User-selected shared output folders or production servers are outside the default isolation guarantee. See [Preview installation and data isolation](docs/Preview安装与数据隔离.md).
 
-## Development and validation
+</details>
+
+<details>
+<summary><strong>Development and validation: isolated environments, startup, and tests</strong></summary>
+
+### Development and validation
 
 Use **Windows, Python 3.11, and Node.js 20.19+ (or 22.13+ / 24+)**. These examples run development source; they are not a production upgrade procedure.
 
@@ -135,7 +202,9 @@ npm run build
 
 Linux CI runs Python tests in `shared/tests backend/tests test/release`; validate Windows client behavior on Windows.
 
-## Documentation
+</details>
+
+## Read more
 
 Most detailed documents are currently in Chinese.
 
