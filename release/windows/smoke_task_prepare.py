@@ -13,6 +13,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import socket
 import struct
@@ -151,11 +152,16 @@ def seed(data: Path, backend: str, marker: str):
         (directory / 'main.py').write_text(source, encoding='utf-8')
 
 
+def validate_expected_version(expected: str) -> str:
+    if not isinstance(expected, str) or not re.fullmatch(r'1\.3\.0-preview\.(?:0|[1-9][0-9]*)', expected):
+        raise ValueError('this acceptance contract requires an explicit 1.3.0-preview.N version')
+    return expected
+
+
 def run(install: Path, data: Path, expected: str) -> dict:
     if os.name != 'nt':
         raise RuntimeError('Windows acceptance only')
-    if expected != '1.3.0-preview.1':
-        raise ValueError('this acceptance contract requires 1.3.0-preview.1')
+    expected = validate_expected_version(expected)
     install, data = validate_paths(install, data)
     sys.path.insert(0, str(ROOT))
     # Only containment utilities are imported; never import Agent/config modules.

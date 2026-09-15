@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """仅 OS temp 的冻结 Preview 并存验收；不运行 Setup 或真实旧 Agent。
 
-父端调用 run(install, legacy, private_runtime=None)。可直接运行本文件，读取同目录
-smoke_preview_coexist.json 的 install、legacy、可选 private_runtime 绝对路径。
+父端调用 run(install, legacy, private_runtime=None, expected_version='1.3.0-preview.1')。
+可直接运行本文件，读取同目录 smoke_preview_coexist.json 的 install、legacy、
+可选 private_runtime 绝对路径及 expected_version（默认保留 Preview 1）。
 结果和合成数据保留于新 OS temp 根。legacy 只是冻结 API 代码，不是旧安装器。
 """
 from __future__ import annotations
@@ -96,9 +97,10 @@ def request(port, token, route='/status', origin=PREVIEW_ORIGIN, body=None):
             return exc.code, json.load(exc)
 
 
-def run(install: Path, legacy: Path, private_runtime: Path | None = None) -> dict:
+def run(install: Path, legacy: Path, private_runtime: Path | None = None, expected_version: str = VERSION) -> dict:
     if os.name != 'nt':
         raise RuntimeError('Windows acceptance only')
+    expected_version = _prepare.validate_expected_version(expected_version)
     install = temporary_input(install)
     runtime = temporary_input(private_runtime) if private_runtime is not None else None
     blob = verified_legacy(legacy)
@@ -191,7 +193,7 @@ def run(install: Path, legacy: Path, private_runtime: Path | None = None) -> dic
             port, token = wait_for(discover)
             require(port in PREVIEW_PORTS and port not in FORMAL_PORTS, 'wrong Preview port family')
             code, status = call(agent, port, token)
-            require(code == 200 and status.get('version') == VERSION and status.get('install_flavor') == 'preview',
+            require(code == 200 and status.get('version') == expected_version and status.get('install_flavor') == 'preview',
                     'frozen identity mismatch')
             require(call(agent, port, formal_token)[0] == 401, 'formal token accepted by Preview')
             require(call(agent, port, token, origin=FORMAL_ORIGIN)[0] == 403, 'formal Origin accepted by Preview')
@@ -213,7 +215,7 @@ def run(install: Path, legacy: Path, private_runtime: Path | None = None) -> dic
                     'Preview shutdown affected synthetic formal API')
             require(not callback.exists(), 'formal shutdown callback invoked')
             require(manifest(formal) == before, 'synthetic formal data mutated')
-            evidence.update(version=VERSION, install_flavor='preview', preview_port=port, formal_api_port=old_port,
+            evidence.update(version=expected_version, install_flavor='preview', preview_port=port, formal_api_port=old_port,
                 default_data=str(preview), preview_pid=agent.pid, formal_pid=old.pid,
                 preview_graceful_shutdown=True, formal_shutdown_called=False, updates=updates,
                 token_isolation=True, origin_isolation=True,
@@ -250,7 +252,8 @@ def run(install: Path, legacy: Path, private_runtime: Path | None = None) -> dic
 def main():
     config = json.loads(Path(__file__).with_suffix('.json').read_text(encoding='utf-8'))
     result = run(Path(config['install']), Path(config['legacy']),
-                 Path(config['private_runtime']) if config.get('private_runtime') else None)
+                 Path(config['private_runtime']) if config.get('private_runtime') else None,
+                 expected_version=config.get('expected_version', VERSION))
     print(json.dumps(result, ensure_ascii=True))
 
 

@@ -21,6 +21,18 @@ def layout(tmp_path):
     return install, tmp_path / 'data'
 
 
+@pytest.mark.parametrize('version', ['1.3.0-preview.1', '1.3.0-preview.2', '1.3.0-preview.12'])
+def test_explicit_preview_versions_are_supported(version):
+    assert smoke.validate_expected_version(version) == version
+
+
+@pytest.mark.parametrize('version', ['1.2.4', '1.3.0-beta.2', '1.3.0-rc.2', 'v1.3.0-preview.2',
+                                     '1.3.0-preview.02', '1.3.0-preview.2+stable', '', None])
+def test_other_installation_versions_are_rejected(version):
+    with pytest.raises(ValueError, match='explicit'):
+        smoke.validate_expected_version(version)
+
+
 def test_only_empty_disjoint_temporary_paths(layout, tmp_path):
     install, data = layout
     assert smoke.validate_paths(install, data, tmp_path) == (install, data)
