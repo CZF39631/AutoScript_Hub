@@ -7,18 +7,22 @@ import { useConnection } from '../contexts/ConnectionContext'
 import { formatServerTime } from '../utils/dateTime'
 import { makeTrigger, newRequestId, taskError, taskStates, triggerLabel } from '../utils/taskScheduling'
 
-const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'].map((label, value) => ({ label, value }))
+import { useI18n } from '../i18n/useI18n'
+
+const buttonStyle = { whiteSpace: 'normal', height: 'auto', minHeight: 32, paddingBlock: 4 }
 const activeStates = ['queued', 'claimed', 'running', 'cancel_requested', 'unknown']
 function State({ value }) {
+  const { t } = useI18n()
   const [label, color] = taskStates[value] || [value || '—', 'default']
-  return <Tag color={color}>{label}</Tag>
+  return <Tag color={color}>{Object.hasOwn(taskStates, value) ? t(label) : label}</Tag>
 }
 
 function ParameterFields({ definitions }) {
+  const { t } = useI18n()
   return definitions.map(p => {
     const isCheckbox = ['bool', 'checkbox'].includes(p.type)
-    const rules = p.required && !isCheckbox ? [{ required: true, message: `请填写${p.label || p.key}` }] : []
-    let control = <Input placeholder={['file', 'folder'].includes(p.type) ? '目标电脑上的完整路径' : undefined} />
+    const rules = p.required && !isCheckbox ? [{ required: true, message: t('execution.fillParameter', { label: p.label || p.key }) }] : []
+    let control = <Input placeholder={['file', 'folder'].includes(p.type) ? t('execution.fullPath') : undefined} />
     if (isCheckbox) control = <Checkbox>{p.label || p.key}</Checkbox>
     if (p.type === 'number') control = <InputNumber style={{ width: '100%' }} min={p.min} max={p.max} />
     if (p.type === 'select') control = <Select options={(p.options || []).map(o => ({ label: String(o), value: o }))} />
@@ -28,6 +32,8 @@ function ParameterFields({ definitions }) {
 }
 
 function TaskEditor({ local, localApi, devices, grantOnly, onCancel, onSaved }) {
+  const { t } = useI18n()
+  const weekdays = Array.from({ length: 7 }, (_, value) => ({ label: t(`execution.weekday.${value}`), value }))
   const [form] = Form.useForm()
   const [scripts, setScripts] = useState([])
   const [versions, setVersions] = useState([])
@@ -43,7 +49,7 @@ function TaskEditor({ local, localApi, devices, grantOnly, onCancel, onSaved }) 
   useEffect(() => {
     let active = true
     const request = local ? localApi.get('/local/scripts') : api.get('/api/scripts/marketplace')
-    request.then(r => { if (active) setScripts(r.data || []) }).catch(e => { if (active) setError(taskError(e)) })
+    request.then(r => { if (active) setScripts(r.data || []) }).catch(e => { if (active) setError(e) })
     return () => { active = false; invalidateSelection() }
   }, [local, localApi, invalidateSelection])
   const applyConfig = config => {
@@ -60,7 +66,7 @@ function TaskEditor({ local, localApi, devices, grantOnly, onCancel, onSaved }) 
     try {
       const r = await api.get(`/api/scripts/${scriptId}/versions/${version}/config`)
       if (current === generation.current) applyConfig(r.data.config)
-    } catch (e) { if (current === generation.current) setError(taskError(e)) }
+    } catch (e) { if (current === generation.current) setError(e) }
   }
   const chooseScript = async id => {
     const current = ++generation.current
@@ -85,7 +91,7 @@ function TaskEditor({ local, localApi, devices, grantOnly, onCancel, onSaved }) 
           await chooseVersion(r.data[0].version, id)
         }
       }
-    } catch (e) { if (current === generation.current) setError(taskError(e)) }
+    } catch (e) { if (current === generation.current) setError(e) }
   }
   const save = async values => {
     if (saving.current || !configReady) return
@@ -93,14 +99,14 @@ function TaskEditor({ local, localApi, devices, grantOnly, onCancel, onSaved }) 
     setLoading(true)
     setError('')
     try {
-      let notice = '任务已创建'
+      let notice = t('execution.taskCreated')
       if (grantOnly) {
         const response = await api.post(`/api/task-devices/${values.device_id}/grants`, { script_id: values.script_id, script_version: values.script_version })
-        notice = ['rejected', 'revoked'].includes(response.data.status) ? '该授权曾被拒绝或撤销，请联系设备使用者在本机重新允许' : response.data.status === 'accepted' ? '该固定版本已有设备授权' : '申请已发送，请目标设备使用者在本机确认'
+        notice = t(['rejected', 'revoked'].includes(response.data.status) ? 'execution.grantPreviouslyDenied' : response.data.status === 'accepted' ? 'execution.grantExists' : 'execution.grantSent')
       } else {
         const payload = {
           name: values.name, script_id: values.script_id, script_version: values.script_version,
-          params: values.params || {}, trigger: makeTrigger(values), timeout_seconds: values.timeout_seconds,
+          params: values.params || {}, trigger: makeTrigger(values, t), timeout_seconds: values.timeout_seconds,
           requires_desktop: values.requires_desktop, requires_browser: values.requires_browser,
           ...(!local && { device_id: values.device_id }),
         }
@@ -108,38 +114,39 @@ function TaskEditor({ local, localApi, devices, grantOnly, onCancel, onSaved }) 
       }
       message.success(notice)
       onSaved()
-    } catch (e) { setError(taskError(e)) } finally { saving.current = false; setLoading(false) }
+    } catch (e) { setError(e) } finally { saving.current = false; setLoading(false) }
   }
-  return <Modal open title={grantOnly ? '申请设备授权' : `新建${local ? '本机' : '远程'}任务`} width={640} onCancel={loading ? undefined : onCancel} mask={{ closable: false }} footer={<Space><Button onClick={onCancel} disabled={loading}>取消</Button><Button type="primary" loading={loading} disabled={!configReady} onClick={() => form.submit()}>{grantOnly ? '发送申请' : '创建任务'}</Button></Space>}>
+  return <Modal open title={t(grantOnly ? 'execution.requestGrant' : local ? 'execution.newLocalTask' : 'execution.newRemoteTask')} width={640} onCancel={loading ? undefined : onCancel} mask={{ closable: false }} footer={<Space wrap><Button style={buttonStyle} onClick={onCancel} disabled={loading}>{t('execution.cancel')}</Button><Button style={buttonStyle} type="primary" loading={loading} disabled={!configReady} onClick={() => form.submit()}>{t(grantOnly ? 'execution.sendRequest' : 'execution.createTask')}</Button></Space>}>
     <Form form={form} layout="vertical" onFinish={save} initialValues={{ kind: 'manual', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai', misfire: 'skip', grace_seconds: 300, timeout_seconds: 600, requires_desktop: false, requires_browser: false }}>
-      {error && <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />}
-      {!grantOnly && <Form.Item name="name" label="任务名称" rules={[{ required: true, whitespace: true }]}><Input maxLength={200} /></Form.Item>}
-      {!local && <Form.Item name="device_id" label="目标设备编号" extra={grantOnly ? '向设备使用者获取编号；只有在目标电脑上才能批准授权。' : '需要目标设备已批准你执行所选的固定脚本版本。'} rules={[{ required: true }]}>
-        {grantOnly ? <InputNumber min={1} precision={0} style={{ width: '100%' }} /> : <Select options={devices.map(d => ({ value: d.id, label: `${d.name}（#${d.id}，${d.status === 'online' ? '在线' : '离线'}）` }))} />}
+      {error && <Alert type="error" showIcon title={taskError(error, t)} style={{ marginBottom: 16 }} />}
+      {!grantOnly && <Form.Item name="name" label={t('execution.taskName')} rules={[{ required: true, whitespace: true }]}><Input maxLength={200} /></Form.Item>}
+      {!local && <Form.Item name="device_id" label={t('execution.targetDeviceId')} extra={t(grantOnly ? 'execution.deviceIdHint' : 'execution.deviceGrantHint')} rules={[{ required: true }]}>
+        {grantOnly ? <InputNumber min={1} precision={0} style={{ width: '100%' }} /> : <Select options={devices.map(d => ({ value: d.id, label: t('execution.deviceOption', { name: d.name, id: d.id, status: t(d.status === 'online' ? 'execution.online' : 'execution.offline') }) }))} />}
       </Form.Item>}
-      <Form.Item name="script_id" label="脚本" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" placeholder={local ? '选择已下载脚本' : '选择可访问脚本'} options={scripts.map(s => ({ value: s.id, label: s.name }))} onChange={chooseScript} /></Form.Item>
-      <Form.Item name="script_version" label="固定版本编号" extra="任务不会自动跟随市场新版本；更换版本需要重新创建任务和授权。" rules={[{ required: true }]}><Select options={versions.map(v => ({ value: v.version, label: `版本 #${v.version}${v.semantic_version ? `（${v.semantic_version}）` : ''}` }))} onChange={local ? undefined : value => chooseVersion(value)} /></Form.Item>
+      <Form.Item name="script_id" label={t('execution.script')} rules={[{ required: true }]}><Select showSearch optionFilterProp="label" placeholder={t(local ? 'execution.selectDownloaded' : 'execution.selectAccessible')} options={scripts.map(s => ({ value: s.id, label: s.name }))} onChange={chooseScript} /></Form.Item>
+      <Form.Item name="script_version" label={t('execution.pinnedVersion')} extra={t('execution.pinnedVersionHint')} rules={[{ required: true }]}><Select options={versions.map(v => ({ value: v.version, label: t('execution.versionOption', { version: v.version, semantic: v.semantic_version ? ` (${v.semantic_version})` : '' }) }))} onChange={local ? undefined : value => chooseVersion(value)} /></Form.Item>
       {!grantOnly && <>
         <ParameterFields definitions={definitions} />
-        <Form.Item name="kind" label="触发方式"><Select options={[{ value: 'manual', label: '仅手动' }, { value: 'once', label: '指定时间一次' }, { value: 'daily', label: '每天' }, { value: 'weekly', label: '每周' }]} /></Form.Item>
-        <Form.Item name="timezone" label="时区" rules={[{ required: true }]}><Input placeholder="Asia/Shanghai" /></Form.Item>
-        {kind === 'once' && <Form.Item name="start_at" label="执行时间（包含时区偏移）" rules={[{ required: true }]}><Input placeholder="2026-09-14T09:00:00+08:00" /></Form.Item>}
-        {['daily', 'weekly'].includes(kind) && <Form.Item name="time" label="执行时刻（所选时区）" rules={[{ required: true }]}><Input type="time" /></Form.Item>}
-        {kind === 'weekly' && <Form.Item name="weekdays" label="执行日期" rules={[{ required: true }]}><Checkbox.Group options={weekdays} /></Form.Item>}
+        <Form.Item name="kind" label={t('execution.trigger')}><Select options={['manual', 'once', 'daily', 'weekly'].map(value => ({ value, label: t(`execution.trigger.${value}`) }))} /></Form.Item>
+        <Form.Item name="timezone" label={t('execution.timezone')} rules={[{ required: true }]}><Input placeholder="Asia/Shanghai" /></Form.Item>
+        {kind === 'once' && <Form.Item name="start_at" label={t('execution.onceTime')} rules={[{ required: true }]}><Input placeholder="2026-09-14T09:00:00+08:00" /></Form.Item>}
+        {['daily', 'weekly'].includes(kind) && <Form.Item name="time" label={t('execution.recurringTime')} rules={[{ required: true }]}><Input type="time" /></Form.Item>}
+        {kind === 'weekly' && <Form.Item name="weekdays" label={t('execution.weekdays')} rules={[{ required: true }]}><Checkbox.Group options={weekdays} /></Form.Item>}
         {kind !== 'manual' && <>
-          <Form.Item name="misfire" label="错过执行时间"><Select options={[{ value: 'skip', label: '跳过，不补跑' }, { value: 'run_once', label: '宽限期内只补最近一次' }]} /></Form.Item>
-          {misfire === 'run_once' && <Form.Item name="grace_seconds" label="补跑宽限（秒）" rules={[{ required: true }]}><InputNumber min={1} max={86400} precision={0} /></Form.Item>}
+          <Form.Item name="misfire" label={t('execution.misfire')}><Select options={[{ value: 'skip', label: t('execution.misfireSkip') }, { value: 'run_once', label: t('execution.misfireOnce') }]} /></Form.Item>
+          {misfire === 'run_once' && <Form.Item name="grace_seconds" label={t('execution.graceSeconds')} rules={[{ required: true }]}><InputNumber min={1} max={86400} precision={0} /></Form.Item>}
         </>}
-        <Form.Item name="timeout_seconds" label="执行超时（秒，包含准备阶段）" rules={[{ required: true }]}><InputNumber min={1} max={86400} precision={0} /></Form.Item>
-        <Form.Item name="requires_desktop" valuePropName="checked"><Checkbox>需要已登录的桌面会话</Checkbox></Form.Item>
-        <Form.Item name="requires_browser" valuePropName="checked"><Checkbox>需要可用的浏览器环境</Checkbox></Form.Item>
-        <Typography.Paragraph type="secondary">{local ? '本机 Agent 必须保持运行。离线时仅执行已缓存且通过本机校验的脚本。' : '脚本以目标电脑用户的权限执行；设备授权不等于安全沙箱。'} 结果未知时不会自动重跑。</Typography.Paragraph>
+        <Form.Item name="timeout_seconds" label={t('execution.timeout')} rules={[{ required: true }]}><InputNumber min={1} max={86400} precision={0} /></Form.Item>
+        <Form.Item name="requires_desktop" valuePropName="checked"><Checkbox>{t('execution.requiresDesktop')}</Checkbox></Form.Item>
+        <Form.Item name="requires_browser" valuePropName="checked"><Checkbox>{t('execution.requiresBrowser')}</Checkbox></Form.Item>
+        <Typography.Paragraph type="secondary">{t(local ? 'execution.localSafety' : 'execution.remoteSafety')} {t('execution.noUnknownRetry')}</Typography.Paragraph>
       </>}
     </Form>
   </Modal>
 }
 
 export default function Tasks() {
+  const { t } = useI18n()
   const { online, agentOnline, localApi } = useConnection()
   const [source, setSource] = useState('remote')
   const [loadedSource, setLoadedSource] = useState(null)
@@ -162,7 +169,7 @@ export default function Tasks() {
     const id = ++serial.current
     if (!(local ? agentOnline : online)) {
       setTasks([]); setEvents([]); setGrants([]); setDevices([]); setDevice(null)
-      setError(local ? '本机 Agent 不可用，请启动客户端后刷新。' : '服务器不可用；可切换到本机任务管理已下载脚本。')
+      setError(t(local ? 'execution.agentUnavailable' : 'execution.serverUnavailable'))
       setLoading(false)
       setLoadedSource(null)
       return
@@ -178,9 +185,9 @@ export default function Tasks() {
       setError('')
       setLoadedSource(local ? 'local' : 'remote')
     } catch (e) {
-      if (serial.current === id) setError(e.response?.status === 404 ? '当前服务或客户端尚不支持任务调度，请升级后重试。' : taskError(e))
+      if (serial.current === id) setError(e.response?.status === 404 ? t('execution.schedulingUnsupported') : taskError(e, t))
     } finally { if (serial.current === id) setLoading(false) }
-  }, [local, agentOnline, online, localApi])
+  }, [local, agentOnline, online, localApi, t])
   useEffect(() => {
     load()
     const timer = setInterval(load, 5000)
@@ -190,56 +197,57 @@ export default function Tasks() {
     if (inFlight.current) return
     inFlight.current = true; setBusy(true)
     try { await (useLocal ? localApi : api).post(url, body); await load(); return true }
-    catch (e) { message.error(taskError(e)); return false }
+    catch (e) { message.error(taskError(e, t)); return false }
     finally { inFlight.current = false; setBusy(false) }
   }
   const action = async (task, actionName) => {
     const key = `${source}:${task.id}`
     if (actionName === 'run' && !requestIds.current.has(key)) requestIds.current.set(key, newRequestId())
     const result = await mutate(`${local ? '/local/schedules' : '/api/tasks'}/${task.id}/action`, { action: actionName, ...(actionName === 'run' && { request_id: requestIds.current.get(key) }) })
-    if (result) { requestIds.current.delete(key); message.success(actionName === 'run' ? '运行请求已接受，请在执行记录查看结果' : '任务已更新') }
+    if (result) { requestIds.current.delete(key); message.success(t(actionName === 'run' ? 'execution.runAccepted' : 'execution.taskUpdated')) }
   }
   const disabled = busy || !available || !!error || loadedSource !== source
-  const deviceLabel = id => `${devices.find(d => d.id === id)?.name || '设备'}（#${id}）`
+  const deviceLabel = id => t('execution.deviceLabel', { name: devices.find(d => d.id === id)?.name || t('execution.device'), id })
+  const scriptVersionLabel = row => t('execution.scriptVersionLabel', { script: row.script_id, version: row.script_version })
   const taskColumns = [
-    { title: '任务', dataIndex: 'name', render: (name, row) => <><strong>{name}</strong><div>脚本 #{row.script_id} / 版本 #{row.script_version}</div></> },
-    ...(!local ? [{ title: '目标设备', dataIndex: 'device_id', render: deviceLabel }] : []),
-    { title: '计划', dataIndex: 'trigger', render: triggerLabel },
-    { title: '状态', dataIndex: 'enabled', render: value => <Tag color={value ? 'green' : 'default'}>{value ? '已启用' : '已暂停'}</Tag> },
-    { title: '下次执行', dataIndex: 'next_fire_at', render: value => value ? formatServerTime(value) : '—' },
-    { title: '操作', key: 'actions', fixed: 'right', width: 230, render: (_, row) => <Space wrap>
-      <Popconfirm title="确认运行一次？" description={`将在${local ? '本机' : deviceLabel(row.device_id)}运行脚本 #${row.script_id} 的固定版本 #${row.script_version}，使用已保存参数。`} onConfirm={() => action(row, 'run')} disabled={disabled || !row.enabled}><Button size="small" disabled={disabled || !row.enabled} title={!row.enabled ? '请先核对设备状态并恢复任务' : undefined}>运行一次</Button></Popconfirm>
-      <Button size="small" disabled={disabled} onClick={() => action(row, row.enabled ? 'pause' : 'resume')}>{row.enabled ? '暂停' : '恢复'}</Button>
-      <Popconfirm title="删除此任务？" description="删除不等于正在运行的进程已停止，请核对执行记录。" onConfirm={() => action(row, 'delete')} disabled={disabled}><Button danger size="small" disabled={disabled}>删除</Button></Popconfirm>
+    { title: t('execution.task'), dataIndex: 'name', render: (name, row) => <><strong>{name}</strong><div>{scriptVersionLabel(row)}</div></> },
+    ...(!local ? [{ title: t('execution.targetDevice'), dataIndex: 'device_id', render: deviceLabel }] : []),
+    { title: t('execution.schedule'), dataIndex: 'trigger', render: value => triggerLabel(value, t) },
+    { title: t('execution.status'), dataIndex: 'enabled', render: value => <Tag color={value ? 'green' : 'default'}>{t(value ? 'execution.enabled' : 'execution.paused')}</Tag> },
+    { title: t('execution.nextRun'), dataIndex: 'next_fire_at', render: value => value ? formatServerTime(value) : '—' },
+    { title: t('execution.actions'), key: 'actions', fixed: 'right', width: 230, render: (_, row) => <Space wrap>
+      <Popconfirm title={t('execution.runOnceConfirm')} description={t('execution.runOnceHint', { device: local ? t('execution.thisComputer') : deviceLabel(row.device_id), script: row.script_id, version: row.script_version })} onConfirm={() => action(row, 'run')} disabled={disabled || !row.enabled}><Button style={buttonStyle} size="small" disabled={disabled || !row.enabled} title={!row.enabled ? t('execution.resumeHint') : undefined}>{t('execution.runOnce')}</Button></Popconfirm>
+      <Button style={buttonStyle} size="small" disabled={disabled} onClick={() => action(row, row.enabled ? 'pause' : 'resume')}>{t(row.enabled ? 'execution.pause' : 'execution.resume')}</Button>
+      <Popconfirm title={t('execution.deleteConfirm')} description={t('execution.deleteHint')} onConfirm={() => action(row, 'delete')} disabled={disabled}><Button style={buttonStyle} danger size="small" disabled={disabled}>{t('execution.delete')}</Button></Popconfirm>
     </Space> },
   ]
   const eventColumns = [
-    { title: '任务', key: 'task', render: (_, row) => row.task_name || `任务 #${row.task_id}` },
-    { title: '状态', key: 'state', render: (_, row) => <State value={row.state || row.status} /> },
-    { title: '计划时间', dataIndex: 'scheduled_for', render: value => value ? formatServerTime(value) : '手动触发' },
-    { title: '说明', dataIndex: 'error_msg', render: value => <span style={{ overflowWrap: 'anywhere' }}>{value || '—'}</span> },
-    { title: '操作', key: 'actions', render: (_, row) => {
+    { title: t('execution.task'), key: 'task', render: (_, row) => row.task_name || t('execution.taskId', { id: row.task_id }) },
+    { title: t('execution.status'), key: 'state', render: (_, row) => <State value={row.state || row.status} /> },
+    { title: t('execution.scheduledFor'), dataIndex: 'scheduled_for', render: value => value ? formatServerTime(value) : t('execution.manualTrigger') },
+    { title: t('execution.explanation'), dataIndex: 'error_msg', render: value => <span style={{ overflowWrap: 'anywhere' }}>{value || '—'}</span> },
+    { title: t('execution.actions'), key: 'actions', render: (_, row) => {
       const runId = local ? row.local_run_id || row.run_id : row.run_id
       const cancellable = activeStates.includes(row.state || row.status) && (!local || runId)
-      return <Space wrap>{runId && <Link to={`/runs/${encodeURIComponent(runId)}`}>执行详情</Link>}{cancellable && <Popconfirm title="请求取消此次执行？" description="结果未知时，必须等待设备确认停止，不会立即释放执行槽。" disabled={disabled} onConfirm={() => mutate(local ? `/local/runs/${runId}/cancel` : `/api/tasks/executions/${row.id}/cancel`, {})}><Button size="small" disabled={disabled || (row.state || row.status) === 'cancel_requested'}>取消执行</Button></Popconfirm>}</Space>
+      return <Space wrap>{runId && <Link to={`/runs/${encodeURIComponent(runId)}`}>{t('execution.runDetails')}</Link>}{cancellable && <Popconfirm title={t('execution.cancelConfirm')} description={t('execution.cancelUnknownHint')} disabled={disabled} onConfirm={() => mutate(local ? `/local/runs/${runId}/cancel` : `/api/tasks/executions/${row.id}/cancel`, {})}><Button style={buttonStyle} size="small" disabled={disabled || (row.state || row.status) === 'cancel_requested'}>{t('execution.cancelRun')}</Button></Popconfirm>}</Space>
     } },
   ]
   const grantColumns = [
-    { title: '申请人', key: 'requester', render: (_, row) => row.requester_name || row.requester_display_name || `用户 #${row.requester_id}` },
-    { title: '设备', dataIndex: 'device_id', render: value => `#${value}` },
-    { title: '脚本版本', key: 'version', render: (_, row) => `脚本 #${row.script_id} / 版本 #${row.script_version}` },
-    { title: '状态', dataIndex: 'status', render: value => <State value={value} /> },
-    ...(local ? [{ title: '本机确认', key: 'decision', render: (_, row) => <Space wrap>{(row.status === 'pending' ? ['accept', 'reject'] : row.status === 'accepted' ? ['revoke'] : ['rejected', 'revoked'].includes(row.status) ? ['accept'] : []).map(decision => <Popconfirm key={decision} title={decision === 'accept' ? '允许该用户以你的电脑权限运行此脚本版本？' : decision === 'revoke' ? '撤销此授权？' : '拒绝申请？'} description={decision === 'accept' ? '对方可提供执行参数。仅授权你信任的用户和脚本；此操作不是沙箱隔离。' : '正在执行的任务需要等待确认停止。'} disabled={disabled} onConfirm={() => mutate(`/local/device-grants/${row.id}/decision`, { decision }, true)}><Button size="small" danger={decision === 'revoke'} disabled={disabled}>{({ accept: row.status === 'pending' ? '允许' : '重新允许', reject: '拒绝', revoke: '撤销' })[decision]}</Button></Popconfirm>)}</Space> }] : []),
+    { title: t('execution.requester'), key: 'requester', render: (_, row) => row.requester_name || row.requester_display_name || t('execution.userId', { id: row.requester_id }) },
+    { title: t('execution.device'), dataIndex: 'device_id', render: value => `#${value}` },
+    { title: t('execution.scriptVersion'), key: 'version', render: (_, row) => scriptVersionLabel(row) },
+    { title: t('execution.status'), dataIndex: 'status', render: value => <State value={value} /> },
+    ...(local ? [{ title: t('execution.localConfirmation'), key: 'decision', render: (_, row) => <Space wrap>{(row.status === 'pending' ? ['accept', 'reject'] : row.status === 'accepted' ? ['revoke'] : ['rejected', 'revoked'].includes(row.status) ? ['accept'] : []).map(decision => <Popconfirm key={decision} title={t(`execution.grantConfirm.${decision}`)} description={t(decision === 'accept' ? 'execution.grantSafety' : 'execution.grantStopHint')} disabled={disabled} onConfirm={() => mutate(`/local/device-grants/${row.id}/decision`, { decision }, true)}><Button style={buttonStyle} size="small" danger={decision === 'revoke'} disabled={disabled}>{t(decision === 'accept' && row.status !== 'pending' ? 'execution.grantAction.reaccept' : `execution.grantAction.${decision}`)}</Button></Popconfirm>)}</Space> }] : []),
   ]
   return <div>
-    <div className="page-heading" style={{ flexWrap: 'wrap', gap: 16 }}><h2>任务调度</h2><Space wrap><Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>{!local && <Button disabled={disabled} onClick={() => setEditor('grant')}>申请设备授权</Button>}<Button type="primary" icon={<PlusOutlined />} disabled={disabled} onClick={() => setEditor('task')}>新建任务</Button></Space></div>
-    <Tabs activeKey={source} onChange={value => { if (!busy) { setSource(value); setEditor(null) } }} items={[{ key: 'remote', label: '远程任务', disabled: busy }, { key: 'local', label: '本机任务', disabled: busy }]} />
+    <div className="page-heading" style={{ flexWrap: 'wrap', gap: 16 }}><h2>{t('execution.scheduling')}</h2><Space wrap><Button style={buttonStyle} icon={<ReloadOutlined />} onClick={load} loading={loading}>{t('execution.refresh')}</Button>{!local && <Button style={buttonStyle} disabled={disabled} onClick={() => setEditor('grant')}>{t('execution.requestGrant')}</Button>}<Button style={buttonStyle} type="primary" icon={<PlusOutlined />} disabled={disabled} onClick={() => setEditor('task')}>{t('execution.newTask')}</Button></Space></div>
+    <Tabs activeKey={source} onChange={value => { if (!busy) { setSource(value); setEditor(null) } }} items={[{ key: 'remote', label: t('execution.remoteTasks'), disabled: busy }, { key: 'local', label: t('execution.localTasks'), disabled: busy }]} />
     {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
-    <Typography.Paragraph type="secondary">{local ? `本机任务保存在此电脑，Agent 退出后不会执行。${device?.id ? ` 本机设备编号：${device.id}，可提供给需要申请授权的用户。` : ' 设备尚未注册，远程授权需要登录并连接服务器。'}` : '先申请设备授权，再由目标电脑使用者在「本机任务 → 设备授权」确认。远程管理员不能替代本机同意。'}</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">{local ? <>{t('execution.localTasksHint')} {device?.id ? t('execution.shareDeviceId', { id: device.id }) : t('execution.deviceUnregistered')}</> : t('execution.remoteTasksHint')}</Typography.Paragraph>
     <Tabs items={[
-      { key: 'tasks', label: '任务列表', children: <Table rowKey="id" loading={loading} columns={taskColumns} dataSource={loadedSource === source ? tasks : []} scroll={{ x: 900 }} locale={{ emptyText: local ? '还没有本机任务。下载脚本后即可新建定时任务。' : '还没有远程任务。申请设备授权后即可新建。' }} /> },
-      { key: 'events', label: '最近执行', children: <><Alert type="info" showIcon title="结果未知不代表失败或停止。核对目标电脑后再处理，避免重复执行。" style={{ marginBottom: 16 }} /><Table rowKey="id" columns={eventColumns} dataSource={loadedSource === source ? events : []} scroll={{ x: 800 }} /></> },
-      { key: 'grants', label: '设备授权', children: <Table rowKey="id" columns={grantColumns} dataSource={loadedSource === source ? grants : []} scroll={{ x: 700 }} /> },
+      { key: 'tasks', label: t('execution.taskList'), children: <Table rowKey="id" loading={loading} columns={taskColumns} dataSource={loadedSource === source ? tasks : []} scroll={{ x: 900 }} locale={{ emptyText: t(local ? 'execution.noLocalTasks' : 'execution.noRemoteTasks') }} /> },
+      { key: 'events', label: t('execution.recentRuns'), children: <><Alert type="info" showIcon title={t('execution.unknownEventHint')} style={{ marginBottom: 16 }} /><Table rowKey="id" columns={eventColumns} dataSource={loadedSource === source ? events : []} scroll={{ x: 800 }} /></> },
+      { key: 'grants', label: t('execution.deviceGrants'), children: <Table rowKey="id" columns={grantColumns} dataSource={loadedSource === source ? grants : []} scroll={{ x: 700 }} /> },
     ]} />
     {editor && <TaskEditor local={local} localApi={localApi} devices={devices} grantOnly={editor === 'grant'} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); load() }} />}
   </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { Table, Button, Tag, Upload, Modal, Input, Form, Space, Select, Tabs, message } from 'antd'
 import { UploadOutlined, PlusOutlined, StopOutlined, CheckOutlined, SearchOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -9,9 +9,14 @@ import { loadScriptCollections } from '../api/offlineData'
 import { formatScriptVersion } from '../utils/scriptVersion'
 import { activeGroupOptions, defaultGroupIds, groupIds } from '../utils/groups'
 
-const renderGroups = groups => groups?.length ? groups.map(group => <Tag key={group.id}>{group.name}</Tag>) : <span style={{ color: '#999' }}>未分组</span>
+import { useI18n } from '../i18n/useI18n'
+import { safeError } from '../utils/safeError'
 
 export default function Scripts() {
+  const { t } = useI18n()
+  const loadT = useRef(t)
+  useEffect(() => { loadT.current = t }, [t])
+  const renderGroups = groups => groups?.length ? groups.map(group => <Tag key={group.id}>{group.name}</Tag>) : <span style={{ color: '#999' }}>{t('workspace.ungrouped')}</span>
   const [myScripts, setMyScripts] = useState([])
   const [marketScripts, setMarketScripts] = useState([])
   const [manageableScripts, setManageableScripts] = useState([])
@@ -40,7 +45,7 @@ export default function Scripts() {
         setMyScripts(mine)
         setMarketScripts(marketplace)
       })
-      .catch(() => message.error(online ? '加载失败' : '本地 Agent 不可用'))
+      .catch(() => message.error(loadT.current(online ? 'workspace.loadFailed' : 'workspace.agentUnavailable')))
       .finally(() => {
         setMyLoading(false)
         setMarketLoading(false)
@@ -49,7 +54,7 @@ export default function Scripts() {
       setManageLoading(true)
       api.get('/api/scripts/manageable')
         .then(response => setManageableScripts(response.data))
-        .catch(() => message.warning('脚本管理列表暂时无法加载'))
+        .catch(() => message.warning(loadT.current('workspace.scripts.manageLoadFailed')))
         .finally(() => setManageLoading(false))
     } else {
       setManageableScripts([])
@@ -64,7 +69,7 @@ export default function Scripts() {
       setGroupsReady(true)
     }).catch(() => {
       setGroupsReady(false)
-      message.error('加载可选分组失败，已禁用脚本发布与分组编辑')
+      message.error(loadT.current('workspace.scripts.groupsLoadFailed'))
     })
   }, [online, canUpload])
 
@@ -83,31 +88,31 @@ export default function Scripts() {
   const onInstall = async (script) => {
     try {
       await api.post(`/api/scripts/${script.id}/install`)
-      message.success('已安装')
+      message.success(t('workspace.scripts.installed'))
       loadCollections()
     } catch (e) {
-      message.error(e.response?.data?.detail || '安装失败')
+      message.error(safeError(e, t('workspace.scripts.installFailed')))
     }
   }
 
   const onUninstall = async (script) => {
     try {
       await api.post(`/api/scripts/${script.id}/uninstall`)
-      message.success('已卸载')
+      message.success(t('workspace.scripts.uninstalled'))
       loadCollections()
     } catch (e) {
-      message.error(e.response?.data?.detail || '卸载失败')
+      message.error(safeError(e, t('workspace.scripts.uninstallFailed')))
     }
   }
 
   const onUpload = async (values) => {
     const { file, changelog, group_ids = [] } = values
     if (!groupsReady) {
-      message.error('可见分组尚未加载')
+      message.error(t('workspace.scripts.groupsNotReady'))
       return
     }
     if (!file || !file[0]) {
-      message.error('请选择文件')
+      message.error(t('workspace.chooseFileRequired'))
       return
     }
     setUploading(true)
@@ -117,12 +122,12 @@ export default function Scripts() {
       formData.append('changelog', changelog || '')
       formData.append('group_ids', JSON.stringify(group_ids))
       await api.post('/api/scripts/upload', formData)
-      message.success('上传成功')
+      message.success(t('workspace.scripts.uploaded'))
       setUploadOpen(false)
       form.resetFields()
       loadCollections()
     } catch (e) {
-      message.error(e.response?.data?.detail || '上传失败')
+      message.error(safeError(e, t('workspace.uploadFailed')))
     } finally {
       setUploading(false)
     }
@@ -136,48 +141,48 @@ export default function Scripts() {
 
   const updateScriptGroups = async ({ group_ids }) => {
     if (!groupsReady) {
-      message.error('可见分组尚未加载')
+      message.error(t('workspace.scripts.groupsNotReady'))
       return
     }
     try {
       await api.put(`/api/scripts/${managingScript.id}/groups`, { group_ids })
-      message.success('可见分组已更新')
+      message.success(t('workspace.scripts.groupsUpdated'))
       setManagingScript(null)
       loadCollections()
-    } catch (e) { message.error(e.response?.data?.detail || '更新分组失败') }
+    } catch (e) { message.error(safeError(e, t('workspace.scripts.groupsUpdateFailed'))) }
   }
 
   const onToggle = async (script) => {
     const action = script.status === 'active' ? 'disable' : 'enable'
     try {
       await api.post(`/api/scripts/${script.id}/${action}`)
-      message.success(action === 'disable' ? '已禁用' : '已启用')
+      message.success(t(action === 'disable' ? 'workspace.scripts.disabled' : 'workspace.scripts.enabled'))
       loadCollections()
     } catch {
-      message.error('操作失败')
+      message.error(t('workspace.actionFailed'))
     }
   }
 
   const myColumns = [
-    { title: '名称', dataIndex: 'name', key: 'name',
+    { title: t('workspace.name'), dataIndex: 'name', key: 'name',
       render: (name, r) => <Button type="link" style={{ padding: 0 }} onClick={() => nav(`/scripts/${r.id}`)}>{name}</Button> },
-    { title: '分类', dataIndex: 'category', key: 'category', width: 120 },
-    { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
-    { title: '可见分组', dataIndex: 'groups', key: 'groups', render: renderGroups },
+    { title: t('workspace.category'), dataIndex: 'category', key: 'category', width: 120 },
+    { title: t('workspace.version'), key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
+    { title: t('workspace.groups'), dataIndex: 'groups', key: 'groups', render: renderGroups },
     {
-      title: '状态', dataIndex: 'status', key: 'status', width: 70,
-      render: (s) => <Tag color={s === 'active' ? 'green' : 'red'}>{s === 'active' ? '启用' : '禁用'}</Tag>
+      title: t('workspace.status'), dataIndex: 'status', key: 'status', width: 70,
+      render: (s) => <Tag color={s === 'active' ? 'green' : 'red'}>{t(s === 'active' ? 'workspace.enable' : 'workspace.disable')}</Tag>
     },
     {
-      title: '操作', key: 'action', width: canUpload ? 240 : 120,
+      title: t('workspace.actions'), key: 'action', width: canUpload ? 240 : 120,
       render: (_, r) => (
         <Space>
-          <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>执行</Button>
-          <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => onUninstall(r)}>卸载</Button>
-          {r.can_manage_groups && <Button type="link" size="small" onClick={() => openGroupManager(r)}>分组</Button>}
+          <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>{t('workspace.execute')}</Button>
+          <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => onUninstall(r)}>{t('workspace.uninstall')}</Button>
+          {r.can_manage_groups && <Button type="link" size="small" onClick={() => openGroupManager(r)}>{t('workspace.group')}</Button>}
           {r.can_manage && (
             <Button type="link" size="small" icon={r.status === 'active' ? <StopOutlined /> : <CheckOutlined />} onClick={() => onToggle(r)}>
-              {r.status === 'active' ? '禁用' : '启用'}
+              {t(r.status === 'active' ? 'workspace.disable' : 'workspace.enable')}
             </Button>
           )}
         </Space>
@@ -186,35 +191,35 @@ export default function Scripts() {
   ]
 
   const managementColumns = [
-    { title: '名称', dataIndex: 'name', key: 'name', render: (name, r) => <Button type="link" style={{ padding: 0 }} onClick={() => nav(`/scripts/${r.id}`)}>{name}</Button> },
-    { title: '分类', dataIndex: 'category', key: 'category', width: 120 },
-    { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
-    { title: '可见分组', dataIndex: 'groups', key: 'groups', render: renderGroups },
-    { title: '状态', dataIndex: 'status', key: 'status', width: 70, render: s => <Tag color={s === 'active' ? 'green' : 'red'}>{s === 'active' ? '启用' : '禁用'}</Tag> },
-    { title: '操作', key: 'action', width: 190, render: (_, r) => <Space>
-      <Button type="link" size="small" onClick={() => nav(`/scripts/${r.id}`)}>详情</Button>
-      {r.can_manage_groups && <Button type="link" size="small" disabled={!groupsReady} onClick={() => openGroupManager(r)}>分组</Button>}
-      {r.can_manage && <Button type="link" size="small" icon={r.status === 'active' ? <StopOutlined /> : <CheckOutlined />} onClick={() => onToggle(r)}>{r.status === 'active' ? '禁用' : '启用'}</Button>}
+    { title: t('workspace.name'), dataIndex: 'name', key: 'name', render: (name, r) => <Button type="link" style={{ padding: 0 }} onClick={() => nav(`/scripts/${r.id}`)}>{name}</Button> },
+    { title: t('workspace.category'), dataIndex: 'category', key: 'category', width: 120 },
+    { title: t('workspace.version'), key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
+    { title: t('workspace.groups'), dataIndex: 'groups', key: 'groups', render: renderGroups },
+    { title: t('workspace.status'), dataIndex: 'status', key: 'status', width: 70, render: s => <Tag color={s === 'active' ? 'green' : 'red'}>{t(s === 'active' ? 'workspace.enable' : 'workspace.disable')}</Tag> },
+    { title: t('workspace.actions'), key: 'action', width: 190, render: (_, r) => <Space>
+      <Button type="link" size="small" onClick={() => nav(`/scripts/${r.id}`)}>{t('workspace.details')}</Button>
+      {r.can_manage_groups && <Button type="link" size="small" disabled={!groupsReady} onClick={() => openGroupManager(r)}>{t('workspace.group')}</Button>}
+      {r.can_manage && <Button type="link" size="small" icon={r.status === 'active' ? <StopOutlined /> : <CheckOutlined />} onClick={() => onToggle(r)}>{t(r.status === 'active' ? 'workspace.disable' : 'workspace.enable')}</Button>}
     </Space> },
   ]
 
   const marketColumns = [
-    { title: '名称', dataIndex: 'name', key: 'name',
+    { title: t('workspace.name'), dataIndex: 'name', key: 'name',
       render: (name, r) => <Button type="link" style={{ padding: 0 }} onClick={() => nav(`/scripts/${r.id}`)}>{name}</Button> },
-    { title: '描述', dataIndex: 'description', key: 'desc', ellipsis: true },
-    { title: '分类', dataIndex: 'category', key: 'category', width: 120 },
-    { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
-    { title: '可见分组', dataIndex: 'groups', key: 'groups', render: renderGroups },
+    { title: t('workspace.description'), dataIndex: 'description', key: 'desc', ellipsis: true },
+    { title: t('workspace.category'), dataIndex: 'category', key: 'category', width: 120 },
+    { title: t('workspace.version'), key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
+    { title: t('workspace.groups'), dataIndex: 'groups', key: 'groups', render: renderGroups },
     {
-      title: '操作', key: 'action', width: 170,
+      title: t('workspace.actions'), key: 'action', width: 170,
       render: (_, r) => (
         <Space>
           {r.installed ? (
-            <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>查看</Button>
+            <Button type="link" onClick={() => nav(`/scripts/${r.id}`)}>{t('workspace.view')}</Button>
           ) : (
-            <Button type="primary" size="small" icon={<DownloadOutlined />} onClick={() => onInstall(r)}>安装</Button>
+            <Button type="primary" size="small" icon={<DownloadOutlined />} onClick={() => onInstall(r)}>{t('workspace.install')}</Button>
           )}
-          {r.can_manage_groups && <Button type="link" size="small" disabled={!groupsReady} onClick={() => openGroupManager(r)}>分组</Button>}
+          {r.can_manage_groups && <Button type="link" size="small" disabled={!groupsReady} onClick={() => openGroupManager(r)}>{t('workspace.group')}</Button>}
         </Space>
       )
     },
@@ -223,23 +228,23 @@ export default function Scripts() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>脚本</h2>
+        <h2 style={{ margin: 0 }}>{t('workspace.scripts.title')}</h2>
         {canUpload && (
-          <Button type="primary" icon={<PlusOutlined />} disabled={!groupsReady} onClick={() => { form.setFieldsValue({ group_ids: defaultGroupIds(groups) }); setUploadOpen(true) }}>上传脚本</Button>
+          <Button type="primary" icon={<PlusOutlined />} disabled={!groupsReady} onClick={() => { form.setFieldsValue({ group_ids: defaultGroupIds(groups) }); setUploadOpen(true) }}>{t('workspace.scripts.upload')}</Button>
         )}
       </div>
 
       <Space style={{ marginBottom: 16 }}>
-        <Input placeholder="搜索脚本名称" prefix={<SearchOutlined />}
+        <Input placeholder={t('workspace.scripts.search')} prefix={<SearchOutlined />}
           value={search} onChange={e => setSearch(e.target.value)} style={{ width: 240 }} allowClear />
-        <Select placeholder="全部分类" value={category} onChange={setCategory}
+        <Select placeholder={t('workspace.scripts.allCategories')} value={category} onChange={setCategory}
           options={categories} style={{ width: 160 }} allowClear />
       </Space>
 
       <Tabs items={[
         {
           key: 'mine',
-          label: `我的脚本 (${filterList(myScripts).length})`,
+          label: t('workspace.scripts.mine', { count: filterList(myScripts).length }),
           children: (
             <Table dataSource={filterList(myScripts)} columns={myColumns} rowKey="id"
               loading={myLoading} size="small" pagination={{ pageSize: 20 }} />
@@ -247,7 +252,7 @@ export default function Scripts() {
         },
         ...(online ? [{
           key: 'market',
-          label: `脚本市场`,
+          label: t('workspace.scripts.market'),
           children: (
             <Table dataSource={filterList(marketScripts)} columns={marketColumns} rowKey="id"
               loading={marketLoading} size="small" pagination={{ pageSize: 20 }}
@@ -256,7 +261,7 @@ export default function Scripts() {
         }] : []),
         ...(canUpload ? [{
           key: 'manage',
-          label: `脚本管理 (${filterList(manageableScripts).length})`,
+          label: t('workspace.scripts.manage', { count: filterList(manageableScripts).length }),
           children: (
             <Table dataSource={filterList(manageableScripts)} columns={managementColumns} rowKey="id"
               loading={manageLoading} size="small" pagination={{ pageSize: 20 }} />
@@ -264,28 +269,28 @@ export default function Scripts() {
         }] : []),
       ]} />
 
-      <Modal title="上传脚本" open={uploadOpen} onCancel={() => setUploadOpen(false)}
-        confirmLoading={uploading} onOk={() => form.submit()} okText="上传">
+      <Modal title={t('workspace.scripts.upload')} open={uploadOpen} onCancel={() => setUploadOpen(false)}
+        confirmLoading={uploading} onOk={() => form.submit()} okText={t('workspace.upload')}>
         <Form form={form} layout="vertical" onFinish={onUpload}>
-          <Form.Item name="file" label="脚本文件 (.py 或 .zip)" rules={[{ required: true }]}
+          <Form.Item name="file" label={t('workspace.scriptFile')} rules={[{ required: true }]}
             valuePropName="fileList" getValueFromEvent={(e) => Array.isArray(e) ? e : e?.fileList}>
             <Upload beforeUpload={() => false} maxCount={1} accept=".py,.zip">
-              <Button icon={<UploadOutlined />}>选择文件</Button>
+              <Button icon={<UploadOutlined />}>{t('workspace.chooseFile')}</Button>
             </Upload>
           </Form.Item>
-          <Form.Item name="group_ids" label="可见分组" tooltip="用户至少与脚本共享一个分组时才能看到该脚本" rules={[{ required: true, type: 'array', min: 1, message: '请至少选择一个可见分组' }]}>
-            <Select mode="multiple" allowClear placeholder="请选择可见分组" options={activeGroupOptions(groups)} />
+          <Form.Item name="group_ids" label={t('workspace.groups')} tooltip={t('workspace.scripts.groupsTooltip')} rules={[{ required: true, type: 'array', min: 1, message: t('workspace.scripts.groupsRequired') }]}>
+            <Select mode="multiple" allowClear placeholder={t('workspace.scripts.chooseVisibleGroups')} options={activeGroupOptions(groups)} />
           </Form.Item>
-          <Form.Item name="changelog" label="版本说明">
-            <Input.TextArea rows={3} placeholder="本次上传的变更说明" />
+          <Form.Item name="changelog" label={t('workspace.changelog')}>
+            <Input.TextArea rows={3} placeholder={t('workspace.scripts.changelogPlaceholder')} />
           </Form.Item>
         </Form>
       </Modal>
 
-      <Modal title={`调整可见分组：${managingScript?.name || ''}`} open={Boolean(managingScript)} onCancel={() => setManagingScript(null)} onOk={() => groupsForm.submit()}>
+      <Modal title={t('workspace.scripts.adjustGroups', { name: managingScript?.name || '' })} open={Boolean(managingScript)} onCancel={() => setManagingScript(null)} onOk={() => groupsForm.submit()}>
         <Form form={groupsForm} layout="vertical" onFinish={updateScriptGroups}>
-          <Form.Item name="group_ids" label="可见分组" extra="只有所选分组中的用户可在脚本市场看到该脚本。" rules={[{ required: true, type: 'array', min: 1, message: '请至少选择一个可见分组' }]}>
-            <Select mode="multiple" allowClear options={activeGroupOptions(groups)} placeholder="请选择分组" />
+          <Form.Item name="group_ids" label={t('workspace.groups')} extra={t('workspace.scripts.groupsHelp')} rules={[{ required: true, type: 'array', min: 1, message: t('workspace.scripts.groupsRequired') }]}>
+            <Select mode="multiple" allowClear options={activeGroupOptions(groups)} placeholder={t('workspace.scripts.chooseGroups')} />
           </Form.Item>
         </Form>
       </Modal>

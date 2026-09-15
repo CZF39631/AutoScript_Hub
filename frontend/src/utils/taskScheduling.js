@@ -1,42 +1,57 @@
+import execution from '../i18n/locales/execution.js'
+
+// Default Chinese keeps standalone callers compatible; React callers pass t at render time.
+const defaultTranslate = (key, values = {}) => (execution.zh[key] || key).replace(/\{\{(\w+)\}\}/g, (_, name) => String(values[name] ?? ''))
+
 export const taskStates = {
-  queued: ['等待领取', 'blue'], claimed: ['准备中', 'processing'], running: ['执行中', 'orange'],
-  cancel_requested: ['正在取消', 'orange'], unknown: ['结果未知', 'warning'],
-  success: ['成功', 'green'], failed: ['失败', 'red'], cancelled: ['已取消', 'default'], skipped: ['已跳过', 'default'],
-  pending: ['等待确认', 'blue'], accepted: ['已授权', 'green'], rejected: ['已拒绝', 'default'], revoked: ['已撤销', 'default'],
+  queued: ['execution.runState.queued', 'blue'], claimed: ['execution.runState.claimed', 'processing'], running: ['execution.runState.running', 'orange'],
+  cancel_requested: ['execution.runState.cancel_requested', 'orange'], unknown: ['execution.runState.unknown', 'warning'],
+  success: ['execution.runState.success', 'green'], failed: ['execution.runState.failed', 'red'], cancelled: ['execution.runState.cancelled', 'default'], skipped: ['execution.runState.skipped', 'default'],
+  pending: ['execution.grantState.pending', 'blue'], accepted: ['execution.grantState.accepted', 'green'], rejected: ['execution.grantState.rejected', 'default'], revoked: ['execution.grantState.revoked', 'default'],
 }
 
-export { safeError as taskError } from './safeError.js'
+export function taskError(error, t = defaultTranslate) {
+  const detail = error?.response?.data?.detail ?? error?.response?.data?.error
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) return detail.map(item => typeof item?.msg === 'string' ? item.msg : t('execution.invalidInput')).join(t('execution.errorSeparator')) || t('execution.operationFailed')
+  if (typeof detail?.message === 'string') return detail.message
+  if (error?.translationKey) return t(error.translationKey)
+  return typeof error?.message === 'string' ? error.message : t('execution.operationFailed')
+}
 
-export function makeTrigger(values) {
+export function makeTrigger(values, t = defaultTranslate) {
+  const invalid = key => { const error = new Error(t(key)); error.translationKey = key; throw error }
   const timezone = values.timezone?.trim()
-  try { new Intl.DateTimeFormat('zh-CN', { timeZone: timezone }).format() } catch { throw new Error('请输入有效的 IANA 时区，例如 Asia/Shanghai') }
-  if (!timezone) throw new Error('请填写时区')
+  if (!timezone) invalid('execution.requiredTimezone')
+  try { new Intl.DateTimeFormat('zh-CN', { timeZone: timezone }).format() } catch { invalid('execution.invalidTimezone') }
   const result = { kind: values.kind, timezone, misfire: values.misfire, grace_seconds: values.grace_seconds }
   if (values.kind === 'once') {
-    if (!/(Z|[+-]\d{2}:\d{2})$/i.test(values.start_at || '') || !Number.isFinite(Date.parse(values.start_at))) throw new Error('单次时间须包含时区，例如 2026-09-14T09:00:00+08:00')
+    if (!/(Z|[+-]\d{2}:\d{2})$/i.test(values.start_at || '') || !Number.isFinite(Date.parse(values.start_at))) invalid('execution.invalidOnceTime')
     result.start_at = values.start_at
   }
   if (['daily', 'weekly'].includes(values.kind)) {
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(values.time || '')) throw new Error('请填写有效的小时和分钟')
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(values.time || '')) invalid('execution.invalidTime')
     result.time = values.time
   }
   if (values.kind === 'weekly') {
-    if (!Array.isArray(values.weekdays) || !values.weekdays.length) throw new Error('请至少选择一天')
+    if (!Array.isArray(values.weekdays) || !values.weekdays.length) invalid('execution.requiredWeekday')
     result.weekdays = values.weekdays
   }
   return result
 }
 
-export function triggerLabel(trigger) {
+export function triggerLabel(trigger, translate = defaultTranslate) {
   try {
-    const t = typeof trigger === 'string' ? JSON.parse(trigger) : trigger
-    if (!t) return '—'
-    const zone = t.timezone || 'UTC'
-    if (t.kind === 'manual') return '仅手动'
-    if (t.kind === 'once') return `单次 ${t.start_at}`
-    const days = ['一', '二', '三', '四', '五', '六', '日']
-    return `${t.kind === 'weekly' ? `每周${(t.weekdays || []).map(d => days[d]).join('、')}` : '每天'} ${t.time} (${zone})`
-  } catch { return '规则不可用' }
+    const rule = typeof trigger === 'string' ? JSON.parse(trigger) : trigger
+    if (!rule) return '—'
+    const zone = rule.timezone || 'UTC'
+    if (rule.kind === 'manual') return translate('execution.trigger.manual')
+    if (rule.kind === 'once') return translate('execution.onceLabel', { time: rule.start_at })
+    const schedule = rule.kind === 'weekly'
+      ? translate('execution.weeklyLabel', { days: (rule.weekdays || []).map(day => translate(`execution.day.${day}`)).join(translate('execution.daySeparator')) })
+      : translate('execution.trigger.daily')
+    return translate('execution.recurringLabel', { schedule, time: rule.time, zone })
+  } catch { return translate('execution.invalidRule') }
 }
 
 export function newRequestId() {

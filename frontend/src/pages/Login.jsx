@@ -3,8 +3,12 @@ import { Alert, Form, Input, Button, Card, Checkbox, message } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useI18n } from '../i18n/useI18n'
+import { describeLoginError, renderLoginError } from '../i18n/loginError'
+import LanguageSelect from '../components/LanguageSelect'
 
 export default function Login() {
+  const { t } = useI18n()
   const { login } = useAuth()
   const nav = useNavigate()
   const [form] = Form.useForm()
@@ -48,20 +52,15 @@ export default function Login() {
         try {
           await api.saveCredentials(values.username, values.password, values.remember)
         } catch {
-          message.warning('登录成功，但未能保存账号密码')
+          message.warning(t('shell.credentialsNotSaved'))
         }
       }
-      message.success('登录成功')
+      message.success(t('shell.loggedIn'))
       nav('/scripts')
     } catch (e) {
-      const detail = e.response?.data?.detail
-      const text = typeof detail === 'string'
-        ? detail
-        : e.response
-          ? `登录失败（HTTP ${e.response.status}）`
-          : '无法连接服务端，请检查服务是否已经启动'
-      setError(text)
-      message.error(text)
+      const described = describeLoginError(e)
+      setError(described)
+      message.error(renderLoginError(described, t))
     } finally {
       setSubmitting(false)
     }
@@ -70,35 +69,36 @@ export default function Login() {
   return (
     <div className="login-page">
       <Card className="login-card" bordered={false}>
+        <div className="login-language"><LanguageSelect /></div>
         <div className="login-brand">
           <img className="login-brand__icon" src="/app-icon.png" alt="AutoScript Hub" />
           <h1>AutoScript Hub</h1>
-          <p>安全、清晰地管理自动化脚本</p>
+          <p>{t('shell.tagline')}</p>
         </div>
         <Form form={form} layout="vertical" onFinish={onFinish} onValuesChange={() => setError('')}>
           {error && (
             <Alert
               type="error"
               showIcon
-              message={error}
+              message={renderLoginError(error, t)}
               style={{ marginBottom: 16 }}
               role="alert"
             />
           )}
-          <Form.Item name="username" label="账号" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined />} placeholder="用户名" autoComplete="username" />
+          <Form.Item name="username" label={t('shell.account')} rules={[{ required: true, message: t('shell.enterUsername') }]}>
+            <Input prefix={<UserOutlined />} placeholder={t('shell.username')} autoComplete="username" />
           </Form.Item>
-          <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" autoComplete="current-password" />
+          <Form.Item name="password" label={t('shell.password')} rules={[{ required: true, message: t('shell.enterPassword') }]}>
+            <Input.Password prefix={<LockOutlined />} placeholder={t('shell.password')} autoComplete="current-password" />
           </Form.Item>
           {desktopCredentials && (
             <Form.Item name="remember" valuePropName="checked" initialValue={false}>
-              <Checkbox>记住账号密码</Checkbox>
+              <Checkbox>{t('shell.rememberCredentials')}</Checkbox>
             </Form.Item>
           )}
           <Form.Item>
             <Button type="primary" htmlType="submit" loading={submitting} block>
-              {submitting ? '正在登录…' : '登录'}
+              {t(submitting ? 'shell.loggingIn' : 'shell.login')}
             </Button>
           </Form.Item>
         </Form>

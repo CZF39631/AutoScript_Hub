@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { Spin } from 'antd'
 import api from '../api/client'
 import { loadRunLog } from '../api/offlineData'
+import { useI18n } from '../i18n/useI18n'
 
 export default function LogViewer({ runId, status, onComplete, localOnly = false, localApi = null }) {
+  const { t } = useI18n()
   const [log, setLog] = useState('')
   const [loading, setLoading] = useState(true)
   const [streaming, setStreaming] = useState(false)
@@ -84,11 +86,11 @@ export default function LogViewer({ runId, status, onComplete, localOnly = false
   return (
     <div className="log-viewer">
       <h3 className="log-viewer__header">
-        执行日志
-        {streaming && <span className="log-viewer__status">● 实时推送中</span>}
+        {t('shell.executionLog')}
+        {streaming && <span className="log-viewer__status">{t('shell.streaming')}</span>}
       </h3>
       <pre ref={preRef} className="log-viewer__terminal">
-        {log || '(暂无日志)'}
+        {log || t('shell.noLogs')}
       </pre>
     </div>
   )

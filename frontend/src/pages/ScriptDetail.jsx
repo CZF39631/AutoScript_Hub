@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Descriptions, Collapse, Tag, Spin, Button, Upload, Modal, Input, Form, Select, message } from 'antd'
 import { UploadOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -7,6 +7,9 @@ import api from '../api/client'
 import ParamForm from '../components/ParamForm'
 import { formatScriptVersion } from '../utils/scriptVersion'
 import { parseScriptConfig, shouldFallbackToLocal } from '../utils/groups'
+
+import { useI18n } from '../i18n/useI18n'
+import { safeError } from '../utils/safeError'
 
 const PARAMS_STORAGE_KEY = 'autoscript_saved_params'
 
@@ -26,6 +29,10 @@ function saveParams(scriptId, params) {
 }
 
 export default function ScriptDetail() {
+  const { t } = useI18n()
+  // Language changes must not reload the script and discard unsaved parameter edits.
+  const loadT = useRef(t)
+  useEffect(() => { loadT.current = t }, [t])
   const { id } = useParams()
   const nav = useNavigate()
   const { online, localApi } = useConnection()
@@ -65,13 +72,13 @@ export default function ScriptDetail() {
           updated_at: null,
           config_json: configJson,
         })
-        setVersions([{ version: local.latest_version, semantic_version: local.config?.version, changelog: '(本地缓存版本,离线可用)' }])
+        setVersions([{ version: local.latest_version, semantic_version: local.config?.version, changelog: '', localCached: true }])
         setEnvironments([])
         setOfflineMode(true)
       } else {
-        message.error('本地未缓存该脚本,无法离线使用')
+        message.error(loadT.current('workspace.detail.notCached'))
       }
-    }).catch(() => message.error('本地 Agent 不可用')).finally(() => setLoading(false))
+    }).catch(() => message.error(loadT.current('workspace.agentUnavailable'))).finally(() => setLoading(false))
   }, [id, localApi])
 
   const loadScript = useCallback(() => {
@@ -91,7 +98,7 @@ export default function ScriptDetail() {
       if (versionResult.status === 'fulfilled') setVersions(versionResult.value.data)
       else {
         setVersions([])
-        message.warning('版本记录暂时无法加载')
+        message.warning(loadT.current('workspace.detail.versionsLoadFailed'))
       }
       if (environmentResult.status === 'fulfilled') {
         const items = environmentResult.value.data
@@ -100,15 +107,15 @@ export default function ScriptDetail() {
         if (defEnv) setSelectedEnvId(defEnv.id)
       } else {
         setEnvironments([])
-        message.warning('执行环境暂时无法加载')
+        message.warning(loadT.current('workspace.detail.environmentsLoadFailed'))
       }
     }).catch(error => {
       if (shouldFallbackToLocal(error)) return loadFromLocal()
       const status = error.response?.status
-      if (status === 401) message.error('登录状态已失效')
-      else if (status === 403) message.error('无权访问该脚本')
-      else if (status === 404) message.error('脚本不存在或已无访问权限')
-      else message.error(error.response?.data?.detail || '加载脚本失败')
+      if (status === 401) message.error(loadT.current('workspace.detail.sessionExpired'))
+      else if (status === 403) message.error(loadT.current('workspace.detail.forbidden'))
+      else if (status === 404) message.error(loadT.current('workspace.detail.notAccessible'))
+      else message.error(safeError(error, loadT.current('workspace.detail.loadFailed')))
       setScript(null)
     }).finally(() => setLoading(false))
 
@@ -120,17 +127,17 @@ export default function ScriptDetail() {
 
   const onSavePreset = async (name, values) => {
     await api.post(`/api/scripts/${id}/presets`, { name, values })
-    message.success('预设已保存')
+    message.success(t('workspace.detail.presetSaved'))
     loadPresets()
   }
 
   const onDeletePreset = async (presetId) => {
     try {
       await api.delete(`/api/presets/${presetId}`)
-      message.success('预设已删除')
+      message.success(t('workspace.detail.presetDeleted'))
       loadPresets()
     } catch (e) {
-      message.error(e.response?.data?.detail || '删除失败')
+      message.error(safeError(e, t('workspace.deleteFailed')))
     }
   }
 
@@ -141,7 +148,7 @@ export default function ScriptDetail() {
       try {
         const config = JSON.parse(script.config_json)
         const devPresets = (config.presets || []).map(p => ({
-          name: p.name || 'Preset',
+          name: p.name || '',
           values: p.values || {},
         }))
         setPresets({ developer: devPresets, personal: [] })
@@ -159,10 +166,10 @@ export default function ScriptDetail() {
           script_id: parseInt(id),
           params,
         })
-        message.success('已离线提交执行,结果将在恢复连接后同步')
+        message.success(t('workspace.detail.offlineSubmitted'))
         nav('/runs')
       } catch (e) {
-        message.error(e.response?.data?.detail || e.message || '离线执行失败')
+        message.error(safeError(e, t('workspace.detail.offlineFailed')))
       }
       return
     }
@@ -172,23 +179,23 @@ export default function ScriptDetail() {
         params,
         environment_id: selectedEnvId || undefined,
       })
-      message.success('已提交执行')
+      message.success(t('workspace.detail.submitted'))
       nav('/runs')
     } catch (e) {
-      message.error(e.response?.data?.detail || '执行失败')
+      message.error(safeError(e, t('workspace.detail.executeFailed')))
     }
   }
 
   const onSaveParams = (params) => {
     saveParams(id, params)
     setSavedParams(params)
-    message.success('参数已保存')
+    message.success(t('workspace.detail.paramsSaved'))
   }
 
   const onUploadVersion = async (values) => {
     const { file, changelog } = values
     if (!file || !file[0]) {
-      message.error('请选择文件')
+      message.error(t('workspace.chooseFileRequired'))
       return
     }
     setUploading(true)
@@ -197,19 +204,19 @@ export default function ScriptDetail() {
       formData.append('file', file[0].originFileObj)
       formData.append('changelog', changelog || '')
       await api.post(`/api/scripts/${id}/upload-version`, formData)
-      message.success('新版本上传成功')
+      message.success(t('workspace.detail.versionUploaded'))
       setVerModalOpen(false)
       verForm.resetFields()
       loadScript()
     } catch (e) {
-      message.error(e.response?.data?.detail || '上传失败')
+      message.error(safeError(e, t('workspace.uploadFailed')))
     } finally {
       setUploading(false)
     }
   }
 
   if (loading) return <Spin />
-  if (!script) return <div>脚本不存在</div>
+  if (!script) return <div>{t('workspace.detail.notFound')}</div>
 
   const config = parseScriptConfig(script.config_json)
   const paramDefs = config.params || []
@@ -219,17 +226,17 @@ export default function ScriptDetail() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2 style={{ margin: 0 }}>{script.name}</h2>
         {canUpload && (
-          <Button icon={<PlusOutlined />} onClick={() => setVerModalOpen(true)}>上传新版本</Button>
+          <Button icon={<PlusOutlined />} onClick={() => setVerModalOpen(true)}>{t('workspace.detail.uploadVersion')}</Button>
         )}
       </div>
 
       <Descriptions bordered size="small" column={1} style={{ marginBottom: 16 }}>
-        <Descriptions.Item label="描述">{script.description}</Descriptions.Item>
-        <Descriptions.Item label="分类">{script.category}</Descriptions.Item>
-        <Descriptions.Item label="可见分组">{script.groups?.length ? script.groups.map(group => <Tag key={group.id}>{group.name}</Tag>) : <span style={{ color: '#999' }}>未分组</span>}</Descriptions.Item>
-        <Descriptions.Item label="版本">{formatScriptVersion(script.latest_semantic_version, script.latest_version)}</Descriptions.Item>
-        <Descriptions.Item label="状态">
-          <Tag color={script.status === 'active' ? 'green' : 'red'}>{script.status}</Tag>
+        <Descriptions.Item label={t('workspace.description')}>{script.description}</Descriptions.Item>
+        <Descriptions.Item label={t('workspace.category')}>{script.category}</Descriptions.Item>
+        <Descriptions.Item label={t('workspace.groups')}>{script.groups?.length ? script.groups.map(group => <Tag key={group.id}>{group.name}</Tag>) : <span style={{ color: '#999' }}>{t('workspace.ungrouped')}</span>}</Descriptions.Item>
+        <Descriptions.Item label={t('workspace.version')}>{formatScriptVersion(script.latest_semantic_version, script.latest_version)}</Descriptions.Item>
+        <Descriptions.Item label={t('workspace.status')}>
+          <Tag color={script.status === 'active' ? 'green' : 'red'}>{t(`workspace.scriptState.${script.status}`, { defaultValue: script.status })}</Tag>
         </Descriptions.Item>
       </Descriptions>
 
@@ -237,21 +244,21 @@ export default function ScriptDetail() {
         <div style={{ marginBottom: 16 }}>
           {environments.length > 0 && (
             <div style={{ marginBottom: 12 }}>
-              <span style={{ marginRight: 8 }}>执行环境：</span>
+              <span style={{ marginRight: 8 }}>{t('workspace.detail.environment')}</span>
               <Select
                 style={{ width: 300 }}
-                placeholder="不使用环境（默认）"
+                placeholder={t('workspace.detail.noEnvironment')}
                 allowClear
                 value={selectedEnvId}
                 onChange={setSelectedEnvId}
                 options={environments.map(e => ({
-                  label: `${e.name}${e.is_default ? ' (默认)' : ''}`,
+                  label: e.is_default ? t('workspace.detail.defaultEnvironment', { name: e.name }) : e.name,
                   value: e.id,
                 }))}
               />
             </div>
           )}
-          <h3 style={{ marginBottom: 8 }}>参数配置</h3>
+          <h3 style={{ marginBottom: 8 }}>{t('workspace.detail.params')}</h3>
           <ParamForm
             params={paramDefs}
             initialValues={savedParams}
@@ -266,21 +273,21 @@ export default function ScriptDetail() {
 
       <Collapse items={versions.map(v => ({
         key: v.version,
-        label: `${formatScriptVersion(v.semantic_version, v.version)} - ${(v.changelog || '').substring(0, 50)}`,
-        children: <p>{v.changelog}</p>,
+        label: `${formatScriptVersion(v.semantic_version, v.version)} - ${(v.localCached ? t('workspace.detail.cachedVersion') : (v.changelog || '')).substring(0, 50)}`,
+        children: <p>{v.localCached ? t('workspace.detail.cachedVersion') : v.changelog}</p>,
       }))} />
 
-      <Modal title="上传新版本" open={verModalOpen} onCancel={() => setVerModalOpen(false)}
-        confirmLoading={uploading} onOk={() => verForm.submit()} okText="上传">
+      <Modal title={t('workspace.detail.uploadVersion')} open={verModalOpen} onCancel={() => setVerModalOpen(false)}
+        confirmLoading={uploading} onOk={() => verForm.submit()} okText={t('workspace.upload')}>
         <Form form={verForm} layout="vertical" onFinish={onUploadVersion}>
-          <Form.Item name="file" label="脚本文件 (.py 或 .zip)" rules={[{ required: true }]}
+          <Form.Item name="file" label={t('workspace.scriptFile')} rules={[{ required: true }]}
             valuePropName="fileList" getValueFromEvent={(e) => Array.isArray(e) ? e : e?.fileList}>
             <Upload beforeUpload={() => false} maxCount={1} accept=".py,.zip">
-              <Button icon={<UploadOutlined />}>选择文件</Button>
+              <Button icon={<UploadOutlined />}>{t('workspace.chooseFile')}</Button>
             </Upload>
           </Form.Item>
-          <Form.Item name="changelog" label="版本说明">
-            <Input.TextArea rows={3} placeholder="本次更新内容" />
+          <Form.Item name="changelog" label={t('workspace.changelog')}>
+            <Input.TextArea rows={3} placeholder={t('workspace.detail.changelogPlaceholder')} />
           </Form.Item>
         </Form>
       </Modal>

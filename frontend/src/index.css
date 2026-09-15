@@ -39,7 +39,12 @@ button, input, select, textarea { font: inherit; }
 .app-brand > span:last-child { display: flex; align-items: baseline; gap: 4px; }
 .app-brand strong { font-size: 17px; }
 .app-brand small { color: var(--apple-secondary); font-size: 13px; }
-.app-menu { flex: 1; padding-top: 8px; background: transparent !important; border-inline-end: 0 !important; }
+.app-menu { flex: 1; min-height: 0; overflow-y: auto; padding-top: 8px; background: transparent !important; border-inline-end: 0 !important; }
+.app-brand, .app-language, .agent-status, .app-account { flex-shrink: 0; }
+.app-language { margin: 12px 12px 8px; }
+.language-select { width: 100%; min-width: 0; }
+.login-language { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+.login-language .language-select { width: 148px; }
 .app-menu .ant-menu-item { color: #48484a; font-weight: 500; }
 .app-menu .ant-menu-item .anticon { font-size: 17px; }
 .app-menu .ant-menu-item-selected { color: #006ee6 !important; background: rgba(0, 122, 255, 0.11) !important; }
@@ -101,6 +106,9 @@ button, input, select, textarea { font: inherit; }
 .ant-card .ant-card-head-title { font-weight: 650; letter-spacing: -.015em; }
 .ant-table-wrapper { border-radius: 16px; overflow: hidden; border: 1px solid rgba(0,0,0,.065); background: rgba(255,255,255,.8); box-shadow: 0 8px 28px rgba(0,0,0,.045); }
 .ant-table, .ant-table-container { background: transparent !important; }
+.ant-table-tbody .ant-table-cell-fix { background-color: var(--apple-surface); }
+.ant-table-thead .ant-table-cell-fix { background-color: #f5f5f7 !important; }
+.ant-table-tbody > tr:hover > .ant-table-cell-fix { background-color: #edf5ff !important; }
 .ant-table-thead > tr > th { font-size: 12px; font-weight: 600 !important; text-transform: none; border-bottom-color: rgba(0,0,0,.06) !important; }
 .ant-table-tbody > tr > td { border-bottom-color: rgba(0,0,0,.05) !important; }
 .ant-table-tbody > tr:hover > td { background: rgba(0,122,255,.045) !important; }

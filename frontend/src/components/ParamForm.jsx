@@ -1,6 +1,8 @@
 import React from 'react'
 import { Form, Input, InputNumber, Select, Switch, Button, Space, Modal, message } from 'antd'
 import { FolderOpenOutlined, FileOutlined } from '@ant-design/icons'
+import { useI18n } from '../i18n/useI18n'
+import { safeError } from '../utils/safeError'
 
 async function nativeOpenFile() {
   if (window.pywebview && window.pywebview.api) {
@@ -17,12 +19,13 @@ async function nativeOpenFolder() {
 }
 
 function FilePicker({ type, value, onChange, placeholder }) {
+  const { t } = useI18n()
   const pick = async () => {
     const path = type === 'file' ? await nativeOpenFile() : await nativeOpenFolder()
     if (path) {
       onChange(path)
     } else {
-      message.info('请在输入框中手动填写路径')
+      message.info(t('workspace.params.manualPath'))
     }
   }
 
@@ -30,16 +33,16 @@ function FilePicker({ type, value, onChange, placeholder }) {
     <Space.Compact style={{ width: '100%' }}>
       <Input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
       <Button icon={type === 'file' ? <FileOutlined /> : <FolderOpenOutlined />} onClick={pick}>
-        {type === 'file' ? '选择文件' : '选择目录'}
+        {t(type === 'file' ? 'workspace.chooseFile' : 'workspace.params.chooseFolder')}
       </Button>
     </Space.Compact>
   )
 }
 
-function buildRules(p) {
+function buildRules(p, t) {
   const rules = []
   if (p.required) {
-    rules.push({ required: true, message: `请填写${p.label || p.key}` })
+    rules.push({ required: true, message: t('workspace.params.required', { name: p.label || p.key }) })
   }
 
   if (p.type === 'number') {
@@ -47,8 +50,8 @@ function buildRules(p) {
       rules.push({
         validator: (_, value) => {
           if (value == null) return Promise.resolve()
-          if (p.min != null && value < p.min) return Promise.reject(new Error(`值不能小于${p.min}`))
-          if (p.max != null && value > p.max) return Promise.reject(new Error(`值不能大于${p.max}`))
+          if (p.min != null && value < p.min) return Promise.reject(new Error(t('workspace.params.min', { min: p.min })))
+          if (p.max != null && value > p.max) return Promise.reject(new Error(t('workspace.params.max', { max: p.max })))
           return Promise.resolve()
         },
       })
@@ -61,7 +64,7 @@ function buildRules(p) {
       rules.push({
         validator: (_, value) => {
           if (!value) return Promise.resolve()
-          if (!opts.includes(value)) return Promise.reject(new Error('无效选项'))
+          if (!opts.includes(value)) return Promise.reject(new Error(t('workspace.params.invalidOption')))
           return Promise.resolve()
         },
       })
@@ -84,6 +87,7 @@ function buildRules(p) {
  *   - onDeletePreset(presetId): remove a personal preset by id
  */
 export default function ParamForm({ params, initialValues, presets, onSubmit, onSave, onSavePreset, onDeletePreset }) {
+  const { t } = useI18n()
   const [form] = Form.useForm()
   const [remember, setRemember] = React.useState(true)
   const [selectedPresetKey, setSelectedPresetKey] = React.useState(null)
@@ -95,11 +99,11 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
 
   const presetOptions = [
     ...developerPresets.map((p, i) => ({
-      label: `[开发者] ${p.name}`,
+      label: t('workspace.params.developerPreset', { name: p.name || t('workspace.params.unnamedPreset') }),
       value: `dev:${i}`,
     })),
     ...personalPresets.map(p => ({
-      label: `[个人] ${p.name}`,
+      label: t('workspace.params.personalPreset', { name: p.name || t('workspace.params.unnamedPreset') }),
       value: `per:${p.id}`,
     })),
   ]
@@ -121,13 +125,13 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
     const preset = findPreset(selectedPresetKey)
     if (preset && preset.values) {
       form.setFieldsValue(preset.values)
-      message.success(`已应用预设: ${preset.name}`)
+      message.success(t('workspace.params.applied', { name: preset.name || t('workspace.params.unnamedPreset') }))
     }
   }
 
   const removePreset = () => {
     if (!selectedPresetKey || !selectedPresetKey.startsWith('per:')) {
-      message.info('只能删除个人预设')
+      message.info(t('workspace.params.personalOnly'))
       return
     }
     const id = parseInt(selectedPresetKey.slice(4))
@@ -142,7 +146,7 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
         setSavePresetModal(false)
         presetForm.resetFields()
       } catch (e) {
-        message.error(e.response?.data?.detail || '保存失败')
+        message.error(safeError(e, t('workspace.saveFailed')))
       }
     } else {
       setSavePresetModal(false)
@@ -168,21 +172,21 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
       {showPresetBar && (
         <div className="preset-bar">
           <Space wrap>
-            <span style={{ fontWeight: 500 }}>参数预设:</span>
+            <span style={{ fontWeight: 500 }}>{t('workspace.params.presets')}</span>
             <Select
               style={{ width: 240 }}
-              placeholder="选择预设以快速填充表单..."
+              placeholder={t('workspace.params.choosePreset')}
               value={selectedPresetKey}
               onChange={setSelectedPresetKey}
               options={presetOptions}
               allowClear
             />
-            <Button onClick={applyPreset} disabled={!selectedPresetKey}>应用</Button>
+            <Button onClick={applyPreset} disabled={!selectedPresetKey}>{t('workspace.params.apply')}</Button>
             {onDeletePreset && (
-              <Button danger onClick={removePreset} disabled={!selectedPresetKey || !selectedPresetKey.startsWith('per:')}>删除</Button>
+              <Button danger onClick={removePreset} disabled={!selectedPresetKey || !selectedPresetKey.startsWith('per:')}>{t('workspace.delete')}</Button>
             )}
             {onSavePreset && (
-              <Button onClick={() => setSavePresetModal(true)}>另存为预设</Button>
+              <Button onClick={() => setSavePresetModal(true)}>{t('workspace.params.saveAs')}</Button>
             )}
           </Space>
         </div>
@@ -190,7 +194,7 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
 
       <Form form={form} layout="horizontal" onFinish={onFinish} initialValues={initVals}>
         {params.map(p => {
-          const rules = buildRules(p)
+          const rules = buildRules(p, t)
           switch (p.type) {
             case 'number':
               return (
@@ -213,15 +217,15 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
             case 'file':
               return (
                 <Form.Item key={p.key} name={p.key} label={p.label} rules={rules}
-                  extra={p.help || '选择文件或手动输入绝对路径'}>
-                  <FilePicker type="file" placeholder="文件绝对路径,如 C:\data\urls.txt" />
+                  extra={p.help || t('workspace.params.fileHelp')}>
+                  <FilePicker type="file" placeholder={t('workspace.params.fileExample')} />
                 </Form.Item>
               )
             case 'folder':
               return (
                 <Form.Item key={p.key} name={p.key} label={p.label} rules={rules}
-                  extra={p.help || '选择目录或手动输入绝对路径'}>
-                  <FilePicker type="folder" placeholder="目录绝对路径,如 C:\data\output" />
+                  extra={p.help || t('workspace.params.folderHelp')}>
+                  <FilePicker type="folder" placeholder={t('workspace.params.folderExample')} />
                 </Form.Item>
               )
             default:
@@ -234,22 +238,22 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
         })}
         <Form.Item>
           <Space>
-            <Button type="primary" htmlType="submit">执行脚本</Button>
+            <Button type="primary" htmlType="submit">{t('workspace.params.execute')}</Button>
             {onSave && (
               <Space>
                 <Switch size="small" checked={remember} onChange={setRemember} />
-                <span style={{ fontSize: 13 }}>记住参数</span>
+                <span style={{ fontSize: 13 }}>{t('workspace.params.remember')}</span>
               </Space>
             )}
           </Space>
         </Form.Item>
       </Form>
 
-      <Modal title="保存为预设" open={savePresetModal} onCancel={() => setSavePresetModal(false)}
-        onOk={() => presetForm.submit()} okText="保存">
+      <Modal title={t('workspace.params.savePreset')} open={savePresetModal} onCancel={() => setSavePresetModal(false)}
+        onOk={() => presetForm.submit()} okText={t('workspace.save')}>
         <Form form={presetForm} layout="vertical" onFinish={submitSavePreset}>
-          <Form.Item name="name" label="预设名称" rules={[{ required: true, message: '请输入预设名称' }]}>
-            <Input placeholder="例如:每日定时检查" />
+          <Form.Item name="name" label={t('workspace.params.presetName')} rules={[{ required: true, message: t('workspace.params.presetNameRequired') }]}>
+            <Input placeholder={t('workspace.params.presetExample')} />
           </Form.Item>
         </Form>
       </Modal>

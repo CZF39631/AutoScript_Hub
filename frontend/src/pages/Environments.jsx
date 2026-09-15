@@ -3,6 +3,8 @@ import { Alert, Table, Button, Modal, Form, Input, InputNumber, Switch, Tag, Sel
 import { PlusOutlined, EditOutlined, DeleteOutlined, DesktopOutlined } from '@ant-design/icons'
 import api from '../api/client'
 import { useConnection } from '../contexts/ConnectionContext'
+import { useI18n } from '../i18n/useI18n'
+import { safeError } from '../utils/safeError'
 
 const emptyForm = {
   name: '', browser_port: null, browser_path: null,
@@ -11,6 +13,7 @@ const emptyForm = {
 }
 
 export default function Environments() {
+  const { t } = useI18n()
   const [envs, setEnvs] = useState([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
@@ -26,11 +29,12 @@ export default function Environments() {
   const load = () => {
     setLoading(true)
     api.get('/api/environments').then(r => setEnvs(r.data))
-      .catch(() => message.error('加载失败'))
+      .catch(() => message.error(t('management.loadFailed')))
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  // Language changes only rerender labels; keep the existing query lifecycle.
+  useEffect(load, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!agentOnline) {
@@ -48,9 +52,9 @@ export default function Environments() {
       const resp = await localApi.get('/detect-browsers')
       const data = resp.data || []
       setBrowsers(data)
-      if (data.length === 0) message.info('未检测到浏览器')
+      if (data.length === 0) message.info(t('management.env.noBrowsers'))
     } catch {
-      message.error('检测失败，请确认 Agent 已启动')
+      message.error(t('management.env.detectFailed'))
     } finally {
       setDetectingBrowser(false)
     }
@@ -109,51 +113,51 @@ export default function Environments() {
 
       if (editingId) {
         await api.put(`/api/environments/${editingId}`, payload)
-        message.success('更新成功')
+        message.success(t('management.updated'))
       } else {
         await api.post('/api/environments', payload)
-        message.success('创建成功')
+        message.success(t('management.created'))
       }
       setModalOpen(false)
       load()
     } catch (e) {
-      message.error(e.response?.data?.detail || '操作失败')
+      message.error(safeError(e, t('management.operationFailed')))
     }
   }
 
   const onDelete = async (id) => {
     try {
       await api.delete(`/api/environments/${id}`)
-      message.success('已删除')
+      message.success(t('management.deleted'))
       load()
     } catch (e) {
-      message.error(e.response?.data?.detail || '删除失败')
+      message.error(safeError(e, t('management.deleteFailed')))
     }
   }
 
   // --- Table columns ---
 
   const columns = [
-    { title: '名称', dataIndex: 'name', key: 'name', width: 140 },
+    { title: t('management.name'), dataIndex: 'name', key: 'name', width: 140 },
     {
       title: 'Python', key: 'python', width: 120,
-      render: () => <Tag color="green">自动隔离</Tag>,
+      render: () => <Tag color="green">{t('management.env.isolated')}</Tag>,
     },
-    { title: '浏览器端口', dataIndex: 'browser_port', key: 'port', width: 90, render: v => v || '-' },
-    { title: '浏览器路径', dataIndex: 'browser_path', key: 'bpath', ellipsis: true, render: v => v || '-' },
-    { title: '输出目录', dataIndex: 'output_dir', key: 'odir', ellipsis: true, render: v => v || '-' },
-    { title: '代理', dataIndex: 'proxy', key: 'proxy', width: 130, render: v => v || '-' },
+    { title: t('management.env.browserPort'), dataIndex: 'browser_port', key: 'port', width: 90, render: v => v || '-' },
+    { title: t('management.env.browserPath'), dataIndex: 'browser_path', key: 'bpath', ellipsis: true, render: v => v || '-' },
+    { title: t('management.env.outputDir'), dataIndex: 'output_dir', key: 'odir', ellipsis: true, render: v => v || '-' },
+    { title: t('management.env.proxy'), dataIndex: 'proxy', key: 'proxy', width: 130, render: v => v || '-' },
     {
-      title: '默认', dataIndex: 'is_default', key: 'def', width: 60,
-      render: v => v ? <Tag color="blue">默认</Tag> : '-',
+      title: t('management.default'), dataIndex: 'is_default', key: 'def', width: 60,
+      render: v => v ? <Tag color="blue">{t('management.default')}</Tag> : '-',
     },
     {
-      title: '操作', key: 'action', width: 100,
+      title: t('management.actions'), key: 'action', width: 100,
       render: (_, r) => (
         <Space>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
-          <Popconfirm title="确定删除？关联的venv也会被删除" onConfirm={() => onDelete(r.id)} okText="删除" cancelText="取消">
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+          <Button type="link" size="small" aria-label={t('management.edit')} icon={<EditOutlined />} onClick={() => openEdit(r)} />
+          <Popconfirm title={t('management.env.deleteConfirm')} onConfirm={() => onDelete(r.id)} okText={t('management.delete')} cancelText={t('management.cancel')}>
+            <Button type="link" size="small" aria-label={t('management.delete')} danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
       ),
@@ -165,42 +169,42 @@ export default function Environments() {
   const collapseItems = [
     {
       key: 'python',
-      label: 'Python 虚拟环境',
+      label: t('management.env.python'),
       children: (
         <Alert
           type={runtimeInfo?.status === 'ready' ? 'success' : 'info'}
           showIcon
-          message="私有 Python 3.11.9"
+          message={t('management.env.privatePython')}
           description={runtimeInfo?.status === 'ready'
-            ? `已就绪：${runtimeInfo.path}。脚本依赖会按指纹自动创建、校验并复用独立环境。`
-            : '请在 Windows 客户端中查看运行时状态；安装器会提供私有 Python，脚本不使用系统 Python。'}
+            ? t('management.env.runtimeReady', { path: runtimeInfo.path })
+            : t('management.env.runtimeHint')}
         />
       ),
     },
     {
       key: 'browser',
-      label: '浏览器配置',
+      label: t('management.env.browserConfig'),
       children: (
         <>
-          <Form.Item name="browser_port" label="调试端口">
-            <InputNumber min={0} max={65535} placeholder="如：9222" style={{ width: '100%' }} />
+          <Form.Item name="browser_port" label={t('management.env.debugPort')}>
+            <InputNumber min={0} max={65535} placeholder={t('management.env.portExample')} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="浏览器路径">
+          <Form.Item label={t('management.env.browserPath')}>
             <Form.Item name="browser_path" noStyle>
-              <Input placeholder="手动输入或从下方选择" />
+              <Input placeholder={t('management.env.pathPlaceholder')} />
             </Form.Item>
             <div style={{ marginTop: 4 }}>
               {detectingBrowser ? <Spin size="small" /> : (
                 browsers.length > 0 ? (
                   <Select
                     style={{ width: '100%' }}
-                    placeholder="检测到以下浏览器，点击选择"
+                    placeholder={t('management.env.detectedBrowsers')}
                     allowClear
                     onChange={path => form.setFieldsValue({ browser_path: path })}
                     options={browsers.map(b => ({ label: `${b.name} - ${b.path}`, value: b.path }))}
                   />
                 ) : (
-                  <Button size="small" icon={<DesktopOutlined />} onClick={detectBrowsers}>检测浏览器</Button>
+                  <Button size="small" icon={<DesktopOutlined />} onClick={detectBrowsers}>{t('management.env.detectBrowsers')}</Button>
                 )
               )}
             </div>
@@ -210,36 +214,36 @@ export default function Environments() {
     },
     {
       key: 'network',
-      label: '网络配置',
+      label: t('management.env.network'),
       children: (
-        <Form.Item name="proxy" label="代理地址">
-          <Input placeholder="如：http://127.0.0.1:7890" />
+        <Form.Item name="proxy" label={t('management.env.proxyAddress')}>
+          <Input placeholder={t('management.env.proxyExample')} />
         </Form.Item>
       ),
     },
     {
       key: 'advanced',
-      label: '高级设置',
+      label: t('management.env.advanced'),
       children: (
         <>
-          <Form.Item name="output_dir" label="输出目录">
-            <Input placeholder="如：D:\output" />
+          <Form.Item name="output_dir" label={t('management.env.outputDir')}>
+            <Input placeholder={t('management.env.outputExample')} />
           </Form.Item>
           <Form.List name="extra_env">
             {(fields, { add, remove }) => (
               <>
                 <div style={{ marginBottom: 8 }}>
-                  <Button size="small" onClick={() => add()} icon={<PlusOutlined />}>添加环境变量</Button>
+                  <Button size="small" onClick={() => add()} icon={<PlusOutlined />}>{t('management.env.addVariable')}</Button>
                 </div>
                 {fields.map(({ key, name, ...restField }) => (
                   <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
-                    <Form.Item {...restField} name={[name, 'key']} rules={[{ required: true, message: '变量名' }]}>
-                      <Input placeholder="变量名" style={{ width: 160 }} />
+                    <Form.Item {...restField} name={[name, 'key']} rules={[{ required: true, message: t('management.env.variableName') }]}>
+                      <Input placeholder={t('management.env.variableName')} style={{ width: 160 }} />
                     </Form.Item>
                     <Form.Item {...restField} name={[name, 'value']}>
-                      <Input placeholder="变量值" style={{ width: 240 }} />
+                      <Input placeholder={t('management.env.variableValue')} style={{ width: 240 }} />
                     </Form.Item>
-                    <Button type="link" danger size="small" onClick={() => remove(name)}>删除</Button>
+                    <Button type="link" danger size="small" onClick={() => remove(name)}>{t('management.delete')}</Button>
                   </Space>
                 ))}
               </>
@@ -253,25 +257,26 @@ export default function Environments() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>环境管理</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>创建环境</Button>
+        <h2 style={{ margin: 0 }}>{t('management.env.title')}</h2>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>{t('management.env.create')}</Button>
       </div>
 
-      <Table dataSource={envs} columns={columns} rowKey="id" loading={loading} />
+      <Table locale={{ emptyText: t('management.empty') }} dataSource={envs} columns={columns} rowKey="id" loading={loading} />
 
       <Modal
-        title={editingId ? '编辑环境' : '创建环境'}
+        title={t(editingId ? 'management.env.edit' : 'management.env.create')}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={() => form.submit()}
-        okText={editingId ? '保存' : '创建'}
+        okText={t(editingId ? 'management.save' : 'management.create')}
+        cancelText={t('management.cancel')}
         width={600}
       >
         <Form form={form} layout="vertical" onFinish={onSubmit} initialValues={emptyForm}>
-          <Form.Item name="name" label="环境名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="如：Chrome生产环境" />
+          <Form.Item name="name" label={t('management.env.name')} rules={[{ required: true, message: t('management.env.nameRequired') }]}>
+            <Input placeholder={t('management.env.nameExample')} />
           </Form.Item>
-          <Form.Item name="is_default" label="设为默认环境" valuePropName="checked">
+          <Form.Item name="is_default" label={t('management.env.setDefault')} valuePropName="checked">
             <Switch />
           </Form.Item>
           <Collapse ghost items={collapseItems} defaultActiveKey={['python']} style={{ marginBottom: 16 }} />

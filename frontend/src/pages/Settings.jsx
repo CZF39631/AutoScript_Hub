@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Alert, Card, Form, Input, InputNumber, Button, message, Spin, Popconfirm, Select, Space, Tag } from 'antd'
 import { DownloadOutlined, NotificationOutlined, ReloadOutlined, SaveOutlined, UndoOutlined, SettingOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
@@ -7,13 +7,15 @@ import { checkUpdate, downloadAndInstallUpdate, loadUpdateStatus } from '../api/
 import { useConnection } from '../contexts/ConnectionContext'
 import { useAuth } from '../contexts/AuthContext'
 import DiagnosticSettings from '../components/DiagnosticSettings'
+import { useI18n } from '../i18n/useI18n'
+import { safeError } from '../utils/safeError'
 
 const updateStateSummary = {
-  available: '发现可用更新（尚未下载）',
-  downloading: '正在后台下载并验证更新',
-  verified: '更新已下载并验证',
-  'waiting-for-idle': '更新已就绪，脚本结束后请再次点击“下载并安装”',
-  installing: '正在安装更新',
+  available: 'workspace.update.available',
+  downloading: 'workspace.update.downloading',
+  verified: 'workspace.update.verified',
+  'waiting-for-idle': 'workspace.update.waiting',
+  installing: 'workspace.update.installing',
 }
 
 const updateStateColor = {
@@ -25,6 +27,10 @@ const updateStateColor = {
 }
 
 export default function Settings() {
+  const { t } = useI18n()
+  // Keep async notifications current without reloading an edited form on language changes.
+  const loadT = useRef(t)
+  useEffect(() => { loadT.current = t }, [t])
   const { user } = useAuth()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -42,7 +48,7 @@ export default function Settings() {
         ...r.data,
         update_manifest_urls: (r.data.update_manifest_urls || []).join('\n'),
       }))
-      .catch(() => message.error('加载设置失败'))
+      .catch(() => message.error(loadT.current('workspace.settings.loadFailed')))
       .finally(() => setLoading(false))
   }, [form])
 
@@ -67,15 +73,15 @@ export default function Settings() {
         : await checkUpdate(localApi)
       setUpdateState(result)
       if (action === 'check') {
-        if (result.state === 'available') message.info('发现可用更新，请点击“下载并安装”')
-        else message.info('更新检查完成')
-      } else if (result.state === 'downloading') message.info('已在后台下载并验证更新，你可以继续使用客户端')
-      else if (result.state === 'installing') message.success('更新安装已启动，客户端将自动重启')
-      else if (result.state === 'waiting-for-idle') message.info('更新已就绪。脚本运行结束后，请再次点击“下载并安装”完成安装')
-      else message.info('当前没有可用更新')
+        if (result.state === 'available') message.info(t('workspace.update.found'))
+        else message.info(t('workspace.update.checked'))
+      } else if (result.state === 'downloading') message.info(t('workspace.update.background'))
+      else if (result.state === 'installing') message.success(t('workspace.update.restarting'))
+      else if (result.state === 'waiting-for-idle') message.info(t('workspace.update.waitNotice'))
+      else message.info(t('workspace.update.none'))
     } catch (error) {
-      const detail = error.response?.data?.error || error.message
-      message.error(`更新操作失败：${detail}`)
+      const detail = safeError(error, t('workspace.actionFailed'))
+      message.error(t('workspace.update.failed', { detail }))
     } finally {
       setUpdateBusy(false)
     }
@@ -92,9 +98,9 @@ export default function Settings() {
           .filter(Boolean),
       }
       await api.put('/api/settings', payload)
-      message.success('设置已保存，客户端将在一分钟内同步；路径或服务器地址变更需重启客户端')
+      message.success(t('workspace.settings.saved'))
     } catch (e) {
-      message.error(e.response?.data?.detail || '保存失败')
+      message.error(safeError(e, t('workspace.saveFailed')))
     } finally {
       setSaving(false)
     }
@@ -104,76 +110,77 @@ export default function Settings() {
     try {
       await api.delete('/api/settings')
       form.resetFields()
-      message.success('设置已重置，请重启应用以重新运行设置向导')
+      message.success(t('workspace.settings.resetDone'))
     } catch {
-      message.error('重置失败')
+      message.error(t('workspace.settings.resetFailed'))
     }
   }
 
   const canInstallUpdate = ['available', 'verified', 'waiting-for-idle'].includes(updateState.state)
   const updateSummary = updateState.error
-    ? '无法确认更新状态'
+    ? t('workspace.update.unknown')
     : updateStateSummary[updateState.state]
-      || (updateState.version ? '当前已是最新版本' : '尚未检查')
+      ? t(updateStateSummary[updateState.state])
+      : t(updateState.version ? 'workspace.update.latest' : 'workspace.update.unchecked')
 
   if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100 }} />
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}><SettingOutlined /> 系统设置</h2>
+      <h2 style={{ marginBottom: 16 }}><SettingOutlined /> {t('workspace.settings.title')}</h2>
 
       <Card style={{ maxWidth: 600 }}>
         <Form form={form} layout="vertical" onFinish={onSave}>
-          <Form.Item name="server_url" label="服务器地址">
-            <Input placeholder="如：http://192.168.1.100:8000" />
+          <Form.Item name="server_url" label={t('workspace.settings.server')}>
+            <Input placeholder={t('workspace.settings.serverExample')} />
           </Form.Item>
-          <Form.Item name="script_download_dir" label="脚本下载目录">
-            <Input placeholder="如：D:\scripts" />
+          <Form.Item name="script_download_dir" label={t('workspace.settings.downloadDir')}>
+            <Input placeholder={t('workspace.settings.downloadExample')} />
           </Form.Item>
-          <Form.Item name="output_dir" label="输出目录">
-            <Input placeholder="如：D:\output" />
+          <Form.Item name="output_dir" label={t('workspace.settings.outputDir')}>
+            <Input placeholder={t('workspace.settings.outputExample')} />
           </Form.Item>
-          <Form.Item name="default_browser_path" label="默认浏览器路径">
-            <Input placeholder="如：C:\Program Files\Google\Chrome\Application\chrome.exe" />
+          <Form.Item name="default_browser_path" label={t('workspace.settings.browser')}>
+            <Input placeholder={t('workspace.settings.browserExample')} />
           </Form.Item>
-          <Form.Item name="browser_debug_port" label="浏览器调试端口">
+          <Form.Item name="browser_debug_port" label={t('workspace.settings.debugPort')}>
             <InputNumber min={0} max={65535} style={{ width: '100%' }} placeholder="9222" />
           </Form.Item>
-          <Form.Item name="proxy" label="代理地址">
-            <Input placeholder="如：http://127.0.0.1:7890" />
+          <Form.Item name="proxy" label={t('workspace.settings.proxy')}>
+            <Input placeholder={t('workspace.settings.proxyExample')} />
           </Form.Item>
-          <Form.Item name="pip_index_url" label="Python 依赖镜像">
-            <Input placeholder="默认：https://pypi.tuna.tsinghua.edu.cn/simple" />
+          <Form.Item name="pip_index_url" label={t('workspace.settings.pip')}>
+            <Input placeholder={t('workspace.settings.pipExample')} />
           </Form.Item>
           <Form.Item
             name="gitee_update_repository"
-            label="Gitee 更新仓库"
-            extra="仅从 Gitee 读取签名更新清单；GitHub 只作为安装包下载兜底。"
+            label={t('workspace.settings.repository')}
+            extra={t('workspace.settings.repositoryHelp')}
           >
             <Input placeholder="chuzifeng/auto-script_-hub" />
           </Form.Item>
-          <Form.Item name="update_channel" label="更新通道">
-            <Select options={[{ value: 'stable', label: 'Stable（稳定版）' }, { value: 'beta', label: 'Beta（测试版及稳定版）' }]} />
+          <Form.Item name="update_channel" label={t('workspace.settings.channel')}>
+            <Select options={[{ value: 'stable', label: t('workspace.settings.stable') }, { value: 'beta', label: t('workspace.settings.beta') }]} />
           </Form.Item>
           <Form.Item
             name="update_manifest_urls"
-            label="Gitee / Git Raw / 局域网更新清单"
-            extra="每行一个 autoscript-hub-update.json 地址；按顺序尝试，签名文件使用同地址加 .sig。"
+            label={t('workspace.settings.manifests')}
+            extra={t('workspace.settings.manifestsHelp')}
           >
-            <Input.TextArea rows={4} placeholder={'http://192.168.1.106/releases/autoscript-hub-update.json\nhttps://gitee.com/.../autoscript-hub-update.json'} />
+            <Input.TextArea rows={4} placeholder={'http://server.example.com/releases/autoscript-hub-update.json\nhttps://gitee.com/.../autoscript-hub-update.json'} />
           </Form.Item>
 
           <div style={{ display: 'flex', gap: 8 }}>
             <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saving}>
-              保存设置
+              {t('workspace.settings.save')}
             </Button>
             <Popconfirm
-              title="确定重置所有设置？重置后需要重新运行设置向导。"
+              title={t('workspace.settings.resetConfirm')}
               onConfirm={onReset}
-              okText="确定重置"
-              cancelText="取消"
+              okText={t('workspace.settings.confirmReset')}
+              cancelText={t('workspace.cancel')}
             >
-              <Button icon={<UndoOutlined />}>重置设置</Button>
+              <Button icon={<UndoOutlined />}>{t('workspace.settings.reset')}</Button>
             </Popconfirm>
           </div>
         </Form>
@@ -182,27 +189,27 @@ export default function Settings() {
       {user?.role === 'admin' && <DiagnosticSettings />}
 
       <Card
-        title="客户端更新"
-        extra={<Link to="/updates"><NotificationOutlined /> 查看更新说明</Link>}
+        title={t('workspace.update.title')}
+        extra={<Link to="/updates"><NotificationOutlined /> {t('workspace.update.notes')}</Link>}
         style={{ maxWidth: 600, marginTop: 16 }}
       >
-        {!agentOnline && <Alert type="info" showIcon message="此功能仅在 Windows 客户端中可用" />}
+        {!agentOnline && <Alert type="info" showIcon message={t('workspace.update.windowsOnly')} />}
         {agentOnline && (
           <Space direction="vertical" style={{ width: '100%' }}>
             <div>
-              状态：<Tag>{updateState.state || 'idle'}</Tag>
+              {t('workspace.statusColon')}<Tag>{t(`workspace.update.state.${updateState.state || 'idle'}`, { defaultValue: updateState.state || 'idle' })}</Tag>
               <Tag color={updateStateColor[updateState.state] || (updateState.error ? 'orange' : 'green')}>
                 {updateSummary}
               </Tag>
             </div>
             <Space size="large" wrap>
-              <span>已安装版本：{updateState.current_version || '-'}</span>
-              <span>最新版本：{updateState.version || '未检查'}</span>
+              <span>{t('workspace.update.installedVersion')}{updateState.current_version || '-'}</span>
+              <span>{t('workspace.update.latestVersion')}{updateState.version || t('workspace.update.notChecked')}</span>
             </Space>
             {updateState.error && <Alert type="warning" showIcon message={updateState.error} />}
             <Space>
               <Button icon={<ReloadOutlined />} loading={updateBusy} onClick={() => runUpdateAction('check')}>
-                检查更新
+                {t('workspace.update.check')}
               </Button>
               <Button
                 type="primary"
@@ -211,10 +218,10 @@ export default function Settings() {
                 disabled={!canInstallUpdate}
                 onClick={() => runUpdateAction('install')}
               >
-                下载并安装
+                {t('workspace.update.install')}
               </Button>
             </Space>
-            <div style={{ color: '#888' }}>更新仅在点击“下载并安装”后执行。脚本运行期间点击会暂存已验证的更新包，待脚本结束后需再次点击方可安装。</div>
+            <div style={{ color: '#888' }}>{t('workspace.update.installHelp')}</div>
           </Space>
         )}
       </Card>

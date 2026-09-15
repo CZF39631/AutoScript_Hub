@@ -136,7 +136,10 @@ def test_environment_ui_uses_managed_runtime_instead_of_arbitrary_venv_paths():
     page = _read("frontend/src/pages/Environments.jsx")
 
     assert "/local/runtime" in page
-    assert "私有 Python 3.11.9" in page
+    assert "t('management.env.privatePython')" in page
+    labels = _read("frontend/src/i18n/locales/management.js")
+    assert "私有 Python 3.11.9" in labels
+    assert "Private Python 3.11.9" in labels
     assert "/create-venv" not in page
     assert "/delete-venv" not in page
     assert "/detect-python-versions" not in page
@@ -149,5 +152,10 @@ def test_settings_ui_exposes_gitee_and_lan_update_sources():
     assert "chuzifeng/auto-script_-hub" in page
     assert "github_update_repository" not in page
     assert "update_manifest_urls" in page
-    assert "Gitee" in page
-    assert "局域网" in page
+    assert "t('workspace.settings.repository')" in page
+    assert "t('workspace.settings.manifests')" in page
+    labels = _read("frontend/src/i18n/locales/workspace.js")
+    assert "Gitee 更新仓库" in labels
+    assert "Gitee update repository" in labels
+    assert "局域网更新清单" in labels
+    assert "LAN update manifests" in labels

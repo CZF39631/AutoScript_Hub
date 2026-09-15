@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Checkbox, List, Modal, Space, Tag, Typography } from 'antd'
 import { RocketOutlined } from '@ant-design/icons'
 import { useConnection } from '../contexts/ConnectionContext'
+import { useI18n } from '../i18n/useI18n'
 import { currentRelease } from '../data/releaseNotes'
 import {
   dismissUpdateNotice,
@@ -13,6 +14,7 @@ const { Paragraph, Text, Title } = Typography
 const bundledVersion = import.meta.env.VITE_AUTOSCRIPT_VERSION || ''
 
 export default function ImportantUpdateNotice() {
+  const { t } = useI18n()
   const { agentOnline, localApi } = useConnection()
   const [open, setOpen] = useState(false)
   const [version, setVersion] = useState('')
@@ -43,8 +45,8 @@ export default function ImportantUpdateNotice() {
   return (
     <Modal
       open={open}
-      title={<Space><RocketOutlined />重要更新</Space>}
-      okText="我知道了"
+      title={<Space><RocketOutlined />{t('management.updates.important')}</Space>}
+      okText={t('management.updates.acknowledge')}
       cancelButtonProps={{ style: { display: 'none' } }}
       onOk={close}
       onCancel={close}
@@ -67,7 +69,7 @@ export default function ImportantUpdateNotice() {
           </div>
         ))}
         <Checkbox checked={hideFuture} onChange={event => setHideFuture(event.target.checked)}>
-          以后默认隐藏重要更新弹窗（仍可在“更新说明”中查看）
+          {t('management.updates.hideFuture')}
         </Checkbox>
       </Space>
     </Modal>

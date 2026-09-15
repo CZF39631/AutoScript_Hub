@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Button } from 'antd'
 import {
@@ -7,6 +8,11 @@ import {
 } from '@ant-design/icons'
 import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
+import enUS from 'antd/locale/en_US'
+import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+import { useI18n } from './i18n/useI18n'
+import LanguageSelect from './components/LanguageSelect'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ConnectionProvider, useConnection } from './contexts/ConnectionContext'
 import Login from './pages/Login'
@@ -32,42 +38,44 @@ function PrivateRoute({ children }) {
 }
 
 function OfflineBanner() {
+  const { t } = useI18n()
   const { online, agentOnline, pendingSync } = useConnection()
   if (online) return null
   return (
     <div className={`offline-banner ${agentOnline ? 'offline-banner--agent' : 'offline-banner--error'}`}>
       {agentOnline ? (
         <>
-          ⚠️ 与服务器断开,已切换到 <strong>离线模式</strong>。可执行已下载的脚本,结果会在恢复连接后自动同步
-          {pendingSync > 0 && <>(待同步 {pendingSync} 条)</>}
+          {t('shell.offline')}
+          {pendingSync > 0 && t('shell.pendingSync', { count: pendingSync })}
         </>
       ) : (
-        <>⚠️ 与服务器断开,且本地 Agent 不可用。请检查 Agent 进程是否运行</>
+        <>{t('shell.noAgent')}</>
       )}
     </div>
   )
 }
 
 function AppLayout() {
+  const { t } = useI18n()
   const { user, logout } = useAuth()
   const { agentOnline } = useConnection()
   const nav = useNavigate()
   const loc = useLocation()
 
   const baseMenuItems = [
-    { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
-    { key: '/scripts', icon: <CodeOutlined />, label: '脚本管理' },
-    { key: '/runs', icon: <HistoryOutlined />, label: '执行历史' },
-    { key: '/tasks', icon: <ScheduleOutlined />, label: '任务调度' },
-    { key: '/issues', icon: <BugOutlined />, label: '问题工单' },
-    { key: '/environments', icon: <GlobalOutlined />, label: '环境管理' },
-    { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
-    { key: '/updates', icon: <NotificationOutlined />, label: '更新说明' },
+    { key: '/dashboard', icon: <DashboardOutlined />, label: t('shell.dashboard') },
+    { key: '/scripts', icon: <CodeOutlined />, label: t('shell.scripts') },
+    { key: '/runs', icon: <HistoryOutlined />, label: t('shell.runs') },
+    { key: '/tasks', icon: <ScheduleOutlined />, label: t('shell.tasks') },
+    { key: '/issues', icon: <BugOutlined />, label: t('shell.issues') },
+    { key: '/environments', icon: <GlobalOutlined />, label: t('shell.environments') },
+    { key: '/settings', icon: <SettingOutlined />, label: t('shell.settings') },
+    { key: '/updates', icon: <NotificationOutlined />, label: t('shell.updates') },
   ]
 
   const adminItems = [
-    { key: '/users', icon: <UserOutlined />, label: '用户管理' },
-    { key: '/audit', icon: <AuditOutlined />, label: '操作审计' },
+    { key: '/users', icon: <UserOutlined />, label: t('shell.users') },
+    { key: '/audit', icon: <AuditOutlined />, label: t('shell.audit') },
   ]
 
   const menuItems = user?.role === 'admin'
@@ -98,21 +106,22 @@ function AppLayout() {
         </div>
         <Menu className="app-menu" mode="inline" selectedKeys={[selectedKey]} items={menuItems}
           onClick={({ key }) => nav(key)} />
+        <div className="app-language"><LanguageSelect /></div>
         <div className={`agent-status ${agentOnline ? 'agent-status--online' : 'agent-status--offline'}`}
-          title={agentOnline ? '本地 Agent 连接正常' : '本地 Agent 未启动或连接失败'}>
+          title={t(agentOnline ? 'shell.agentConnected' : 'shell.agentDisconnected')}>
           <span className="agent-status__light" aria-hidden="true" />
           <span>
             <strong>Agent</strong>
-            <small>{agentOnline ? '连接正常' : '未启动或连接失败'}</small>
+            <small>{t(agentOnline ? 'shell.connected' : 'shell.disconnected')}</small>
           </span>
         </div>
         <div className="app-account">
           <div className="app-account__avatar">{(user?.display_name || user?.username || 'U').slice(0, 1).toUpperCase()}</div>
           <div className="app-account__meta">
             <strong>{user?.display_name}</strong>
-            <span>{user?.role}</span>
+            <span>{({ admin: t('shell.roleAdmin'), developer: t('shell.roleDeveloper'), operator: t('shell.roleOperator') })[user?.role] || user?.role}</span>
           </div>
-          <Button className="app-account__logout" type="text" icon={<LogoutOutlined />} title="退出登录"
+          <Button className="app-account__logout" type="text" icon={<LogoutOutlined />} title={t('shell.logout')} aria-label={t('shell.logout')}
             onClick={() => { logout(); nav('/login') }} />
         </div>
       </Sider>
@@ -169,8 +178,14 @@ const appleTheme = {
 }
 
 export default function App() {
+  const { language } = useI18n()
+  useEffect(() => {
+    document.documentElement.lang = language
+    dayjs.locale(language === 'en-US' ? 'en' : 'zh-cn')
+  }, [language])
+
   return (
-    <ConfigProvider locale={zhCN} theme={appleTheme}>
+    <ConfigProvider locale={language === 'en-US' ? enUS : zhCN} theme={appleTheme}>
       <ConnectionProvider>
         <AuthProvider>
           <Routes>

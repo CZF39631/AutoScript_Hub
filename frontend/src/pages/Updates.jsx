@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Card, Collapse, List, Space, Switch, Tag, Typography } from 'antd'
 import { BellOutlined, NotificationOutlined } from '@ant-design/icons'
 import { useConnection } from '../contexts/ConnectionContext'
+import { useI18n } from '../i18n/useI18n'
 import { currentRelease, releaseHistory } from '../data/releaseNotes'
 import {
   importantUpdatesHidden,
@@ -26,6 +27,7 @@ function ReleaseSections({ release }) {
 }
 
 export default function Updates() {
+  const { t } = useI18n()
   const { agentOnline, localApi } = useConnection()
   const [installedVersion, setInstalledVersion] = useState('')
   const [hideImportant, setHideImportant] = useState(() => importantUpdatesHidden())
@@ -50,16 +52,16 @@ export default function Updates() {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}><NotificationOutlined /> 更新说明</h2>
+      <h2 style={{ marginBottom: 16 }}><NotificationOutlined /> {t('management.updates.title')}</h2>
 
       <Card style={{ maxWidth: 820, marginBottom: 16 }}>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Space wrap>
-            <Tag color="blue">最新更新</Tag>
-            {currentRelease.important && <Tag color="red">重要更新</Tag>}
-            {(bundledVersion || installedVersion) && <Tag>版本 v{bundledVersion || installedVersion}</Tag>}
+            <Tag color="blue">{t('management.updates.latest')}</Tag>
+            {currentRelease.important && <Tag color="red">{t('management.updates.important')}</Tag>}
+            {(bundledVersion || installedVersion) && <Tag>{t('management.updates.version', { version: bundledVersion || installedVersion })}</Tag>}
             {installedVersion && bundledVersion && installedVersion !== bundledVersion && (
-              <Tag color="orange">本地 Agent v{installedVersion}</Tag>
+              <Tag color="orange">{t('management.updates.localVersion', { version: installedVersion })}</Tag>
             )}
           </Space>
           <Title level={3} style={{ margin: 0 }}>{currentRelease.title}</Title>
@@ -68,14 +70,14 @@ export default function Updates() {
         </Space>
       </Card>
 
-      <Card title={<Space><BellOutlined />提醒设置</Space>} style={{ maxWidth: 820, marginBottom: 16 }}>
+      <Card title={<Space><BellOutlined />{t('management.updates.preferences')}</Space>} style={{ maxWidth: 820, marginBottom: 16 }}>
         <Space direction="vertical">
           <Space>
-            <Switch checked={hideImportant} onChange={changePreference} />
-            <Text>默认隐藏重要更新弹窗</Text>
+            <Switch aria-label={t('management.updates.hide')} checked={hideImportant} onChange={changePreference} />
+            <Text>{t('management.updates.hide')}</Text>
           </Space>
           <Text type="secondary">
-            关闭默认隐藏后，重要更新会在升级后的首次运行中弹出一次；普通更新不会打扰你。
+            {t('management.updates.preferenceHint')}
           </Text>
         </Space>
       </Card>
@@ -85,11 +87,11 @@ export default function Updates() {
           style={{ maxWidth: 820, marginBottom: 16 }}
           type="info"
           showIcon
-          message="当前未连接本地 Agent，无法读取已安装客户端版本"
+          message={t('management.updates.offline')}
         />
       )}
 
-      <Card title="历史版本" style={{ maxWidth: 820 }}>
+      <Card title={t('management.updates.history')} style={{ maxWidth: 820 }}>
         <Collapse
           items={releaseHistory.map(release => ({
             key: release.id,

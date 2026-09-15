@@ -1,125 +1,158 @@
 # AutoScript Hub
 
-AutoScript Hub 是面向团队和企业局域网的 Python 自动化脚本管理与执行平台。它把散落在个人电脑上的脚本变成可发布、可授权、可追踪的团队能力，同时让脚本和结果文件继续在实际执行的 Windows 客户端运行和保存。
+面向团队的 Python 自动化脚本管理与执行平台：集中发布脚本、分配权限和跟踪执行，在 Windows 客户端完成实际任务。
 
-服务端负责脚本版本、用户权限、任务调度、执行历史和审计；客户端负责隔离环境、真实执行、实时日志和结果文件。团队获得集中治理能力，又不必把业务文件集中上传到服务器。
+**简体中文** | [English](README.en.md)
 
-## 核心优势
+## 下载与版本
 
-| 优势 | 带来的价值 |
-|---|---|
-| **安装后即可运行** | Windows 安装包自带私有 Python 3.11.9，使用者无需配置 Python、Node.js、Git 或全局依赖。 |
-| **集中管理，数据留在本机** | 脚本、版本和权限由服务端统一管理；输入和结果文件留在执行客户端，减少文件搬运和集中泄露风险。 |
-| **依赖隔离且可复用** | 根据脚本依赖指纹创建独立环境，相同依赖自动复用，既避免脚本互相污染，又减少重复安装时间。 |
-| **执行过程可靠可见** | UI 关闭后 Agent 仍可继续任务；支持实时日志、取消任务、执行历史、失败工单和结果文件快速打开。 |
-| **弱网场景更有韧性** | 已缓存脚本可在服务短暂不可用时继续执行，本地完成的记录在恢复连接后同步，降低网络波动影响。 |
-| **企业身份与本地权限解耦** | 可使用内置账号，也可选接企业外部认证；身份验证与平台角色分开管理，支持管理员、开发者和操作员权限。 |
-| **按团队隔离脚本市场** | 用户和脚本可加入多个分组，不同部门只看到获授权的脚本；角色控制操作能力，分组控制资源范围。 |
-| **用户全生命周期管理** | 支持搜索、启禁用、角色调整和软删除，历史执行与审计记录不会因删除用户而丢失。 |
-| **版本发布可追溯** | 脚本市场保存平台版本、语义版本和变更说明，可明确知道每次执行使用了哪一份代码。 |
-| **更新链路可验证** | 支持 GitHub、Git Raw 和局域网更新源；更新清单使用 Ed25519 签名，并校验安装包长度与 SHA-256。 |
-| **更新内容清晰可控** | 内置更新说明页面；重要更新仅在升级后首次运行时提醒一次，并支持默认隐藏弹窗。 |
-| **适合 AI 辅助开发** | 内置脚本契约、严格验证器和独立 AI Skill，让 AI 生成的脚本也遵循统一配置、参数、依赖和输出规范。 |
-| **部署轻量且跨架构** | 单个 Docker 服务支持 `linux/amd64` 与 `linux/arm64`，适合普通服务器、NAS 和小型局域网环境。 |
+- **当前正式版：v1.2.4**。[GitHub Release：Windows 安装包与部署资产](https://github.com/CZF39631/AutoScript_Hub/releases/tag/v1.2.4)
+- [Gitee 代码镜像](https://gitee.com/chuzifeng/auto-script_-hub) · [Gitee v1.2.4 镜像资产](https://gitee.com/chuzifeng/auto-script_-hub/releases/tag/v1.2.4)
+- GitHub 是发布资产的真源，客户端依据签名更新清单校验安装包。Gitee 镜像代码、Tag、部署包、Skill 和签名清单，**不镜像 Windows EXE**；安装包仍从 GitHub 获取。
+- `1.3.0-preview.1` 是开发预览，**尚未公开 Release**，不是正式升级目标。当前开发源码与 v1.2.4 交付物不完全相同。
 
-## 典型使用场景
+开发分支已接入 React 主界面的简体中文 / English 切换，入口在登录页和主界面侧栏；**尚未随正式版发布**。脚本自带文字、原始日志、历史更新正文和原生初始化向导仍保留原文，详见[多语言支持范围](docs/多语言支持.md)。
 
-- 运营、数据和业务团队共享批处理脚本，而不要求每位使用者搭建开发环境。
-- 开发者统一发布脚本版本，操作员只填写参数并执行，避免误改源码。
-- 企业保留现有认证体系，同时在 AutoScript Hub 内独立控制脚本权限。
-- 输入文件较大或较敏感，需要在员工电脑本地处理，只集中管理任务和审计信息。
-- 脚本依赖复杂、版本冲突频繁，希望每个脚本拥有可复用的隔离环境。
+## 架构与数据边界
 
-## 正式交付形态
+```text
+服务端（Linux / Docker）             Windows 执行端
+FastAPI + React + SQLite   ← API →   桌面 UI + 后台 Agent + Updater
+脚本版本、权限、调度与历史             依赖环境、脚本执行与本机文件
+```
 
-- 服务端：FastAPI、React 和 SQLite 单实例镜像，同一镜像支持 `linux/arm64` 与 `linux/amd64`。
-- 客户端：`AutoScript-Hub-Setup-<version>.exe`，包含桌面 UI、后台 Agent、Updater 和私有 Python 运行时。
-- 脚本开发：仓库提供 [autoscript-script-authoring Skill](skills/autoscript-script-authoring/SKILL.md) 和严格契约验证工具，Release 可同时分发独立开发包。
-- 安全边界：客户端凭据使用 Windows DPAPI 保存；外部认证、私有服务地址和角色映射通过服务端私有环境变量配置。
+- **服务端**：单实例 SQLite，镜像支持 `linux/amd64` 与 `linux/arm64`；保存脚本包和版本、用户与分组、任务参数、运行记录，以及同步的日志和诊断信息。
+- **Windows 客户端**：安装包自带私有 Python 运行时，按依赖指纹创建并复用隔离环境；输入和结果文件通常位于执行电脑。安装版关闭 UI 后，正在执行的任务可继续完成。
+- **不是“所有业务数据永不上传”**：参数、日志和工单诊断可能包含业务信息，脚本也可自行访问网络或上传文件。发布前应审查代码、参数和日志内容，按实际场景配置访问控制与脱敏。
+- **依赖隔离不是安全沙盒**：脚本以当前 Windows 用户权限运行，只执行可信代码。客户端保存的凭据使用 Windows DPAPI；服务端密钥和外部认证配置应保存在私有环境配置中。
 
-## 局域网 Docker 启动
+## 核心能力
 
-以下命令适用于 ARM64 与 x86-64 Linux：
+- **脚本市场与版本管理**：发布、安装和更新脚本，记录版本及变更说明；提供脚本契约、验证工具和 AI 编写 Skill。
+- **角色与分组权限**：管理员管理全局资源，开发者管理所属分组脚本，操作员安装执行。角色决定操作能力，分组决定资源范围；用户和脚本可属于多个分组。
+- **执行与排障**：任务调度、实时日志、取消任务、执行历史、失败工单和结果文件入口。
+- **受限离线执行**：已缓存脚本需先联网同步授权，授权快照最长有效 7 天；撤权在下一次成功同步后生效，完全离线设备上的已下载文件无法即时召回。详见[权限与离线边界](docs/人员分组与脚本市场.md)。
+- **可验证更新**：Ed25519 签名清单、安装包长度和 SHA-256 校验；支持公开源及局域网缓存。内置账号可用，企业外部身份认证为可选配置。
+
+## 安全快速开始
+
+### 1. 部署服务端
+
+在 Linux 主机安装 Docker Engine 和 Compose 插件，从正式 Release 获取部署包并解压；在包含 `deploy/` 的目录执行（完整源码仓库也可使用这些命令）：
 
 ```bash
 cp deploy/.env.example deploy/.env
-# 编辑 deploy/.env：至少修改 JWT_SECRET、ADMIN_PASSWORD、AUTOSCRIPT_DATA_DIR、UID/GID
-mkdir -p /opt/autoscript-hub/data
-docker compose --env-file deploy/.env -f deploy/compose.yaml up -d
-curl http://127.0.0.1:8000/api/health/ready
+id -u
+id -g
 ```
 
-同一局域网设备访问 `http://<服务器IP>:8000`。若在完整源码仓库中验证镜像：
+**先编辑 `deploy/.env`，再启动**：
+
+- 将 `AUTOSCRIPT_SERVER_IMAGE` 明确设为 `ghcr.io/czf39631/autoscript-hub-server:1.2.4`；源码中的示例仍含旧版本，不能直接作为最新正式版使用。
+- 替换所有 `CHANGE_ME` 值。`JWT_SECRET` 使用至少 32 字符的独立随机密钥，`ADMIN_PASSWORD` 使用至少 12 字符的强密码；不要提交或分享真实 `.env`。
+- 设置 `AUTOSCRIPT_DATA_DIR`，并让 `AUTOSCRIPT_UID` / `AUTOSCRIPT_GID` 与该目录所有者一致。下例假设使用 `/opt/autoscript-hub/data` 和当前用户的 UID/GID。
+- 默认绑定 `0.0.0.0:8000`；用防火墙限制可信网络访问，不要直接暴露公网。跨不可信网络应配置 HTTPS 反向代理。
 
 ```bash
-docker compose --env-file deploy/.env \
-  -f deploy/compose.yaml -f deploy/compose.local.yaml up -d --build
+sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/autoscript-hub/data
+docker compose --env-file deploy/.env -f deploy/compose.yaml up -d
+docker compose --env-file deploy/.env -f deploy/compose.yaml ps
+curl --fail http://127.0.0.1:8000/api/health/ready
 ```
 
-完整的备份、恢复、升级、回滚和镜像代理说明见 [docs/0.9-deployment-runbook.md](docs/0.9-deployment-runbook.md)。维护电脑可配置一次 `ops/server/remote-upgrade.env`，之后直接运行 `python ops/server/remote_upgrade.py`，固定执行备份、升级、迁移验证和失败回滚流程。
+若修改端口，请同步修改检查地址。确认 `database`、`data_dir`、`migration` 均为 `ok`，再从可信网络访问 `http://<服务器地址>:8000`。只运行一个服务端副本；升级前备份数据库和 `.env`，不要删除持久化目录。备份、恢复、源码镜像构建和远程升级见[部署运维指南](docs/0.9-deployment-runbook.md)（含历史版本示例，请使用已发布的目标版本）。
 
-## Windows 客户端
+### 2. 安装 Windows 执行端
 
-运行 Release 中的 `AutoScript-Hub-Setup-<version>.exe`。安装器默认按当前用户安装到 `%LOCALAPPDATA%\Programs\AutoScript Hub`，可变数据保存在 `%LOCALAPPDATA%\AutoScriptHub`，升级和普通卸载不会删除这些数据。
+下载 `AutoScript-Hub-Setup-1.2.4.exe`，核对 Release 的 `SHA256SUMS.txt` 后安装。无需另外安装 Python、Node.js 或 Git。首次启动通过**初始化向导**填写服务端地址和账号，不要把密码写进命令行。
 
-首次启动向导填写局域网服务端地址和账号。桌面 UI、后台 Agent 和 Updater 分别是独立 EXE；关闭 UI 不会终止 Agent 正在执行的脚本。
+正式版默认安装到 `%LOCALAPPDATA%\Programs\AutoScript Hub`，数据保存在 `%LOCALAPPDATA%\AutoScriptHub`。升级和普通卸载不会删除这些数据。
 
-“设置 → 客户端更新”可检查、验证和安装更新，“更新说明”可查看当前及历史版本内容。重要更新默认在升级后的首次运行中提醒一次，也可关闭自动弹窗。客户端默认优先从 [Gitee 镜像](https://gitee.com/chuzifeng/auto-script_-hub) 获取签名更新清单，失败后自动尝试 GitHub；安装包按已验签清单中的可信 URL 下载。Git Raw 或局域网清单地址也可逐行填写。客户端不执行 `git pull`，也不保存仓库 Token 或 SSH Key。
+在“设置 → 客户端更新”检查更新，“更新说明”查看版本变化；重要更新可在升级后首次运行时提醒一次，也可关闭自动弹窗。客户端依次尝试服务端发布缓存、显式配置的清单地址和 Gitee Release；安装包按已验签清单中的地址下载（可指向 GitHub），不依赖 GitHub Release API 检查版本。局域网源也执行签名、长度与哈希校验。客户端不执行 `git pull`，不需要保存仓库 Token 或 SSH Key。
 
-## 开发启动
+### 3. 区分 Preview 与正式安装
 
-推荐 Python 3.11 和 Node.js 20：
+Preview 使用独立 AppId、安装目录、数据根 `%LOCALAPPDATA%\AutoScriptHubPreview` 和本地端口；默认开发服务地址为 `http://127.0.0.1:8765`，暂停在线更新，手动安装独立 Preview。**Beta / Stable 共用安装和数据，Beta 不是隔离测试环境**。用户主动指定的共享输出目录或正式服务不在默认隔离保证内。详见[Preview 安装与数据隔离](docs/Preview安装与数据隔离.md)。
+
+## 开发与验证
+
+使用 **Windows、Python 3.11、Node.js 20.19+（或 22.13+ / 24+）**。以下是开发源码示例，不用于升级正式安装。
+
+使用全新、仅含源码的克隆目录，不复制生产 `config.json`、客户端配置、凭据或业务数据；后端兼容加载根目录配置，仅设置数据路径不等于隔离所有旧配置。使用干净终端，不继承生产环境变量。以下数据根放在仓库外，服务端与客户端分开：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt -r client\requirements.txt pytest==7.4.3 PyYAML==6.0.2
-cd frontend
-npm ci
-npm test
-npm run build
-cd ..
-# 首次启动必须设置强凭据；JWT_SECRET 至少 32 字符，管理员密码至少 12 字符
-$env:JWT_SECRET = python -c "import secrets; print(secrets.token_urlsafe(48))"
-$env:ADMIN_PASSWORD = Read-Host "设置管理员密码"
-.\.venv\Scripts\python.exe backend\init_db.py
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
+$env:DATA_DIR = Join-Path $env:LOCALAPPDATA "AutoScriptHubDev\server"
+$env:DATABASE_URL = "sqlite:///" + ($env:DATA_DIR.Replace('\', '/') + "/autoscript.db")
+New-Item -ItemType Directory -Force $env:DATA_DIR | Out-Null
+$env:JWT_SECRET = & .\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
+$env:ADMIN_USERNAME = "devadmin"
+$secret = Read-Host "设置开发管理员密码（至少 12 字符）" -AsSecureString
+$env:ADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+$env:EXTERNAL_AUTH_ENABLED = "false"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
 
-另一终端启动源码客户端：
+服务启动时自动迁移并初始化数据库。密码不进入命令历史，但会作为服务进程环境变量使用；停止服务后关闭该终端。
+
+另一终端在仓库根目录启动 React 开发页面：
 
 ```powershell
-.\.venv\Scripts\python.exe -m client.start <用户名> <密码>
+cd frontend
+npm ci
+npm run dev
 ```
 
-完整验证：
+访问 `http://localhost:3000`，Vite 将 `/api` 代理到 `127.0.0.1:8000`。此页面用于服务端和前端开发；实际执行脚本仍需要 Windows Agent。
+
+若需调试源码客户端，在另一个干净 PowerShell 终端、仓库根目录执行：
+
+```powershell
+$env:AUTOSCRIPT_INSTALL_FLAVOR = "preview"
+$env:AUTOSCRIPT_CLIENT_DATA_DIR = Join-Path $env:LOCALAPPDATA "AutoScriptHubDev\client"
+cd frontend
+npm run build
+cd ..
+New-Item -ItemType Directory -Force client\ui\static | Out-Null
+Copy-Item frontend\dist\* client\ui\static -Recurse -Force
+.\.venv\Scripts\python.exe -m client.ui.main
+```
+
+向导中将服务地址改为 `http://127.0.0.1:8000`，只使用开发账号；向导完成时会通过 DPAPI 保存凭据，供 Agent 无密码参数启动。向导完成后，再运行一次 `python -m client.ui.main`（使用上述虚拟环境 Python）。在具有相同两个 `AUTOSCRIPT_*` 环境变量的独立终端，用 `.\.venv\Scripts\python.exe -m client.agent.main` 启动 Agent。不要使用正式客户端数据根，也不要与其他 Preview 共用端口运行。
+
+在同一隔离开发环境中验证（仓库根目录）：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m compileall -q backend client shared release skills
 cd frontend
 npm test
 npm run lint
 npm run build
 ```
 
-## 发布与 Skill
+Linux CI 的 Python 测试范围为 `shared/tests backend/tests test/release`；Windows 客户端相关验证应在 Windows 完成。
 
-- 历史发布流程、所需 Secret、资产和 0.9 → 1.0 晋级规则：[docs/0.9-release-guide.md](docs/0.9-release-guide.md)
-- 历史 0.9 验收证据清单：[docs/0.9-acceptance-checklist.md](docs/0.9-acceptance-checklist.md)
-- Skill 验证：`python skills/autoscript-script-authoring/scripts/validate_script.py <script.py|script.zip>`
-- Skill 打包：`python skills/autoscript-script-authoring/scripts/package_script.py <source> <output.zip>`
-- 人员分组、脚本市场隔离与升级兼容：[docs/人员分组与脚本市场.md](docs/人员分组与脚本市场.md)
-- 更新说明内容与重要更新提醒规则：[docs/更新说明维护.md](docs/更新说明维护.md)
-- Gitee 代码镜像、默认更新源与自动同步配置：[docs/Gitee镜像与更新.md](docs/Gitee镜像与更新.md)
+## 文档入口
 
-## 关键目录
+- [部署、备份、恢复与升级](docs/0.9-deployment-runbook.md)
+- [v1.2.4 发布记录](docs/releases/v1.2.4-发布记录.md)
+- [人员分组、脚本市场与撤权规则](docs/人员分组与脚本市场.md)
+- [Preview 安装与数据隔离](docs/Preview安装与数据隔离.md)
+- [多语言支持与词条维护](docs/多语言支持.md)
+- [Gitee 镜像与更新策略](docs/Gitee镜像与更新.md) · [更新说明维护](docs/更新说明维护.md)
+- [脚本编写 Skill 与契约](skills/autoscript-script-authoring/SKILL.md)
 
-```text
-backend/       FastAPI、数据库模型和 Alembic 迁移
-frontend/      React 管理页面和桌面 UI 静态资源
-client/        Windows UI、Agent、私有运行时和签名更新器
-shared/        服务端、客户端和 Skill 共用的脚本/更新契约
-deploy/        Docker Compose 与环境变量示例
-ops/server/    备份、恢复、升级和回滚脚本
-release/       Windows 构建和 Release 自动化
-skills/        autoscript-script-authoring Skill
+脚本验证与打包（在已安装上述 Python 依赖的环境中）：
+
+```bash
+python skills/autoscript-script-authoring/scripts/validate_script.py <script.py|script.zip>
+python skills/autoscript-script-authoring/scripts/package_script.py <source> <output.zip>
 ```
+
+代码入口：`backend/` 服务端、`frontend/` React、`client/` Windows 执行端、`shared/` 共用契约、`deploy/` 部署、`ops/server/` 运维、`release/` 构建、`skills/` 脚本开发。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)，允许商业使用、修改和分发，但须保留版权及许可声明，且不提供担保。第三方依赖、随包运行时及其他第三方组件保留各自版权，并遵循各自许可证；本项目的 MIT 许可不替代其许可条款。
