@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, Script, ScriptVersion, UserScript
+from app.models import User, Script, ScriptVersion, UserScript, Run, AuditLog
 from app.schemas import GroupBrief, ScriptBrief, ScriptDetail, ScriptGroupUpdate, ScriptVersionBrief
 from app.auth import get_current_user, require_role
 from app.services.script_storage import save_script_file
 from app.services.audit import write_audit
+from app.services.script_lifecycle import lock_script_for_lifecycle
 from app.services.groups import get_or_create_default_group
 from app.services.script_access import (
     active_group_ids_for_user,
@@ -405,6 +406,37 @@ def list_versions(
     return db.query(ScriptVersion).filter(
         ScriptVersion.script_id == script_id
     ).order_by(ScriptVersion.version.desc()).all()
+
+
+@router.delete("/{script_id}")
+def delete_script(
+    script_id: int,
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    lock_script_for_lifecycle(db, script_id)
+    script = db.query(Script).filter(Script.id == script_id).first()
+    if script is None:
+        raise HTTPException(status_code=404, detail="脚本不存在")
+    if script.is_deleted:
+        db.rollback()
+        return {"message": "脚本已删除"}
+    # Include even hidden runs: hiding a record does not stop its execution.
+    active = db.query(Run.id).filter(
+        Run.script_id == script_id,
+        Run.status.in_(["pending", "running"]),
+    ).first()
+    if active:
+        raise HTTPException(status_code=409, detail="脚本有待执行或运行中的任务，不能删除")
+    script.is_deleted = True
+    script.updated_by = current_user.id
+    # Atomic with the tombstone; no script content, paths or params in audit.
+    db.add(AuditLog(
+        user_id=current_user.id, username=current_user.username,
+        action="delete_script", target_type="script", target_id=script_id,
+    ))
+    db.commit()
+    return {"message": "脚本已删除"}
 
 
 @router.post("/{script_id}/disable")

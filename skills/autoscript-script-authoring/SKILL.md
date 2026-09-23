@@ -26,6 +26,12 @@ Create or repair scripts against the versioned AutoScript Hub contract, then pro
 
 10. Validate the produced ZIP again with `--strict`, then report the artifact path, dependency list, parameters, and any runtime assumptions.
 
+## 可选本机浏览器选择
+
+契约及 standalone snapshot 版本为 1.1.0，向后兼容六种既有参数类型。业务需要时按 [契约参考](references/contract.md) 使用 `type: text, widget: browser, default: ''`，不要新增 `type: browser` 或强加到所有模板。
+
+让新客户端参数表单从本机 `/detect-browsers` 动态列出浏览器；保持 `config()` 为严格静态字面量，脚本不调用平台内部包。`main()` 接收普通路径字符串，可选空值沿用平台默认；旧 1.2.4 忽略 widget 并回退手填文本，仍可正常解析依赖。这是脚本参数选择，不是更改系统默认路径。客户端仅检查非空路径为文件，服务端不查本机路径；已安装不等于能启动或兼容，不执行浏览器或 shell 来做契约校验。依赖写入 `requirements`，不让脚本自行运行 pip。
+
 ## Repair Existing Scripts
 
 - First run the validator without editing and record each issue code. This is safe for top-level side effects because validation only parses the candidate; it never imports or executes it.

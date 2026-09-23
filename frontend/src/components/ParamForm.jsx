@@ -1,4 +1,5 @@
 import React from 'react'
+import BrowserPicker from './BrowserPicker'
 import { Form, Input, InputNumber, Select, Switch, Button, Space, Modal, message } from 'antd'
 import { FolderOpenOutlined, FileOutlined } from '@ant-design/icons'
 
@@ -191,6 +192,13 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
       <Form form={form} layout="horizontal" onFinish={onFinish} initialValues={initVals}>
         {params.map(p => {
           const rules = buildRules(p)
+          if (p.type === 'text' && p.widget === 'browser') {
+            return (
+              <Form.Item key={p.key} name={p.key} label={p.label} rules={rules} extra={p.help}>
+                <BrowserPicker label={p.label || p.key} />
+              </Form.Item>
+            )
+          }
           switch (p.type) {
             case 'number':
               return (

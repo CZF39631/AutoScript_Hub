@@ -1,17 +1,23 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
-import { Table, Button, Tag, Upload, Modal, Input, Form, Space, Select, Tabs, message } from 'antd'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { Table, Button, Tag, Upload, Modal, Input, Form, Space, Select, Tabs, Alert, message } from 'antd'
 import { UploadOutlined, PlusOutlined, StopOutlined, CheckOutlined, SearchOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useConnection } from '../contexts/ConnectionContext'
 import api from '../api/client'
 import { loadScriptCollections } from '../api/offlineData'
+import { canDeleteMarketScript, canConfirmDeletion, deleteConfirmedScript, deletionError } from '../utils/scriptDeletion'
 import { formatScriptVersion } from '../utils/scriptVersion'
 import { activeGroupOptions, defaultGroupIds, groupIds } from '../utils/groups'
 
 const renderGroups = groups => groups?.length ? groups.map(group => <Tag key={group.id}>{group.name}</Tag>) : <span style={{ color: '#999' }}>未分组</span>
 
 export default function Scripts() {
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleteName, setDeleteName] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const deletionLock = useRef(false)
   const [myScripts, setMyScripts] = useState([])
   const [marketScripts, setMarketScripts] = useState([])
   const [manageableScripts, setManageableScripts] = useState([])
@@ -79,6 +85,31 @@ export default function Scripts() {
     if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
+
+  const confirmation = { user, online, target: deleteTarget, name: deleteName, pending: deleting }
+  const openDelete = script => {
+    if (deletionLock.current || !canDeleteMarketScript(user, online)) return
+    setDeleteTarget({ id: script.id, name: script.name })
+    setDeleteName('')
+    setDeleteError('')
+  }
+  const confirmDelete = async () => {
+    if (deletionLock.current || !canConfirmDeletion(confirmation)) return
+    deletionLock.current = true
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      await deleteConfirmedScript(api, confirmation)
+      setDeleteTarget(null)
+      message.success('已从市场删除，历史记录已保留')
+      loadCollections()
+    } catch (error) {
+      setDeleteError(deletionError(error))
+    } finally {
+      deletionLock.current = false
+      setDeleting(false)
+    }
+  }
 
   const onInstall = async (script) => {
     try {
@@ -191,10 +222,11 @@ export default function Scripts() {
     { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.latest_semantic_version, r.latest_version) },
     { title: '可见分组', dataIndex: 'groups', key: 'groups', render: renderGroups },
     { title: '状态', dataIndex: 'status', key: 'status', width: 70, render: s => <Tag color={s === 'active' ? 'green' : 'red'}>{s === 'active' ? '启用' : '禁用'}</Tag> },
-    { title: '操作', key: 'action', width: 190, render: (_, r) => <Space>
+    { title: '操作', key: 'action', width: canDeleteMarketScript(user, online) ? 310 : 190, render: (_, r) => <Space wrap>
       <Button type="link" size="small" onClick={() => nav(`/scripts/${r.id}`)}>详情</Button>
       {r.can_manage_groups && <Button type="link" size="small" disabled={!groupsReady} onClick={() => openGroupManager(r)}>分组</Button>}
       {r.can_manage && <Button type="link" size="small" icon={r.status === 'active' ? <StopOutlined /> : <CheckOutlined />} onClick={() => onToggle(r)}>{r.status === 'active' ? '禁用' : '启用'}</Button>}
+      {canDeleteMarketScript(user, online) && <Button type="link" danger size="small" disabled={deleting} onClick={() => openDelete(r)}>从市场删除</Button>}
     </Space> },
   ]
 
@@ -263,6 +295,21 @@ export default function Scripts() {
           )
         }] : []),
       ]} />
+
+      <Modal title="从市场删除脚本" open={Boolean(deleteTarget)}
+        onCancel={() => { if (!deletionLock.current) setDeleteTarget(null) }}
+        onOk={confirmDelete} okText="确认从市场删除" cancelText="取消"
+        confirmLoading={deleting} closable={!deleting} keyboard={!deleting}
+        maskClosable={!deleting} cancelButtonProps={{ disabled: deleting }}
+        okButtonProps={{ danger: true, disabled: !canConfirmDeletion(confirmation) }}>
+        <Alert type="warning" showIcon title="影响所有可访问该脚本的用户"
+          description="这是从市场删除脚本，不是卸载本机。历史执行记录、工单和文件会保留；有待执行或运行中的任务时无法删除，不会自动取消任务。" />
+        <p style={{ overflowWrap: 'anywhere' }}>请输入脚本名「{deleteTarget?.name}」确认删除：</p>
+        <Input aria-label="确认删除的脚本名" value={deleteName} disabled={deleting}
+          onChange={event => setDeleteName(event.target.value)} onPressEnter={confirmDelete} />
+        {!canDeleteMarketScript(user, online) && <Alert type="warning" title="仅在线管理员可以删除，请恢复连接并确认权限。" />}
+        {deleteError && <Alert style={{ marginTop: 12 }} type="error" showIcon title={deleteError} />}
+      </Modal>
 
       <Modal title="上传脚本" open={uploadOpen} onCancel={() => setUploadOpen(false)}
         confirmLoading={uploading} onOk={() => form.submit()} okText="上传">

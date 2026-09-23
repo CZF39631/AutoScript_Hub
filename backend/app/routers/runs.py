@@ -15,6 +15,7 @@ from app.schemas import ExecuteRequest, RunBrief, RunDetail
 from app.auth import get_current_user, require_role
 from app.config import LOGS_DIR, PROJECT_ROOT
 from app.services.audit import write_audit
+from app.services.script_lifecycle import lock_script_for_lifecycle
 from app.services.script_access import (
     accessible_script_ids,
     accessible_user_ids,
@@ -156,6 +157,14 @@ def execute_script(
                 raise HTTPException(status_code=409, detail="当前有任务正在执行,请等待完成")
         else:
             raise HTTPException(status_code=409, detail="当前有任务正在执行,请等待完成")
+
+    # Stale-pending cleanup above may commit. Acquire the lifecycle write lock
+    # only now and retain it through Run creation; recheck authorization/status
+    # using fresh state so a concurrent deletion cannot leave a new pending run.
+    lock_script_for_lifecycle(db, req.script_id)
+    script = get_accessible_script_or_404(
+        db, current_user, req.script_id, require_active=True,
+    )
 
     # Validate params against config
     if script.config_json:
