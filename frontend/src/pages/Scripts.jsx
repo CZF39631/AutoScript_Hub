@@ -304,7 +304,10 @@ export default function Scripts() {
         okButtonProps={{ danger: true, disabled: !canConfirmDeletion(confirmation) }}>
         <Alert type="warning" showIcon title="影响所有可访问该脚本的用户"
           description="这是从市场删除脚本，不是卸载本机。历史执行记录、工单和文件会保留；有待执行或运行中的任务时无法删除，不会自动取消任务。" />
-        <p style={{ overflowWrap: 'anywhere' }}>请输入脚本名「{deleteTarget?.name}」确认删除：</p>
+        <p style={{ overflowWrap: 'anywhere' }}>请输入脚本名「<span
+          data-testid="delete-script-name"
+          style={{ userSelect: 'text', WebkitUserSelect: 'text', cursor: 'text' }}
+        >{deleteTarget?.name}</span>」确认删除：</p>
         <Input aria-label="确认删除的脚本名" value={deleteName} disabled={deleting}
           onChange={event => setDeleteName(event.target.value)} onPressEnter={confirmDelete} />
         {!canDeleteMarketScript(user, online) && <Alert type="warning" title="仅在线管理员可以删除，请恢复连接并确认权限。" />}
