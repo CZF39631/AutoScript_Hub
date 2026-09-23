@@ -118,7 +118,7 @@ button, input, select, textarea { font: inherit; }
 
 .preset-bar { margin-bottom: 18px; padding: 14px; background: rgba(246,246,248,.8); border: 1px solid var(--apple-border); border-radius: 14px; }
 
-/* 参数名列固定宽度；控件与其说明共用右列，不随标签长度错位。 */
+/* 参数名列固定宽度；说明收进问号，控件不随标签长度错位。 */
 .script-param-form { --param-label-width: 120px; --param-column-gap: 16px; }
 .script-param-form > .ant-form-item > .ant-form-item-row {
   display: grid;
@@ -143,7 +143,16 @@ button, input, select, textarea { font: inherit; }
   max-width: 100%;
   width: 100%;
 }
-.script-param-form .ant-form-item-extra { padding-top: 4px; overflow-wrap: anywhere; }
+.script-param-form > .ant-form-item { margin-bottom: 18px; }
+.script-param-form .ant-form-item-tooltip { cursor: help; }
+.script-param-form .ant-form-item-tooltip:focus-visible {
+  outline: 2px solid var(--apple-blue, #1677ff);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.browser-picker-row { display: flex; align-items: center; gap: 12px; }
+.browser-picker-control { flex: 1; min-width: 0; }
+.browser-picker-row > .ant-btn { flex: none; }
 .script-param-form .script-param-actions .ant-form-item-control { grid-column: 2; }
 @media (max-width: 575px) {
   .script-param-form { --param-label-width: 88px; --param-column-gap: 12px; }

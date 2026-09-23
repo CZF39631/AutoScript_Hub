@@ -39,6 +39,8 @@ export default function BrowserPicker({ value, onChange, id, label }) {
 
   return (
     <div style={{ minWidth: 0 }}>
+      <div className="browser-picker-row">
+      <div className="browser-picker-control">
       {manual ? (
         <Input
           id={id}
@@ -53,6 +55,7 @@ export default function BrowserPicker({ value, onChange, id, label }) {
         <Select
           ref={selectRef}
           id={id}
+          title={value || undefined}
           aria-busy={detecting}
           aria-label={label || id || '选择本机浏览器'}
           aria-describedby={descriptionId}
@@ -75,6 +78,7 @@ export default function BrowserPicker({ value, onChange, id, label }) {
           notFoundContent={status || '打开列表以检测本机浏览器'}
         />
       )}
+      </div>
       <Button
         type="link"
         size="small"
@@ -83,8 +87,8 @@ export default function BrowserPicker({ value, onChange, id, label }) {
       >
         {manual ? '切换到浏览器列表' : '手动输入路径'}
       </Button>
+      </div>
       <div id={descriptionId} style={wrap}>
-        {value && <div>当前路径：{value}</div>}
         <div role="status" aria-live="polite">
           {detecting && <Spin size="small" style={{ marginInlineEnd: 8 }} />}
           {status}
@@ -96,7 +100,6 @@ export default function BrowserPicker({ value, onChange, id, label }) {
             setRetry(number => number + 1)
           }}>重新检测</Button>
         )}
-        <Typography.Text type="secondary">留空沿用平台默认设置。检测仅表示已安装，不保证能启动或兼容所有脚本；不会自动更改当前路径。</Typography.Text>
       </div>
     </div>
   )
