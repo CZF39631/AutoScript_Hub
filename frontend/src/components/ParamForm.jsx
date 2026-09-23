@@ -189,7 +189,8 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
         </div>
       )}
 
-      <Form form={form} layout="horizontal" onFinish={onFinish} initialValues={initVals}>
+      <Form className="script-param-form" form={form} layout="horizontal" colon={false}
+        labelAlign="left" labelWrap onFinish={onFinish} initialValues={initVals}>
         {params.map(p => {
           const rules = buildRules(p)
           if (p.type === 'text' && p.widget === 'browser') {
@@ -208,13 +209,13 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
               )
             case 'select':
               return (
-                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules}>
+                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules} extra={p.help}>
                   <Select options={(p.options || []).map(o => ({ label: o, value: o }))} />
                 </Form.Item>
               )
             case 'checkbox':
               return (
-                <Form.Item key={p.key} name={p.key} label={p.label} valuePropName="checked">
+                <Form.Item key={p.key} name={p.key} label={p.label} valuePropName="checked" extra={p.help}>
                   <Switch />
                 </Form.Item>
               )
@@ -234,14 +235,14 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
               )
             default:
               return (
-                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules}>
+                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules} extra={p.help}>
                   <Input />
                 </Form.Item>
               )
           }
         })}
-        <Form.Item>
-          <Space>
+        <Form.Item className="script-param-actions">
+          <Space wrap>
             <Button type="primary" htmlType="submit">执行脚本</Button>
             {onSave && (
               <Space>
