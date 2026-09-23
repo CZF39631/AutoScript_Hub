@@ -3,7 +3,8 @@ import os
 import threading
 import urllib.request
 import urllib.error
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler
+from client.runtime.local_http import HTTPServer
 
 import webview
 
