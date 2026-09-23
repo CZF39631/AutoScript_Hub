@@ -9,11 +9,25 @@ export default function BrowserPicker({ value, onChange, id, label }) {
   const { agentOnline, localApi } = useConnection()
   const descriptionId = useId()
   const selectRef = useRef(null)
+  const controlRef = useRef(null)
+  const [listHeight, setListHeight] = useState(240)
   const [manual, setManual] = useState(false)
   const [open, setOpen] = useState(false)
   const [retry, setRetry] = useState(0)
   const [result, setResult] = useState({ state: 'idle', browsers: [] })
   const available = agentOnline && Boolean(localApi)
+
+  const changeOpen = (nextOpen) => {
+    if (nextOpen && controlRef.current) {
+      const control = controlRef.current
+      if (window.innerHeight - control.getBoundingClientRect().bottom < 112) {
+        control.scrollIntoView({ block: 'center', behavior: 'instant' })
+      }
+      setListHeight(Math.max(48, Math.min(240,
+        window.innerHeight - control.getBoundingClientRect().bottom - 16)))
+    }
+    setOpen(nextOpen)
+  }
 
   useEffect(() => {
     if (!open || !available) return undefined
@@ -40,7 +54,7 @@ export default function BrowserPicker({ value, onChange, id, label }) {
   return (
     <div style={{ minWidth: 0 }}>
       <div className="browser-picker-row">
-      <div className="browser-picker-control">
+      <div className="browser-picker-control" ref={controlRef}>
       {manual ? (
         <Input
           id={id}
@@ -64,7 +78,10 @@ export default function BrowserPicker({ value, onChange, id, label }) {
           onChange={path => onChange?.(path ?? '')}
           allowClear
           open={open}
-          onOpenChange={setOpen}
+          onOpenChange={changeOpen}
+          placement="bottomLeft"
+          popupAlign={{ overflow: { adjustX: true, adjustY: false, shiftY: false } }}
+          listHeight={listHeight}
           placeholder="选择本机浏览器"
           loading={detecting}
           virtual={false}
