@@ -1,6 +1,7 @@
 import React from 'react'
+import BrowserPicker from './BrowserPicker'
 import { Form, Input, InputNumber, Select, Switch, Button, Space, Modal, message } from 'antd'
-import { FolderOpenOutlined, FileOutlined } from '@ant-design/icons'
+import { FolderOpenOutlined, FileOutlined, QuestionCircleOutlined } from '@ant-design/icons'
 
 async function nativeOpenFile() {
   if (window.pywebview && window.pywebview.api) {
@@ -188,52 +189,54 @@ export default function ParamForm({ params, initialValues, presets, onSubmit, on
         </div>
       )}
 
-      <Form form={form} layout="horizontal" onFinish={onFinish} initialValues={initVals}>
+      <Form className="script-param-form" form={form} layout="horizontal" colon={false}
+        labelAlign="left" labelWrap onFinish={onFinish} initialValues={initVals}>
         {params.map(p => {
           const rules = buildRules(p)
-          switch (p.type) {
-            case 'number':
-              return (
-                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules} extra={p.help}>
-                  <InputNumber min={p.min} max={p.max} style={{ width: '100%' }} />
-                </Form.Item>
-              )
-            case 'select':
-              return (
-                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules}>
-                  <Select options={(p.options || []).map(o => ({ label: o, value: o }))} />
-                </Form.Item>
-              )
-            case 'checkbox':
-              return (
-                <Form.Item key={p.key} name={p.key} label={p.label} valuePropName="checked">
-                  <Switch />
-                </Form.Item>
-              )
-            case 'file':
-              return (
-                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules}
-                  extra={p.help || '选择文件或手动输入绝对路径'}>
-                  <FilePicker type="file" placeholder="文件绝对路径,如 C:\data\urls.txt" />
-                </Form.Item>
-              )
-            case 'folder':
-              return (
-                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules}
-                  extra={p.help || '选择目录或手动输入绝对路径'}>
-                  <FilePicker type="folder" placeholder="目录绝对路径,如 C:\data\output" />
-                </Form.Item>
-              )
-            default:
-              return (
-                <Form.Item key={p.key} name={p.key} label={p.label} rules={rules}>
-                  <Input />
-                </Form.Item>
-              )
+          const help = p.help || (p.type === 'file' ? '选择文件或手动输入绝对路径'
+            : p.type === 'folder' ? '选择目录或手动输入绝对路径' : '')
+          const description = p.widget === 'browser'
+            ? [help, '检测仅表示已安装，不保证能启动或兼容所有脚本。'].filter(Boolean).join(' ')
+            : help
+          const tooltip = description ? {
+            title: description,
+            trigger: ['hover', 'focus'],
+            icon: <QuestionCircleOutlined tabIndex={0} aria-label={`${p.label || p.key}说明`} />,
+          } : undefined
+          let control
+          if (p.type === 'text' && p.widget === 'browser') {
+            control = <BrowserPicker label={p.label || p.key} />
+          } else {
+            switch (p.type) {
+              case 'number':
+                control = <InputNumber min={p.min} max={p.max} style={{ width: '100%' }} />
+                break
+              case 'select':
+                control = <Select options={(p.options || []).map(o => ({ label: o, value: o }))} />
+                break
+              case 'checkbox':
+                control = <Switch />
+                break
+              case 'file':
+                control = <FilePicker type="file" placeholder="文件绝对路径,如 C:\data\urls.txt" />
+                break
+              case 'folder':
+                control = <FilePicker type="folder" placeholder="目录绝对路径,如 C:\data\output" />
+                break
+              default:
+                control = <Input />
+            }
           }
+          return (
+            <Form.Item key={p.key} name={p.key} label={p.label || p.key} tooltip={tooltip}
+              rules={p.type === 'checkbox' ? undefined : rules}
+              valuePropName={p.type === 'checkbox' ? 'checked' : 'value'}>
+              {control}
+            </Form.Item>
+          )
         })}
-        <Form.Item>
-          <Space>
+        <Form.Item className="script-param-actions">
+          <Space wrap>
             <Button type="primary" htmlType="submit">执行脚本</Button>
             {onSave && (
               <Space>

@@ -117,6 +117,46 @@ button, input, select, textarea { font: inherit; }
 .ant-pagination-item, .ant-pagination-prev button, .ant-pagination-next button { border-radius: 9px !important; }
 
 .preset-bar { margin-bottom: 18px; padding: 14px; background: rgba(246,246,248,.8); border: 1px solid var(--apple-border); border-radius: 14px; }
+
+/* 参数名列固定宽度；说明收进问号，控件不随标签长度错位。 */
+.script-param-form { --param-label-width: 120px; --param-column-gap: 16px; }
+.script-param-form > .ant-form-item > .ant-form-item-row {
+  display: grid;
+  grid-template-columns: var(--param-label-width) minmax(0, 1fr);
+  column-gap: var(--param-column-gap);
+  align-items: start;
+}
+.script-param-form .ant-form-item .ant-form-item-label {
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px 0 0;
+  text-align: left;
+}
+.script-param-form .ant-form-item-label > label {
+  height: auto;
+  line-height: 22px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.script-param-form .ant-form-item .ant-form-item-control {
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+.script-param-form > .ant-form-item { margin-bottom: 18px; }
+.script-param-form .ant-form-item-tooltip { cursor: help; }
+.script-param-form .ant-form-item-tooltip:focus-visible {
+  outline: 2px solid var(--apple-blue, #1677ff);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.browser-picker-row { display: flex; align-items: center; gap: 12px; }
+.browser-picker-control { flex: 1; min-width: 0; }
+.browser-picker-row > .ant-btn { flex: none; }
+.script-param-form .script-param-actions .ant-form-item-control { grid-column: 2; }
+@media (max-width: 575px) {
+  .script-param-form { --param-label-width: 88px; --param-column-gap: 12px; }
+}
 .log-viewer__header { display: flex; align-items: center; gap: 8px; margin: 18px 0 10px; }
 .log-viewer__status { color: #34c759; font-size: 12px; font-weight: 500; }
 .log-viewer__terminal { margin: 0; padding: 18px; max-height: 420px; overflow: auto; border: 1px solid rgba(255,255,255,.08); border-radius: 14px; background: #1c1c1e; color: #e5e5e7; box-shadow: inset 0 1px rgba(255,255,255,.06), 0 12px 28px rgba(0,0,0,.12); font: 12.5px/1.6 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }

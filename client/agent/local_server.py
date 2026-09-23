@@ -4,7 +4,8 @@ import logging
 import os
 import threading
 import winreg
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler
+from client.runtime.local_http import ThreadingHTTPServer
 from typing import Callable
 
 logger = logging.getLogger(__name__)

@@ -19,7 +19,7 @@ import zipfile
 from packaging.requirements import InvalidRequirement, Requirement
 
 
-SCRIPT_CONTRACT_VERSION = "1.0.0"
+SCRIPT_CONTRACT_VERSION = "1.1.0"
 PARAMETER_TYPES = {"text", "number", "file", "folder", "select", "checkbox"}
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
@@ -165,6 +165,12 @@ def _validate_parameter_definitions(config: dict) -> list[ValidationIssue]:
         if param_type not in PARAMETER_TYPES:
             issues.append(_issue("params.type", "参数 type 不受支持", f"{path}.type"))
             continue
+        if "widget" in definition:
+            widget = definition["widget"]
+            if not isinstance(widget, str) or widget != "browser":
+                issues.append(_issue("params.widget", "widget 必须是字符串 browser", f"{path}.widget"))
+            elif param_type != "text":
+                issues.append(_issue("params.widget-type", "browser widget 仅支持 type text", f"{path}.widget"))
         if not isinstance(definition.get("label"), str) or not definition.get("label", "").strip():
             issues.append(_issue("params.label", "参数 label 不能为空", f"{path}.label"))
         if "required" in definition and not isinstance(definition["required"], bool):
@@ -349,7 +355,11 @@ def validate_params(
             errors.append(f"{label} 必须是布尔值")
         elif param_type in {"text", "file", "folder"} and not isinstance(value, str):
             errors.append(f"{label} 必须是字符串")
-        elif check_paths and param_type == "file" and not os.path.isfile(value):
+        elif (
+            check_paths
+            and (param_type == "file" or (param_type == "text" and definition.get("widget") == "browser"))
+            and not os.path.isfile(value)
+        ):
             errors.append(f"{label} 文件不存在: {value}")
         elif check_paths and param_type == "folder" and not os.path.isdir(value):
             errors.append(f"{label} 文件夹不存在: {value}")
