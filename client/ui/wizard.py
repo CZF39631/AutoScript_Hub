@@ -54,6 +54,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   <div class="panel active" id="p1">
     <label>服务端地址</label>
     <input id="server_url" value="http://127.0.0.1:8000" placeholder="例如：http://192.168.1.100:8000">
+    <label>客户端模式</label>
+    <select id="client_mode">
+      <option value="standard">标准模式（允许本地手工执行）</option>
+      <option value="managed">被控模式（仅执行管理员下发任务）</option>
+    </select>
     <div class="msg" id="m1"></div>
     <div class="btn-row">
       <button class="primary" onclick="goAccountStep()">下一步</button>
@@ -230,6 +235,7 @@ async function finish() {
   }
   var config = {
     server_url: document.getElementById('server_url').value,
+    client_mode: document.getElementById('client_mode').value,
     username: document.getElementById('username').value,
     password: document.getElementById('password').value,
     script_download_dir: document.getElementById('script_dir').value,

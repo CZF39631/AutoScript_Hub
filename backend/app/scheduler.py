@@ -6,6 +6,7 @@ Runs in a daemon thread started from FastAPI startup event. Two jobs:
   2. Log cleanup (design §5.12): daily at 03:00, archive logs older than 30 days,
      delete archives older than 90 days.
 """
+import json
 import logging
 import os
 import threading
@@ -16,7 +17,10 @@ from typing import Optional
 
 from app.config import LOGS_DIR, LOG_ARCHIVE_DIR, LOG_RETENTION_DAYS, LOG_ARCHIVE_RETENTION_DAYS, LOG_CLEANUP_HOUR
 from app.database import SessionLocal
-from app.models import Agent, Run
+from fastapi import HTTPException
+
+from app.models import Agent, AuditLog, ManagedSchedule, Run, User
+from app.services.run_dispatch import create_validated_run
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,7 @@ def _scheduler_loop() -> None:
     while True:
         try:
             _heartbeat_scan()
+            _managed_schedule_scan()
             _maybe_log_cleanup()
         except Exception:
             logger.exception("Scheduler iteration failed")
@@ -104,6 +109,148 @@ def _heartbeat_scan() -> None:
             logger.warning(
                 "Heartbeat scan: %d agents → offline, %d runs → failed",
                 len(stale_agents), len(stuck_runs),
+            )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _advance_next_run(due_at: datetime, interval_seconds: int, now: datetime) -> datetime:
+    """Advance a fixed-interval cursor beyond now in constant time."""
+    due_at = _ensure_aware(due_at)
+    now = _ensure_aware(now)
+    assert due_at is not None and now is not None
+    if due_at > now:
+        return due_at
+    elapsed_seconds = (now - due_at).total_seconds()
+    steps = int(elapsed_seconds // interval_seconds) + 1
+    return due_at + timedelta(seconds=steps * interval_seconds)
+
+
+def _utc_naive(value: datetime) -> datetime:
+    aware = _ensure_aware(value)
+    assert aware is not None
+    return aware.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
+    """Expire unclaimed work and materialize each due schedule at most once.
+
+    The schedule cursor always advances beyond ``now`` even when a previous run is
+    still active. This deliberately skips missed intervals instead of creating a
+    backlog for an offline or busy device.
+    """
+    now = _ensure_aware(now or datetime.now(timezone.utc))
+    assert now is not None
+    db = SessionLocal()
+    try:
+        expired = db.query(Run).filter(
+            Run.status == "pending",
+            Run.expires_at.isnot(None),
+            Run.expires_at <= now,
+            Run.is_deleted == False,
+        ).all()
+        for run in expired:
+            run.status = "expired"
+            run.finished_at = now
+            run.error_msg = run.error_msg or "任务超过领取有效期"
+            db.add(AuditLog(
+                user_id=run.requested_by,
+                username="scheduler",
+                action="managed_run.expire",
+                target_type="run",
+                target_id=run.id,
+                detail="schedule={}".format(run.schedule_id) if run.schedule_id else None,
+                created_at=now,
+            ))
+
+        due_schedules = db.query(ManagedSchedule).filter(
+            ManagedSchedule.enabled == True,
+            ManagedSchedule.is_deleted == False,
+            ManagedSchedule.next_run_at <= now,
+        ).order_by(ManagedSchedule.next_run_at.asc()).all()
+
+        for schedule in due_schedules:
+            due_at = _ensure_aware(schedule.next_run_at)
+            assert due_at is not None
+            schedule.next_run_at = _utc_naive(
+                _advance_next_run(due_at, schedule.interval_seconds, now)
+            )
+
+            original_expires_at = due_at + timedelta(seconds=schedule.expires_after_seconds)
+            if original_expires_at <= now:
+                db.add(AuditLog(
+                    user_id=schedule.created_by,
+                    username="scheduler",
+                    action="managed_schedule.missed",
+                    target_type="managed_schedule",
+                    target_id=schedule.id,
+                    detail="due_at={} expired_at={}".format(
+                        due_at.isoformat(), original_expires_at.isoformat()
+                    ),
+                    created_at=now,
+                ))
+                continue
+
+            active = db.query(Run).filter(
+                Run.schedule_id == schedule.id,
+                Run.status.in_(["pending", "running"]),
+                Run.is_deleted == False,
+            ).first()
+            if active:
+                continue
+
+            agent = db.query(Agent).filter(
+                Agent.id == schedule.agent_id,
+                Agent.mode == "managed",
+                Agent.enabled == True,
+                Agent.is_deleted == False,
+            ).first()
+            if not agent:
+                continue
+            owner = db.query(User).filter(
+                User.id == agent.user_id,
+                User.status == "active",
+                User.is_deleted == False,
+            ).first()
+            if not owner:
+                continue
+            try:
+                run = create_validated_run(
+                    db,
+                    run_user=owner,
+                    script_id=schedule.script_id,
+                    params=json.loads(schedule.params or "{}"),
+                    environment_id=schedule.environment_id,
+                    requested_by=schedule.created_by,
+                    dispatch_type="managed_schedule",
+                    target_agent_id=agent.id,
+                    schedule_id=schedule.id,
+                    scheduled_for=due_at,
+                    expires_at=original_expires_at,
+                    commit=False,
+                )
+            except (HTTPException, TypeError, json.JSONDecodeError) as exc:
+                logger.warning("Managed schedule %s was skipped: %s", schedule.id, exc)
+                continue
+            schedule.last_run_at = now
+            db.add(AuditLog(
+                user_id=schedule.created_by,
+                username="scheduler",
+                action="managed_schedule.materialize",
+                target_type="run",
+                target_id=run.id,
+                detail="schedule={}".format(schedule.id),
+                created_at=now,
+            ))
+
+        db.commit()
+        if expired or due_schedules:
+            logger.info(
+                "Managed schedule scan: %d pending expired, %d schedules processed",
+                len(expired), len(due_schedules),
             )
     except Exception:
         db.rollback()

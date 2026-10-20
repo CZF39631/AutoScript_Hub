@@ -1,20 +1,21 @@
 import json
 import os
 import time
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, Script, ScriptVersion, Run, Agent, Environment, Group
+from app.models import User, Script, ScriptVersion, Run, Agent, Group
 from app.schemas import ExecuteRequest, RunBrief, RunDetail
-from app.auth import get_current_user, require_role
+from app.auth import get_current_user, verify_agent_token
 from app.config import LOGS_DIR, PROJECT_ROOT
 from app.services.audit import write_audit
+from app.services.run_dispatch import create_validated_run
 from app.services.script_lifecycle import lock_script_for_lifecycle
 from app.services.script_access import (
     accessible_script_ids,
@@ -22,7 +23,6 @@ from app.services.script_access import (
     active_group_ids_for_user,
     get_accessible_script_or_404,
 )
-from shared.script_contract import validate_params
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -57,17 +57,6 @@ def _resolve_log_file(run, run_id):
         if os.path.isfile(c):
             return c
     return None
-
-
-def _validate_params(param_defs, params):
-    """Validate user-submitted params against config definitions. Returns list of error strings.
-
-    NOTE (design §5.2): file/folder existence is NOT checked here — those files live on the
-    client machine and the backend cannot verify them. Existence checks are performed by the
-    Agent before invoking main(). Only format-level checks (required, number range, select
-    options) run on the backend.
-    """
-    return validate_params(param_defs, params, check_paths=False)
 
 
 def _restrict_run_query(query, current_user):
@@ -106,7 +95,7 @@ def _enrich_run(run, db, detail=False):
 
 
 class RunStatusUpdate(BaseModel):
-    status: str  # running / success / failed / cancelled
+    status: Literal["success", "failed"]
     error_msg: Optional[str] = None
     result_files: Optional[str] = None
     agent_id: Optional[int] = None
@@ -128,20 +117,13 @@ def execute_script(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    script = get_accessible_script_or_404(
-        db, current_user, req.script_id, require_active=True,
-    )
-    if req.environment_id is not None:
-        environment = db.query(Environment).filter(
-            Environment.id == req.environment_id,
-            Environment.user_id == current_user.id,
-        ).first()
-        if not environment:
-            raise HTTPException(status_code=404, detail="执行环境不存在")
+    # Fail fast before acquiring the lifecycle write lock.
+    get_accessible_script_or_404(db, current_user, req.script_id, require_active=True)
 
     # Check for active runs — auto-cancel stale pending runs (>5 min)
     active = db.query(Run).filter(
         Run.user_id == current_user.id,
+        Run.target_agent_id.is_(None),
         Run.status.in_(["pending", "running"]),
         Run.is_deleted == False,
     ).first()
@@ -158,33 +140,19 @@ def execute_script(
         else:
             raise HTTPException(status_code=409, detail="当前有任务正在执行,请等待完成")
 
-    # Stale-pending cleanup above may commit. Acquire the lifecycle write lock
-    # only now and retain it through Run creation; recheck authorization/status
-    # using fresh state so a concurrent deletion cannot leave a new pending run.
-    lock_script_for_lifecycle(db, req.script_id)
-    script = get_accessible_script_or_404(
-        db, current_user, req.script_id, require_active=True,
-    )
-
-    # Validate params against config
-    if script.config_json:
-        config = json.loads(script.config_json)
-        param_defs = config.get("params", [])
-        errors = _validate_params(param_defs, req.params)
-        if errors:
-            raise HTTPException(status_code=422, detail="; ".join(errors))
-
-    run = Run(
-        script_id=script.id,
-        script_version=script.latest_version,
-        user_id=current_user.id,
-        status="pending",
-        params=json.dumps(req.params, ensure_ascii=False),
+    # Stale-pending cleanup above may commit. Shared creation rechecks script
+    # access/status under the lifecycle lock and validates params/environment.
+    run = create_validated_run(
+        db,
+        run_user=current_user,
+        script_id=req.script_id,
+        params=req.params,
         environment_id=req.environment_id,
+        requested_by=current_user.id,
+        dispatch_type="standard",
+        lock_func=lock_script_for_lifecycle,
     )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
+    script = run.script
     write_audit(current_user.id, current_user.username, "execute_script",
                 target_type="run", target_id=run.id,
                 detail="script={} v{}".format(script.name, script.latest_version))
@@ -208,6 +176,10 @@ def list_runs(
     q = _restrict_run_query(q, current_user)
     if mine_only:
         q = q.filter(Run.user_id == current_user.id)
+        # Legacy standard Agents poll this exact view without sending an agent id.
+        # Keep directed managed work out of that queue; managed Agents use /agents/{id}/next.
+        if status == "pending":
+            q = q.filter(Run.target_agent_id.is_(None))
     if script_id:
         q = q.filter(Run.script_id == script_id)
     if status:
@@ -273,27 +245,64 @@ def claim_run(
     claim: RunClaimRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    agent_token: Optional[str] = Header(default=None, alias="X-Agent-Token"),
 ):
     """Atomically bind a pending run to exactly one Agent before execution."""
     agent = db.query(Agent).filter(
         Agent.id == claim.agent_id,
         Agent.user_id == current_user.id,
+        Agent.enabled == True,
         Agent.is_deleted == False,
     ).first()
     if not agent:
-        raise HTTPException(status_code=400, detail="Agent 与任务用户不匹配")
+        raise HTTPException(status_code=400, detail="Agent 与任务用户不匹配或已禁用")
+    verify_agent_token(agent_token, agent)
 
     now = datetime.now(timezone.utc)
+    candidate = db.query(Run).filter(
+        Run.id == run_id,
+        Run.user_id == current_user.id,
+        Run.is_deleted == False,
+    ).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="执行记录不存在")
+    if candidate.expires_at is not None and _ensure_aware(candidate.expires_at) <= now:
+        expired = db.query(Run).filter(
+            Run.id == run_id,
+            Run.status == "pending",
+            Run.is_deleted == False,
+        ).update(
+            {Run.status: "expired", Run.finished_at: now},
+            synchronize_session=False,
+        )
+        if expired == 1:
+            db.commit()
+        else:
+            db.rollback()
+        raise HTTPException(status_code=409, detail="任务已过期或已被领取")
+    if candidate.scheduled_for is not None and _ensure_aware(candidate.scheduled_for) > now:
+        raise HTTPException(status_code=409, detail="任务尚未到执行时间")
+    if candidate.target_agent_id is not None and candidate.target_agent_id != agent.id:
+        raise HTTPException(status_code=403, detail="任务已定向到其他 Agent")
+    if agent.mode == "managed" and candidate.target_agent_id != agent.id:
+        raise HTTPException(status_code=403, detail="托管 Agent 只能领取定向任务")
+    if agent.mode == "standard" and candidate.target_agent_id is not None:
+        raise HTTPException(status_code=403, detail="标准 Agent 不能领取托管任务")
+
     claimed = db.query(Run).filter(
         Run.id == run_id,
         Run.user_id == current_user.id,
         Run.is_deleted == False,
         Run.status == "pending",
         Run.agent_id.is_(None),
+        or_(Run.scheduled_for.is_(None), Run.scheduled_for <= now),
+        or_(Run.expires_at.is_(None), Run.expires_at > now),
+        or_(Run.target_agent_id.is_(None), Run.target_agent_id == agent.id),
     ).update(
         {
             Run.status: "running",
             Run.agent_id: agent.id,
+            Run.claimed_at: now,
             Run.started_at: now,
         },
         synchronize_session=False,
@@ -318,39 +327,46 @@ def update_run_status(
     update: RunStatusUpdate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    agent_token: Optional[str] = Header(default=None, alias="X-Agent-Token"),
 ):
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
     if not run:
         raise HTTPException(status_code=404, detail="执行记录不存在")
     if run.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="仅任务所属用户可更新状态")
-
-    if run.status == "pending" and update.status == "running":
-        raise HTTPException(status_code=409, detail="任务必须先由 Agent 原子领取")
-    if run.agent_id is not None and update.agent_id != run.agent_id:
+    if run.agent_id is None or update.agent_id != run.agent_id:
         raise HTTPException(status_code=403, detail="仅领取任务的 Agent 可更新状态")
 
-    if update.agent_id is not None:
-        agent = db.query(Agent).filter(
-            Agent.id == update.agent_id,
-            Agent.user_id == run.user_id,
-            Agent.is_deleted == False,
-        ).first()
-        if not agent:
-            raise HTTPException(status_code=400, detail="Agent 与任务用户不匹配")
-        run.agent_id = agent.id
+    agent = db.query(Agent).filter(
+        Agent.id == run.agent_id,
+        Agent.user_id == run.user_id,
+        Agent.is_deleted == False,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=400, detail="Agent 与任务用户不匹配")
+    verify_agent_token(agent_token, agent)
 
-    run.status = update.status
-    if update.status == "running":
-        run.started_at = datetime.now(timezone.utc)
-    if update.status in ("success", "failed", "cancelled"):
-        run.finished_at = datetime.now(timezone.utc)
-        if run.started_at:
-            run.duration_sec = int((run.finished_at - _ensure_aware(run.started_at)).total_seconds())
-    if update.error_msg:
-        run.error_msg = update.error_msg
-    if update.result_files:
-        run.result_files = update.result_files
+    now = datetime.now(timezone.utc)
+    values = {Run.status: update.status, Run.finished_at: now}
+    if run.started_at:
+        values[Run.duration_sec] = int((now - _ensure_aware(run.started_at)).total_seconds())
+    if update.error_msg is not None:
+        values[Run.error_msg] = update.error_msg
+    if update.result_files is not None:
+        values[Run.result_files] = update.result_files
+
+    # The running predicate is the state transition itself. A concurrent cancel
+    # or watchdog failure wins cleanly and cannot be overwritten by completion.
+    updated = db.query(Run).filter(
+        Run.id == run_id,
+        Run.user_id == current_user.id,
+        Run.agent_id == update.agent_id,
+        Run.status == "running",
+        Run.is_deleted == False,
+    ).update(values, synchronize_session=False)
+    if updated != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务已结束或尚未开始，不能更新终态")
     db.commit()
     return {"message": "状态已更新"}
 
@@ -368,10 +384,18 @@ def cancel_run(
         raise HTTPException(status_code=403, detail="无权限取消该任务")
     if run.status not in ("pending", "running"):
         raise HTTPException(status_code=400, detail="该任务无法取消")
-    run.status = "cancelled"
-    run.finished_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    values = {Run.status: "cancelled", Run.finished_at: now}
     if run.started_at:
-        run.duration_sec = int((run.finished_at - _ensure_aware(run.started_at)).total_seconds())
+        values[Run.duration_sec] = int((now - _ensure_aware(run.started_at)).total_seconds())
+    cancelled = db.query(Run).filter(
+        Run.id == run_id,
+        Run.status.in_(["pending", "running"]),
+        Run.is_deleted == False,
+    ).update(values, synchronize_session=False)
+    if cancelled != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务状态已变化，无法取消")
     db.commit()
     write_audit(current_user.id, current_user.username, "cancel_run",
                 target_type="run", target_id=run_id)
@@ -403,6 +427,7 @@ def append_run_log_chunk(
     chunk: RunLogChunk,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    agent_token: Optional[str] = Header(default=None, alias="X-Agent-Token"),
 ):
     """Append an Agent log delta using an idempotent UTF-8 byte offset."""
     run = db.query(Run).filter(Run.id == run_id, Run.is_deleted == False).first()
@@ -412,6 +437,18 @@ def append_run_log_chunk(
         raise HTTPException(status_code=403, detail="无权限上报该任务日志")
     if run.agent_id is not None and chunk.agent_id != run.agent_id:
         raise HTTPException(status_code=403, detail="仅领取任务的 Agent 可上报日志")
+    bound_agent_id = run.agent_id or run.target_agent_id
+    if bound_agent_id is not None:
+        agent = db.query(Agent).filter(
+            Agent.id == bound_agent_id,
+            Agent.user_id == run.user_id,
+            Agent.is_deleted == False,
+        ).first()
+        if not agent:
+            raise HTTPException(status_code=400, detail="Agent 与任务用户不匹配")
+        if agent.mode == "managed" and chunk.agent_id != agent.id:
+            raise HTTPException(status_code=403, detail="仅目标 Agent 可上报日志")
+        verify_agent_token(agent_token, agent)
 
     os.makedirs(LOGS_DIR, exist_ok=True)
     log_file = os.path.abspath(_default_log_file(run_id))
@@ -459,6 +496,8 @@ def stream_run_log(
     from app.config import JWT_SECRET, JWT_ALGORITHM
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("kind") == "agent":
+            raise InvalidTokenError("agent token cannot authenticate log streaming")
         user_id = int(payload.get("sub"))
     except (InvalidTokenError, ValueError, TypeError):
         raise HTTPException(status_code=401, detail="无效的令牌")

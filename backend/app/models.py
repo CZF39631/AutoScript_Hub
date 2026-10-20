@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint, Table, Index, CheckConstraint
 from sqlalchemy.orm import relationship, declarative_base  # type: ignore[attr-defined]
@@ -88,14 +89,22 @@ class Agent(Base):
     Coexists with Environment: Agent = "which machine", Environment = "how to run on it".
     """
     __tablename__ = "agents"
+    __table_args__ = (
+        UniqueConstraint("device_uid", name="uq_agents_device_uid"),
+        CheckConstraint("mode IN ('standard', 'managed')", name="ck_agents_mode"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
+    device_uid = Column(String(255), nullable=False, default=lambda: str(uuid.uuid4()))
     machine_name = Column(String(200), nullable=False)
     machine_ip = Column(String(50), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    mode = Column(String(20), nullable=False, default="standard")
+    enabled = Column(Boolean, nullable=False, default=True)
     status = Column(String(20), nullable=False, default="offline")  # online / offline
     agent_version = Column(String(20), nullable=True)
     last_heartbeat = Column(DateTime, nullable=True)
+    agent_token_issued_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     is_deleted = Column(Boolean, nullable=False, default=False)
@@ -150,6 +159,14 @@ class ScriptVersion(Base):
 
 class Run(Base):
     __tablename__ = "runs"
+    __table_args__ = (
+        CheckConstraint(
+            "dispatch_type IN ('standard', 'managed_manual', 'managed_schedule')",
+            name="ck_runs_dispatch_type",
+        ),
+        Index("ix_runs_target_pending", "target_agent_id", "status", "scheduled_for"),
+        Index("ix_runs_schedule_status", "schedule_id", "status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     script_id = Column(Integer, ForeignKey("scripts.id"), nullable=False)
@@ -161,6 +178,13 @@ class Run(Base):
     result_files = Column(Text, nullable=True)
     environment_id = Column(Integer, ForeignKey("environments.id"), nullable=True)
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)  # §4.5: which machine executed
+    target_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    requested_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    dispatch_type = Column(String(30), nullable=False, default="standard")
+    schedule_id = Column(Integer, ForeignKey("managed_schedules.id"), nullable=True)
+    scheduled_for = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    claimed_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     duration_sec = Column(Integer, nullable=True)
@@ -171,6 +195,37 @@ class Run(Base):
 
     script = relationship("Script", back_populates="runs")  # type: ignore[call-arg]
     user = relationship("User", back_populates="runs", foreign_keys=[user_id])  # type: ignore[call-arg]
+
+
+class ManagedSchedule(Base):
+    """Admin-defined fixed-interval dispatch plan for one managed Agent."""
+
+    __tablename__ = "managed_schedules"
+    __table_args__ = (
+        CheckConstraint("interval_seconds >= 60", name="ck_managed_schedules_interval"),
+        CheckConstraint(
+            "expires_after_seconds >= 60",
+            name="ck_managed_schedules_expiry",
+        ),
+        Index("ix_managed_schedules_due", "enabled", "next_run_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
+    script_id = Column(Integer, ForeignKey("scripts.id"), nullable=False)
+    params = Column(Text, nullable=False, default="{}")
+    environment_id = Column(Integer, ForeignKey("environments.id"), nullable=True)
+    interval_seconds = Column(Integer, nullable=False)
+    expires_after_seconds = Column(Integer, nullable=False, default=3600)
+    enabled = Column(Boolean, nullable=False, default=True)
+    next_run_at = Column(DateTime, nullable=False)
+    last_run_at = Column(DateTime, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    is_deleted = Column(Boolean, nullable=False, default=False)
 
 
 class UserScript(Base):

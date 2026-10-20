@@ -135,7 +135,7 @@ def test_pending_run_cannot_be_marked_running_without_an_atomic_claim(client, de
         headers={"Authorization": f"Bearer {dev_token}"},
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 422
 
 
 def test_result_files_are_client_local_and_server_has_no_open_or_download_routes():

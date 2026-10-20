@@ -13,6 +13,7 @@ from client.agent.executor import execute_script
 @pytest.fixture(autouse=True)
 def _block_real_desktop_notifications(monkeypatch):
     """客户端测试不得向开发机发送真实系统通知。"""
+    monkeypatch.setattr(agent, "_notify_execution_start", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent, "_notify_execution_result", lambda *args, **kwargs: None)
 
 
@@ -57,6 +58,136 @@ def test_shutdown_request_enters_drain_mode_and_rejects_new_local_runs():
         }
     finally:
         agent._shutdown_when_idle = False
+
+
+def test_managed_mode_rejects_direct_local_execution(monkeypatch):
+    monkeypatch.setattr(agent, "_client_config", {"client_mode": "managed", "device_uid": "managed-device"})
+
+    assert agent.start_local_run({"script_id": 1}) == {
+        "error": "被控模式禁止本地手工执行"
+    }
+
+
+def test_client_info_exposes_identity_and_structured_current_run(monkeypatch):
+    monkeypatch.setattr(agent, "_client_config", {
+        "client_mode": "managed",
+        "device_uid": "stable-device-uid",
+    })
+    monkeypatch.setattr(agent, "_detect_machine_info", lambda: ("desktop-a", "10.0.0.8"))
+    monkeypatch.setattr(agent, "_current_run_id", 71)
+    monkeypatch.setattr(agent, "_running_proc", object())
+    monkeypatch.setattr(agent, "_running_info", {
+        "script_name": "安全巡检",
+        "start_time": 123.0,
+    })
+
+    assert agent.get_client_info() == {
+        "client_mode": "managed",
+        "device_uid": "stable-device-uid",
+        "machine_name": "desktop-a",
+        "current_run": {
+            "id": 71,
+            "status": "running",
+            "script_name": "安全巡检",
+            "started_at": 123.0,
+        },
+    }
+
+
+def test_registration_reports_stable_identity_and_mode(monkeypatch):
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"id": 42}
+
+    monkeypatch.setattr(agent, "_client_config", {
+        "client_mode": "managed",
+        "device_uid": "stable-device-uid",
+    })
+    monkeypatch.setattr(agent, "_detect_machine_info", lambda: ("desktop-a", "10.0.0.8"))
+    monkeypatch.setattr(
+        agent.requests,
+        "post",
+        lambda url, **kwargs: calls.append((url, kwargs["json"])) or Response(),
+    )
+
+    assert agent.register_agent() == 42
+    assert calls == [(
+        "{}/api/agents/register".format(agent.BACKEND_URL),
+        {
+            "device_uid": "stable-device-uid",
+            "mode": "managed",
+            "machine_name": "desktop-a",
+            "machine_ip": "10.0.0.8",
+            "agent_version": agent.get_version(),
+        },
+    )]
+
+
+def test_registration_persists_device_token_and_agent_calls_send_header(
+    tmp_path, monkeypatch, capsys
+):
+    config_path = tmp_path / "client_config.json"
+    config_path.write_text(
+        '{"client_mode":"managed","device_uid":"stable-device-uid"}',
+        encoding="utf-8",
+    )
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    responses = iter([
+        Response({"id": 42, "agent_token": "signed-device-secret"}),
+        Response({"status": "ok"}),
+    ])
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs.get("headers", {}).copy()))
+        return next(responses)
+
+    monkeypatch.setattr(agent, "_CLIENT_CONFIG_PATH", str(config_path))
+    monkeypatch.setattr(agent, "_client_config", {
+        "client_mode": "managed",
+        "device_uid": "stable-device-uid",
+    })
+    monkeypatch.setattr(agent, "_agent_token", None)
+    monkeypatch.setattr(agent, "_token", "user-token")
+    monkeypatch.setattr(agent, "_detect_machine_info", lambda: ("desktop-a", "10.0.0.8"))
+    monkeypatch.setattr(agent.requests, "post", fake_post)
+
+    assert agent.register_agent() == 42
+    assert agent.send_heartbeat() is True
+
+    saved = __import__("json").loads(config_path.read_text(encoding="utf-8"))
+    assert saved["agent_token"] == "signed-device-secret"
+    assert "X-Agent-Token" not in calls[0][1]
+    assert calls[1][1]["X-Agent-Token"] == "signed-device-secret"
+    assert "signed-device-secret" not in capsys.readouterr().out
+
+
+def test_terminal_state_conflict_is_not_cached_for_endless_retry(monkeypatch):
+    monkeypatch.setattr(
+        agent.requests,
+        "patch",
+        lambda *args, **kwargs: _Response(409, {"detail": "任务已结束"}),
+    )
+    monkeypatch.setattr(agent, "_save_pending_reports", lambda: None)
+    agent._pending_reports.clear()
+    agent._agent_id = 9
+
+    assert agent._report_run_status(7, {"status": "success"}) is True
+    assert agent._pending_reports == []
 
 
 def test_connected_run_completion_reports_status_and_shows_notification(monkeypatch):
@@ -232,7 +363,7 @@ def test_poll_skips_script_download_when_another_agent_claims_first(monkeypatch)
 
     def fake_get(url, **kwargs):
         requests_seen.append(("get", url))
-        return Response(200, [{"id": 37, "script_id": 1}])
+        return Response(200, {"id": 37, "script_id": 1})
 
     def fake_post(url, json, **kwargs):
         requests_seen.append(("post", url, json))
@@ -249,7 +380,7 @@ def test_poll_skips_script_download_when_another_agent_claims_first(monkeypatch)
     agent.poll_and_execute()
 
     assert requests_seen == [
-        ("get", "{}/api/runs?status=pending&limit=1&mine_only=true".format(agent.BACKEND_URL)),
+        ("get", "{}/api/agents/11/next".format(agent.BACKEND_URL)),
         ("post", "{}/api/runs/37/claim".format(agent.BACKEND_URL), {"agent_id": 11}),
     ]
     assert agent._current_run_id is None
@@ -269,8 +400,8 @@ def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
 
     def fake_get(url, **kwargs):
         requests_seen.append(("get", url))
-        if "status=pending" in url:
-            return Response(200, [{"id": 38, "script_id": 1}])
+        if url.endswith("/api/agents/12/next"):
+            return Response(200, {"id": 38, "script_id": 1})
         if url.endswith("/api/scripts/1"):
             return Response(200, {"latest_version": 1})
         raise AssertionError("unexpected GET: {}".format(url))
@@ -286,6 +417,8 @@ def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
     monkeypatch.setattr(agent, "parse_script_config", lambda path: {})
     fake_process = type("FakeProcess", (), {"pid": 1234})()
     monkeypatch.setattr(agent, "_start_script_subprocess", lambda *args, **kwargs: started.append(args) or fake_process)
+    start_notifications = []
+    monkeypatch.setattr(agent, "_notify_execution_start", lambda name: start_notifications.append(name))
     monkeypatch.setattr(agent, "_LOGS_DIR", str(tmp_path))
     agent._running_proc = None
     agent._running_info = {}
@@ -295,11 +428,12 @@ def test_poll_claims_before_loading_or_starting_a_script(monkeypatch, tmp_path):
     agent.poll_and_execute()
 
     assert requests_seen[:2] == [
-        ("get", "{}/api/runs?status=pending&limit=1&mine_only=true".format(agent.BACKEND_URL)),
+        ("get", "{}/api/agents/12/next".format(agent.BACKEND_URL)),
         ("post", "{}/api/runs/38/claim".format(agent.BACKEND_URL), {"agent_id": 12}),
     ]
     assert requests_seen[2] == ("get", "{}/api/scripts/1".format(agent.BACKEND_URL))
     assert len(started) == 1
+    assert start_notifications == ["脚本 #1"]
     assert agent._running_proc is fake_process
     assert agent._current_run_id == 38
 
@@ -316,8 +450,8 @@ def test_poll_fails_a_claimed_run_when_script_metadata_cannot_be_loaded(monkeypa
             return self._payload
 
     def fake_get(url, **kwargs):
-        if "status=pending" in url:
-            return Response(200, [{"id": 39, "script_id": 1}])
+        if url.endswith("/api/agents/13/next"):
+            return Response(200, {"id": 39, "script_id": 1})
         if url.endswith("/api/scripts/1"):
             return Response(404, {})
         raise AssertionError("unexpected GET: {}".format(url))

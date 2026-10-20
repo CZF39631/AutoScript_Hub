@@ -15,6 +15,7 @@ const statusMap = {
   success: { color: 'green', text: '成功' },
   failed: { color: 'red', text: '失败' },
   cancelled: { color: 'default', text: '已取消' },
+  expired: { color: 'default', text: '已过期' },
 }
 
 export default function RunDetail() {
@@ -112,6 +113,15 @@ export default function RunDetail() {
         <Descriptions.Item label="耗时">{run.duration_sec != null ? `${run.duration_sec}s` : '-'}</Descriptions.Item>
         <Descriptions.Item label="开始时间">{formatServerTime(run.started_at)}</Descriptions.Item>
         <Descriptions.Item label="结束时间">{formatServerTime(run.finished_at)}</Descriptions.Item>
+        {run.dispatch_type !== 'standard' && (
+          <Descriptions.Item label="任务来源">
+            {{ managed_manual: '管理端下发', managed_schedule: '托管计划' }[run.dispatch_type] || run.dispatch_type}
+          </Descriptions.Item>
+        )}
+        {run.target_agent_id && <Descriptions.Item label="目标设备">Agent #{run.target_agent_id}</Descriptions.Item>}
+        {run.scheduled_for && <Descriptions.Item label="计划时间">{formatServerTime(run.scheduled_for)}</Descriptions.Item>}
+        {run.expires_at && <Descriptions.Item label="领取截止">{formatServerTime(run.expires_at)}</Descriptions.Item>}
+        {run.claimed_at && <Descriptions.Item label="领取时间">{formatServerTime(run.claimed_at)}</Descriptions.Item>}
         {run.error_msg && <Descriptions.Item label="错误信息" span={2}>{run.error_msg}</Descriptions.Item>}
         {run.result_files && (
           <Descriptions.Item label="结果文件" span={2}>

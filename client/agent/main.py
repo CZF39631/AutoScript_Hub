@@ -18,6 +18,7 @@ from client.runtime.local_auth import get_or_create_agent_token
 from client.agent.script_parser import parse_script_config
 from shared.script_contract import extract_script_archive, validate_params
 from shared.version import get_version
+from client.runtime.client_identity import ensure_client_identity
 from client.runtime.environment_manager import EnvironmentUnavailable, ensure_environment
 from client.runtime.paths import ClientPaths
 from client.runtime.python_runtime import PrivatePythonUnavailable, private_python, python_runtime_info
@@ -38,6 +39,7 @@ if os.path.isfile(_config_source):
             _client_config = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("加载客户端配置失败: %s", e)
+_client_config = ensure_client_identity(_client_config, _CLIENT_CONFIG_PATH)
 
 BACKEND_URL = os.environ.get(
     "BACKEND_URL",
@@ -58,6 +60,7 @@ _LOGS_DIR = os.environ.get(
 )
 
 _token = None
+_agent_token = _client_config.get("agent_token")
 _user_id = None
 _current_run_id = None
 
@@ -261,6 +264,38 @@ def _headers():
     return {"Authorization": "Bearer {}".format(_token)}
 
 
+def _agent_headers():
+    headers = _headers()
+    if _agent_token:
+        headers["X-Agent-Token"] = _agent_token
+    return headers
+
+
+def _persist_agent_token(token):
+    """Persist the device credential atomically without ever logging it."""
+    global _agent_token, _client_config
+    if not token or token == _agent_token:
+        return
+    local = dict(_client_config)
+    if os.path.isfile(_CLIENT_CONFIG_PATH):
+        try:
+            with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as stream:
+                saved = json.load(stream)
+            if isinstance(saved, dict):
+                local.update(saved)
+        except (OSError, json.JSONDecodeError):
+            pass
+    local["agent_token"] = token
+    temporary = _CLIENT_CONFIG_PATH + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as stream:
+        json.dump(local, stream, indent=2, ensure_ascii=False)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, _CLIENT_CONFIG_PATH)
+    _client_config = local
+    _agent_token = token
+
+
 def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
     """Upload only the UTF-8 log bytes not yet acknowledged by the backend."""
     if not run_id or not log_path or not os.path.isfile(log_path):
@@ -298,7 +333,7 @@ def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
         resp = requests.post(
             "{}/api/runs/{}/log/chunk".format(BACKEND_URL, run_id),
             json=payload,
-            headers=_headers(),
+            headers=_agent_headers(),
             timeout=10,
         )
         data = resp.json()
@@ -478,6 +513,18 @@ def _start_script_subprocess(script_dir, params, log_path, timeout, env_vars=Non
     return proc
 
 
+def _notify_execution_start(script_name):
+    """Notify once immediately before a remotely claimed task starts."""
+    try:
+        from client.agent.notifier import show_system_notification
+        show_system_notification(
+            "AutoScript Hub",
+            "{} 即将开始执行".format(script_name or "脚本"),
+        )
+    except Exception as exc:
+        logger.warning("通知失败: %s", exc)
+
+
 def _notify_execution_result(script_name, status, error=None):
     """Notify completion without allowing notification failures to affect task state."""
     try:
@@ -595,12 +642,21 @@ def register_agent():
     try:
         resp = requests.post(
             "{}/api/agents/register".format(BACKEND_URL),
-            json={"machine_name": machine_name, "machine_ip": machine_ip, "agent_version": agent_version},
-            headers=_headers(),
+            json={
+                "device_uid": _client_config["device_uid"],
+                "mode": _client_config.get("client_mode", "standard"),
+                "machine_name": machine_name,
+                "machine_ip": machine_ip,
+                "agent_version": agent_version,
+            },
+            headers=_agent_headers(),
             timeout=10,
         )
         if resp.status_code == 200:
-            _agent_id = resp.json()["id"]
+            data = resp.json()
+            _agent_id = data["id"]
+            if data.get("agent_token"):
+                _persist_agent_token(data["agent_token"])
             _last_online_time = time.time()
             print("Agent 已注册: id={} 机器={}".format(_agent_id, machine_name))
             return _agent_id
@@ -619,7 +675,7 @@ def send_heartbeat():
         resp = requests.post(
             "{}/api/agents/{}/heartbeat".format(BACKEND_URL, _agent_id),
             json={"machine_ip": machine_ip},
-            headers=_headers(),
+            headers=_agent_headers(),
             timeout=5,
         )
         if resp.status_code == 200:
@@ -715,9 +771,9 @@ def _flush_pending_reports():
         try:
             resp = requests.patch(
                 "{}/api/runs/{}/status".format(BACKEND_URL, run_id),
-                json=update, headers=_headers(), timeout=10,
+                json=update, headers=_agent_headers(), timeout=10,
             )
-            if resp.status_code != 200:
+            if resp.status_code not in (200, 409):
                 remaining.append(item)
         except (requests.RequestException, OSError):
             remaining.append(item)
@@ -734,9 +790,11 @@ def _report_run_status(run_id, update):
     try:
         resp = requests.patch(
             "{}/api/runs/{}/status".format(BACKEND_URL, run_id),
-            json=update, headers=_headers(), timeout=10,
+            json=update, headers=_agent_headers(), timeout=10,
         )
-        if resp.status_code == 200:
+        if resp.status_code in (200, 409):
+            # 409 means cancel/watchdog already won the atomic terminal-state
+            # race; retrying can never resurrect the run and would grow forever.
             _last_online_time = time.time()
             return True
     except (requests.RequestException, OSError):
@@ -912,6 +970,8 @@ def list_local_scripts():
 
 def start_local_run(req):
     """Serialize local and online starts without blocking the local HTTP handler."""
+    if _client_config.get("client_mode", "standard") == "managed":
+        return {"error": "被控模式禁止本地手工执行"}
     if not _execution_start_lock.acquire(blocking=False):
         return {"error": "another task is running"}
     try:
@@ -1131,6 +1191,33 @@ def get_local_run_log(local_run_id):
         return {"log": "", "error": str(e)}
 
 
+def get_client_info():
+    """Return non-secret local identity and current execution state."""
+    machine_name, _ = _detect_machine_info()
+    current_run = None
+    if _current_run_id is not None:
+        current_run = {
+            "id": _current_run_id,
+            "status": "running" if _running_proc is not None else "starting",
+            "script_name": _running_info.get("script_name"),
+            "started_at": _running_info.get("start_time"),
+        }
+    elif _local_run_info.get("local_run_id"):
+        current_run = {
+            "id": _local_run_info["local_run_id"],
+            "status": "running",
+            "script_name": _local_run_info.get("script_name"),
+            "started_at": _local_run_info.get("start_time"),
+            "local": True,
+        }
+    return {
+        "client_mode": _client_config.get("client_mode", "standard"),
+        "device_uid": _client_config.get("device_uid"),
+        "machine_name": machine_name,
+        "current_run": current_run,
+    }
+
+
 def get_connection_status():
     """Client's view of backend connectivity, for the offline UI banner."""
     online = _last_online_time is not None and (time.time() - _last_online_time) < 90
@@ -1143,6 +1230,7 @@ def get_connection_status():
         "last_online_at": _last_online_time,
         "pending_sync_count": pending_sync,
         "agent_id": _agent_id,
+        **get_client_info(),
     }
 
 
@@ -1214,7 +1302,7 @@ def _sync_local_runs_locked():
             if backend_status == "pending":
                 claim_resp = requests.post(
                     "{}/api/runs/{}/claim".format(BACKEND_URL, backend_run_id),
-                    json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
+                    json={"agent_id": _agent_id}, headers=_agent_headers(), timeout=10,
                 )
                 if claim_resp.status_code != 200:
                     continue
@@ -1242,7 +1330,7 @@ def _sync_local_runs_locked():
                 patch_resp = requests.patch(
                     "{}/api/runs/{}/status".format(BACKEND_URL, backend_run_id),
                     json=update,
-                    headers=_headers(),
+                    headers=_agent_headers(),
                     timeout=10,
                 )
                 status_synced = patch_resp.status_code == 200
@@ -1337,27 +1425,28 @@ def _poll_and_execute_locked():
 
     # 3) Look for pending run
     try:
+        if not _agent_id:
+            return
         resp = requests.get(
-            "{}/api/runs?status=pending&limit=1&mine_only=true".format(BACKEND_URL),
-            headers=_headers(),
+            "{}/api/agents/{}/next".format(BACKEND_URL, _agent_id),
+            headers=_agent_headers(),
             timeout=10,
         )
-        if resp.status_code != 200 or not resp.json():
+        if resp.status_code != 200:
             return
 
-        run = resp.json()[0]
+        run = resp.json()
+        if not run:
+            return
         run_id = run["id"]
         # A local history import must be resumed by the sync path, never executed.
         if any(r.get("backend_run_id") == run_id and not r.get("synced")
                for r in _local_runs.values()):
             return
         _current_run_id = run_id
-        if not _agent_id:
-            _current_run_id = None
-            return
         claim_resp = requests.post(
             "{}/api/runs/{}/claim".format(BACKEND_URL, run_id),
-            json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
+            json={"agent_id": _agent_id}, headers=_agent_headers(), timeout=10,
         )
         if claim_resp.status_code != 200:
             _current_run_id = None
@@ -1471,8 +1560,10 @@ def _poll_and_execute_locked():
 
         timeout = script_config.get("timeout", 600)
 
-        # Start subprocess asynchronously
+        # Start subprocess asynchronously. The system notification deliberately
+        # contains no task parameters.
         params = json.loads(run["params"]) if run.get("params") else {}
+        _notify_execution_start(script_name)
         proc = _start_script_subprocess(
             script_dir, params, log_path, timeout,
             env_vars=env_vars or None, python_executable=python_executable,
@@ -1606,6 +1697,8 @@ def initialize_agent_runtime():
         get_local_run_fn=get_local_run,
         get_local_run_log_fn=get_local_run_log,
         get_connection_status_fn=get_connection_status,
+        get_client_info_fn=get_client_info,
+        get_client_mode_fn=lambda: _client_config.get("client_mode", "standard"),
         open_result_fn=open_local_result,
         get_update_status_fn=_get_update_status,
         check_update_fn=_check_and_stage_update,

@@ -32,6 +32,7 @@ from app.routers import agents as agents_router
 from app.routers import presets as presets_router
 from app.routers import release_cache as release_cache_router
 from app.routers import groups as groups_router
+from app.routers import managed as managed_router
 app = FastAPI(title="AutoScript Hub", version=get_version())
 
 # The packaged desktop UI uses the first available port in this loopback range
@@ -60,6 +61,7 @@ app.include_router(agents_router.router)
 app.include_router(presets_router.router)
 app.include_router(release_cache_router.router)
 app.include_router(groups_router.router)
+app.include_router(managed_router.router)
 
 
 def _initialize_app():

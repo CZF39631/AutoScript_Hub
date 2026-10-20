@@ -5,7 +5,8 @@ from client.ui.wizard import WIZARD_HTML, WizardApi
 def test_wizard_is_localized_in_chinese():
     required = [
         "初始化设置", "服务端地址", "用户名", "密码", "脚本下载目录",
-        "结果输出目录", "默认浏览器", "代理地址（可选）", "完成设置",
+        "结果输出目录", "默认浏览器", "代理地址（可选）", "客户端模式",
+        "标准模式（允许本地手工执行）", "被控模式（仅执行管理员下发任务）", "完成设置",
     ]
     for text in required:
         assert text in WIZARD_HTML
@@ -27,6 +28,7 @@ def test_wizard_displays_login_and_save_errors_and_requires_verification():
     assert "if (loginVerified || await testLogin())" in WIZARD_HTML
     assert "if (!loginVerified)" in WIZARD_HTML
     assert "window.pywebview.api.testLogin" in WIZARD_HTML
+    assert "client_mode: document.getElementById('client_mode').value" in WIZARD_HTML
     assert "fetch(url + '/api/auth/login'" not in WIZARD_HTML
 
 

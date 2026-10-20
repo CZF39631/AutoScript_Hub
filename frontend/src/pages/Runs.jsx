@@ -17,6 +17,7 @@ const statusMap = {
   success: { color: 'green', text: '成功' },
   failed: { color: 'red', text: '失败' },
   cancelled: { color: 'default', text: '已取消' },
+  expired: { color: 'default', text: '已过期' },
 }
 
 const statusOptions = Object.entries(statusMap).map(([k, v]) => ({ label: v.text, value: k }))
@@ -106,7 +107,14 @@ export default function Runs() {
       )
     },
     { title: '版本', key: 'ver', width: 85, render: (_, r) => formatScriptVersion(r.script_semantic_version, r.script_version) },
-    ...(isAdmin ? [{ title: '执行人', dataIndex: 'username', key: 'user', width: 90 }] : []),
+    ...(isAdmin ? [
+      { title: '执行人', dataIndex: 'username', key: 'user', width: 90 },
+      {
+        title: '来源', dataIndex: 'dispatch_type', key: 'source', width: 100,
+        render: value => ({ standard: '手工执行', managed_manual: '管理端下发', managed_schedule: '托管计划' }[value] || value || '-'),
+      },
+      { title: '目标设备', dataIndex: 'target_agent_id', key: 'target', width: 90, render: value => value ? `#${value}` : '-' },
+    ] : []),
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (s) => { const m = statusMap[s] || { color: 'default', text: s }; return <Tag color={m.color}>{m.text}</Tag> }

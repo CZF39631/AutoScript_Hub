@@ -14,7 +14,7 @@
 
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; }
-body { margin: 0; min-width: 760px; background: #f5f5f7; }
+body { margin: 0; min-width: 320px; background: #f5f5f7; }
 button, input, select, textarea { font: inherit; }
 ::selection { color: #fff; background: rgba(0, 122, 255, 0.72); }
 
@@ -185,8 +185,68 @@ button, input, select, textarea { font: inherit; }
 ::-webkit-scrollbar-thumb { background: rgba(60,60,67,.22); border: 3px solid transparent; border-radius: 10px; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background-color: rgba(60,60,67,.38); }
 
+/* Managed Agent administration */
+.managed-admin-page { min-width: 0; }
+.managed-page-alert { margin-bottom: 16px; }
+.managed-drawer-alert { margin-bottom: 20px; }
+.managed-device-cell { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.managed-device-cell > span:last-child { min-width: 0; display: flex; flex-direction: column; }
+.managed-device-cell strong, .managed-plan-cell strong { overflow: hidden; color: var(--apple-text); text-overflow: ellipsis; white-space: nowrap; }
+.managed-device-cell small, .managed-plan-cell small { margin-top: 2px; color: var(--apple-secondary); font-size: 11px; }
+.managed-device-icon { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; color: #8e8e93; background: rgba(142,142,147,.11); }
+.managed-device-icon.is-online { color: #248a3d; background: rgba(52,199,89,.12); }
+.managed-device-uid { display: block; max-width: 220px; }
+.managed-plan-cell { min-width: 0; display: flex; flex-direction: column; }
+.managed-form-section { margin: 6px 0 22px; padding: 16px; border-radius: 14px; background: rgba(245,245,247,.82); border: 1px solid var(--apple-border); }
+.managed-form-section h3 { margin: 0 0 14px; font-size: 14px; }
+.managed-form-section .ant-alert { margin-bottom: 16px; }
+.managed-form-section .ant-form-item:last-child { margin-bottom: 0; }
+.managed-param-empty { padding: 14px 0; color: var(--apple-secondary); font-size: 13px; text-align: center; }
+
+/* Standalone panel shown only inside managed desktop clients. */
+.managed-client-shell { min-height: 100vh; background: radial-gradient(circle at 90% 0%, rgba(0,122,255,.12), transparent 34%), #f5f5f7; }
+.managed-client-header { height: 72px; padding: 0 32px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid rgba(0,0,0,.07); background: rgba(250,250,252,.78); backdrop-filter: saturate(160%) blur(24px); }
+.managed-client-brand { display: flex; align-items: center; gap: 11px; }
+.managed-client-brand img { width: 38px; height: 38px; border-radius: 12px; box-shadow: 0 7px 18px rgba(0,122,255,.22); }
+.managed-client-brand > span { display: flex; flex-direction: column; line-height: 1.25; }
+.managed-client-brand strong { font-size: 15px; }
+.managed-client-brand small { color: var(--apple-secondary); font-size: 11px; }
+.managed-client-refresh { display: flex; align-items: center; gap: 12px; }
+.managed-client-refresh > span { color: var(--apple-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.managed-client-content { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 44px; }
+.managed-mode-notice, .managed-pause-alert { margin-bottom: 18px; }
+.managed-client-loading { min-height: 360px; padding: 28px; border-radius: 18px; background: #fff; border: 1px solid var(--apple-border); }
+.managed-client-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
+.managed-status-card .ant-card-body { min-height: 122px; display: flex; align-items: center; gap: 14px; padding: 20px; }
+.managed-status-card__icon { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 12px; color: #007aff; background: rgba(0,122,255,.1); font-size: 19px; }
+.managed-status-card--success .managed-status-card__icon { color: #248a3d; background: rgba(52,199,89,.12); }
+.managed-status-card--warning .managed-status-card__icon { color: #b25000; background: rgba(255,159,10,.13); }
+.managed-status-card--error .managed-status-card__icon { color: #d70015; background: rgba(255,59,48,.11); }
+.managed-status-card .ant-card-body > div:last-child { min-width: 0; display: flex; flex-direction: column; }
+.managed-status-card span { color: var(--apple-secondary); font-size: 12px; }
+.managed-status-card strong { margin: 4px 0; overflow: hidden; color: var(--apple-text); font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-status-card small { overflow: hidden; color: var(--apple-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-client-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 18px; }
+.managed-client-card { min-height: 252px; }
+.managed-client-card .ant-descriptions-item-label { width: 96px; color: var(--apple-secondary); }
+.managed-current-run__top { margin-bottom: 18px; display: flex; align-items: center; gap: 13px; }
+.managed-current-run__icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: #007aff; background: rgba(0,122,255,.1); font-size: 20px; }
+.managed-current-run__top > div { display: flex; align-items: center; gap: 10px; }
+.managed-current-run__top strong { font-size: 15px; }
+.managed-client-runs .ant-card-body { padding: 0; }
+.managed-client-runs .ant-table-wrapper { border: 0; border-radius: 0 0 16px 16px; box-shadow: none; }
+
 @media (max-width: 900px) {
   .app-sidebar { max-width: 190px !important; min-width: 190px !important; width: 190px !important; flex-basis: 190px !important; }
   .app-content { padding: 22px 20px 38px; }
   .app-brand { padding-inline: 14px; }
+  .managed-client-summary { grid-template-columns: 1fr; }
+  .managed-client-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .managed-client-header { height: auto; padding: 16px 18px; align-items: flex-start; }
+  .managed-client-refresh { align-items: flex-end; flex-direction: column-reverse; gap: 6px; }
+  .managed-client-content { width: calc(100% - 28px); padding-top: 18px; }
+  .managed-client-refresh .ant-btn { height: 34px; }
 }

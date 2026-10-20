@@ -30,8 +30,17 @@ def test_fresh_database_upgrades_to_head(tmp_path):
     assert status["ready"] is True
     assert {
         "users", "scripts", "runs", "agents", "user_presets", "user_settings",
-        "groups", "user_groups", "script_groups", "server_settings", "alembic_version",
+        "groups", "user_groups", "script_groups", "server_settings",
+        "managed_schedules", "alembic_version",
     }.issubset(tables)
+    inspector = inspect(create_engine(database_url))
+    assert {"device_uid", "mode", "enabled", "agent_token_issued_at"}.issubset(
+        {column["name"] for column in inspector.get_columns("agents")}
+    )
+    assert {
+        "target_agent_id", "requested_by", "dispatch_type", "schedule_id",
+        "scheduled_for", "expires_at", "claimed_at",
+    }.issubset({column["name"] for column in inspector.get_columns("runs")})
 
 
 def test_existing_known_database_is_adopted_without_losing_rows(tmp_path):
@@ -157,6 +166,56 @@ def test_legacy_schema_with_incompatible_column_type_is_rejected_before_stamp(tm
         upgrade_database(database_url)
 
     assert "alembic_version" not in inspect(create_engine(database_url)).get_table_names()
+
+
+def test_managed_downgrade_terminates_directed_work_before_dropping_target(tmp_path):
+    database_url = _sqlite_url(tmp_path / "managed-downgrade.db")
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, password_hash, auth_source, display_name, role, status, "
+            "created_at, updated_at, is_deleted) VALUES "
+            "(1, 'owner', 'hash', 'local', 'Owner', 'operator', 'active', "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ))
+        connection.execute(text(
+            "INSERT INTO scripts "
+            "(id, name, type, latest_version, status, created_at, updated_at, is_deleted) "
+            "VALUES (1, 'script', 'py', 1, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ))
+        connection.execute(text(
+            "INSERT INTO agents "
+            "(id, device_uid, machine_name, user_id, mode, enabled, status, "
+            "created_at, updated_at, is_deleted) VALUES "
+            "(1, 'downgrade-device', 'pc', 1, 'managed', 1, 'online', "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ))
+        connection.execute(text(
+            "INSERT INTO runs "
+            "(id, script_id, script_version, user_id, status, target_agent_id, "
+            "dispatch_type, created_at, updated_at, is_deleted) VALUES "
+            "(1, 1, 1, 1, 'pending', 1, 'managed_manual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0), "
+            "(2, 1, 1, 1, 'running', 1, 'managed_manual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ))
+    engine.dispose()
+
+    command.downgrade(config, "0005_server_settings")
+
+    engine = create_engine(database_url)
+    with engine.connect() as connection:
+        rows = connection.execute(text(
+            "SELECT id, status, finished_at, error_msg FROM runs ORDER BY id"
+        )).all()
+    assert rows[0][1] == "cancelled"
+    assert rows[1][1] == "failed"
+    assert rows[0][2] is not None and rows[1][2] is not None
+    assert "target_agent_id" not in {
+        column["name"] for column in inspect(engine).get_columns("runs")
+    }
+    engine.dispose()
 
 
 def test_unknown_legacy_schema_is_rejected_without_modification(tmp_path):

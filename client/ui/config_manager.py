@@ -9,6 +9,7 @@ from client.runtime.credentials import (
     load_credentials,
     save_credentials,
 )
+from client.runtime.client_identity import ensure_client_identity, normalize_client_identity
 from client.runtime.paths import ClientPaths
 from shared.version import get_version
 
@@ -23,6 +24,8 @@ LEGACY_CONFIG_PATH = os.path.join(PROJECT_ROOT, "client_config.json")
 
 DEFAULT_CONFIG = {
     "server_url": "http://127.0.0.1:8000",
+    "client_mode": "standard",
+    "device_uid": "",
     "username": "",
     "remember_credentials": False,
     "script_download_dir": "",
@@ -66,6 +69,7 @@ def load_config():
     """Load config and restore any remembered password into memory only."""
     config = dict(DEFAULT_CONFIG)
     saved, source = _read_saved_config()
+    saved = ensure_client_identity(saved, CONFIG_PATH)
     config.update(saved)
     if not str(config.get("pip_index_url", "")).strip():
         config["pip_index_url"] = DEFAULT_CONFIG["pip_index_url"]
@@ -99,11 +103,17 @@ def load_config():
 def save_config(config):
     """Atomically save non-secret config and store remembered passwords via DPAPI."""
     persisted = dict(config)
+    saved, _ = _read_saved_config()
+    if not persisted.get("device_uid") and saved.get("device_uid"):
+        persisted["device_uid"] = saved["device_uid"]
+    if "client_mode" not in persisted and saved.get("client_mode"):
+        persisted["client_mode"] = saved["client_mode"]
     password = str(persisted.pop("password", ""))
     server_url = str(persisted.get("server_url", DEFAULT_CONFIG["server_url"]))
     username = str(persisted.get("username", ""))
     remember = bool(persisted.get("remember_credentials", bool(password)))
     persisted["remember_credentials"] = remember
+    persisted = normalize_client_identity(persisted)
 
     if remember and password:
         save_credentials(server_url, username, password)

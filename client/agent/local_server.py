@@ -95,6 +95,8 @@ class AgentHandler(BaseHTTPRequestHandler):
     get_local_run_fn = None          # (local_run_id: str) -> dict | None
     get_local_run_log_fn = None      # (local_run_id: str) -> {"log": str}
     get_connection_status_fn = None  # () -> {"online": bool, "last_online_at": ..., "pending_sync": int}
+    get_client_info_fn = None         # () -> non-secret identity/current-run fields
+    get_client_mode_fn = None         # () -> standard | managed
     open_result_fn = None            # (path: str) -> {"success": bool, ...}
     get_update_status_fn = None       # () -> durable signed-update state
     check_update_fn = None            # () -> durable signed-update state
@@ -135,10 +137,12 @@ class AgentHandler(BaseHTTPRequestHandler):
             callback = type(self).get_status_fn
             run_id = callback() if callback else None
             version_callback = type(self).get_version_fn
+            info_callback = type(self).get_client_info_fn
             self._json({
                 "running": run_id is not None,
                 "run_id": run_id,
                 "version": version_callback() if version_callback else None,
+                **(info_callback() if info_callback else {}),
             })
         elif self.path == "/detect-browsers":
             self._json(_detect_browsers())
@@ -197,6 +201,10 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif self.path == "/local/execute":
             data = self._read_json()
             if not data:
+                return
+            mode_callback = type(self).get_client_mode_fn
+            if mode_callback and mode_callback() == "managed":
+                self._json({"error": "被控模式禁止本地手工执行"}, 403)
                 return
             callback = type(self).start_local_run_fn
             if not callback:
@@ -307,6 +315,8 @@ def start_local_server(
     get_local_run_fn=None,
     get_local_run_log_fn=None,
     get_connection_status_fn=None,
+    get_client_info_fn=None,
+    get_client_mode_fn=None,
     open_result_fn=None,
     get_update_status_fn=None,
     check_update_fn=None,
@@ -325,6 +335,8 @@ def start_local_server(
     AgentHandler.get_local_run_fn = get_local_run_fn
     AgentHandler.get_local_run_log_fn = get_local_run_log_fn
     AgentHandler.get_connection_status_fn = get_connection_status_fn
+    AgentHandler.get_client_info_fn = get_client_info_fn
+    AgentHandler.get_client_mode_fn = get_client_mode_fn
     AgentHandler.open_result_fn = open_result_fn
     AgentHandler.get_update_status_fn = get_update_status_fn
     AgentHandler.check_update_fn = check_update_fn

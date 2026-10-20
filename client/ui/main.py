@@ -21,6 +21,7 @@ class LocalUIHandler(SimpleHTTPRequestHandler):
 
     backend_url = "http://127.0.0.1:8000"
     agent_api_token = ""
+    client_mode = "standard"
 
     def do_GET(self):
         if self.path.startswith("/api/"):
@@ -75,8 +76,11 @@ class LocalUIHandler(SimpleHTTPRequestHandler):
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 import json
-                inject = '<script>window._BACKEND_URL={};window._AGENT_API_TOKEN={}</script>\n'.format(
-                    json.dumps(self.backend_url), json.dumps(self.agent_api_token)
+                inject = ('<script>window._BACKEND_URL={};window._AGENT_API_TOKEN={};'
+                          'window._CLIENT_MODE={}</script>\n').format(
+                    json.dumps(self.backend_url),
+                    json.dumps(self.agent_api_token),
+                    json.dumps(self.client_mode),
                 )
                 content = content.replace("</head>", inject + "</head>")
                 data = content.encode("utf-8")
@@ -181,10 +185,11 @@ class Api:
         return {"ok": True}
 
 
-def start_local_server(backend_url):
+def start_local_server(backend_url, client_mode="standard"):
     """Start the local HTTP server on the first available desktop UI port."""
     LocalUIHandler.backend_url = backend_url
     LocalUIHandler.agent_api_token = get_or_create_agent_token()
+    LocalUIHandler.client_mode = client_mode
     last_error = None
     for port in LOCAL_PORTS:
         try:
@@ -213,7 +218,7 @@ def start_ui(on_started=None, on_closed=None):
         return False
 
     # Start local server for frontend + API proxy
-    local_port = start_local_server(backend_url)
+    local_port = start_local_server(backend_url, config.get("client_mode", "standard"))
 
     frontend_url = "http://127.0.0.1:{}/".format(local_port)
 

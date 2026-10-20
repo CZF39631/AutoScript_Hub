@@ -3,7 +3,8 @@ import { Layout, Menu, Button } from 'antd'
 import {
   DashboardOutlined, CodeOutlined, HistoryOutlined,
   UserOutlined, LogoutOutlined, AuditOutlined, BugOutlined, GlobalOutlined,
-  SettingOutlined, NotificationOutlined
+  SettingOutlined, NotificationOutlined, DesktopOutlined, CalendarOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
@@ -21,13 +22,22 @@ import Issues from './pages/Issues'
 import Environments from './pages/Environments'
 import Settings from './pages/Settings'
 import Updates from './pages/Updates'
+import ManagedAgents from './pages/ManagedAgents'
+import ManagedSchedules from './pages/ManagedSchedules'
+import ManagedClientPanel from './pages/ManagedClientPanel'
 import ImportantUpdateNotice from './components/ImportantUpdateNotice'
+import { isManagedClientMode } from './utils/managed'
 
 const { Sider, Content } = Layout
 
 function PrivateRoute({ children }) {
   const { token } = useAuth()
   return token ? children : <Navigate to="/login" />
+}
+
+function AdminRoute({ children }) {
+  const { user } = useAuth()
+  return user?.role === 'admin' ? children : <Navigate to="/dashboard" />
 }
 
 function OfflineBanner() {
@@ -37,11 +47,11 @@ function OfflineBanner() {
     <div className={`offline-banner ${agentOnline ? 'offline-banner--agent' : 'offline-banner--error'}`}>
       {agentOnline ? (
         <>
-          ⚠️ 与服务器断开,已切换到 <strong>离线模式</strong>。可执行已下载的脚本,结果会在恢复连接后自动同步
+          <WarningOutlined /> 与服务器断开,已切换到 <strong>离线模式</strong>。可执行已下载的脚本,结果会在恢复连接后自动同步
           {pendingSync > 0 && <>(待同步 {pendingSync} 条)</>}
         </>
       ) : (
-        <>⚠️ 与服务器断开,且本地 Agent 不可用。请检查 Agent 进程是否运行</>
+        <><WarningOutlined /> 与服务器断开,且本地 Agent 不可用。请检查 Agent 进程是否运行</>
       )}
     </div>
   )
@@ -64,6 +74,8 @@ function AppLayout() {
   ]
 
   const adminItems = [
+    { key: '/managed-agents', icon: <DesktopOutlined />, label: '被控设备' },
+    { key: '/managed-schedules', icon: <CalendarOutlined />, label: '托管计划' },
     { key: '/users', icon: <UserOutlined />, label: '用户管理' },
     { key: '/audit', icon: <AuditOutlined />, label: '操作审计' },
   ]
@@ -74,6 +86,8 @@ function AppLayout() {
 
   const selectedKey = loc.pathname === '/dashboard' ? '/dashboard'
     : loc.pathname.startsWith('/runs') ? '/runs'
+    : loc.pathname.startsWith('/managed-agents') ? '/managed-agents'
+    : loc.pathname.startsWith('/managed-schedules') ? '/managed-schedules'
     : loc.pathname.startsWith('/users') ? '/users'
     : loc.pathname.startsWith('/audit') ? '/audit'
     : loc.pathname.startsWith('/issues') ? '/issues'
@@ -123,6 +137,8 @@ function AppLayout() {
             <Route path="/scripts/:id" element={<ScriptDetail />} />
             <Route path="/runs" element={<Runs />} />
             <Route path="/runs/:id" element={<RunDetail />} />
+            <Route path="/managed-agents" element={<AdminRoute><ManagedAgents /></AdminRoute>} />
+            <Route path="/managed-schedules" element={<AdminRoute><ManagedSchedules /></AdminRoute>} />
             <Route path="/users" element={<Users />} />
             <Route path="/audit" element={<AuditLog />} />
             <Route path="/issues" element={<Issues />} />
@@ -165,15 +181,23 @@ const appleTheme = {
 }
 
 export default function App() {
+  const managedMode = isManagedClientMode()
   return (
     <ConfigProvider locale={zhCN} theme={appleTheme}>
       <ConnectionProvider>
-        <AuthProvider>
+        {managedMode ? (
           <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/*" element={<PrivateRoute><AppLayout /></PrivateRoute>} />
+            <Route path="/managed" element={<ManagedClientPanel />} />
+            <Route path="*" element={<Navigate to="/managed" replace />} />
           </Routes>
-        </AuthProvider>
+        ) : (
+          <AuthProvider>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/*" element={<PrivateRoute><AppLayout /></PrivateRoute>} />
+            </Routes>
+          </AuthProvider>
+        )}
       </ConnectionProvider>
     </ConfigProvider>
   )

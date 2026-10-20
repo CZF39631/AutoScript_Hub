@@ -45,9 +45,15 @@ def test_agent_server_uses_a_fallback_port(monkeypatch):
     assert attempts == [18080, 18091]
 
 
-def test_status_endpoint_reports_running_state_and_agent_version():
+def test_status_endpoint_reports_running_state_agent_version_and_identity():
     AgentHandler.get_status_fn = lambda: None
     AgentHandler.get_version_fn = lambda: "0.9.1"
+    AgentHandler.get_client_info_fn = lambda: {
+        "client_mode": "managed",
+        "device_uid": "device-1",
+        "machine_name": "desktop-a",
+        "current_run": None,
+    }
     server = _server()
     try:
         request = urllib.request.Request(
@@ -55,7 +61,15 @@ def test_status_endpoint_reports_running_state_and_agent_version():
         )
         with urllib.request.urlopen(request, timeout=3) as response:
             payload = json.loads(response.read())
-        assert payload == {"running": False, "run_id": None, "version": "0.9.1"}
+        assert payload == {
+            "running": False,
+            "run_id": None,
+            "version": "0.9.1",
+            "client_mode": "managed",
+            "device_uid": "device-1",
+            "machine_name": "desktop-a",
+            "current_run": None,
+        }
     finally:
         server.shutdown(); server.server_close()
 
@@ -101,6 +115,50 @@ def test_preflight_allows_desktop_ui_fallback_ports_only():
         with pytest.raises(urllib.error.HTTPError) as foreign:
             urllib.request.urlopen(request, timeout=3)
         assert foreign.value.code == 403
+    finally:
+        server.shutdown(); server.server_close()
+
+
+def test_managed_mode_rejects_local_execute_before_callback():
+    called = []
+    AgentHandler.get_client_mode_fn = lambda: "managed"
+    AgentHandler.start_local_run_fn = lambda body: called.append(body) or {"status": "running"}
+    server = _server()
+    try:
+        body = json.dumps({"script_id": 1, "params": {"secret": "not-for-notification"}}).encode("utf-8")
+        request = urllib.request.Request(
+            "http://127.0.0.1:{}/local/execute".format(server.server_port),
+            data=body, headers=_headers(**{"Content-Type": "application/json"}), method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(request, timeout=3)
+        assert denied.value.code == 403
+        assert json.loads(denied.value.read()) == {"error": "被控模式禁止本地手工执行"}
+        assert called == []
+    finally:
+        AgentHandler.get_client_mode_fn = None
+        server.shutdown(); server.server_close()
+
+
+def test_connection_endpoint_exposes_client_identity_and_current_run():
+    AgentHandler.get_connection_status_fn = lambda: {
+        "online": True,
+        "client_mode": "standard",
+        "device_uid": "device-2",
+        "machine_name": "desktop-b",
+        "current_run": 73,
+    }
+    server = _server()
+    try:
+        request = urllib.request.Request(
+            "http://127.0.0.1:{}/local/connection".format(server.server_port), headers=_headers()
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read())
+        assert payload["client_mode"] == "standard"
+        assert payload["device_uid"] == "device-2"
+        assert payload["machine_name"] == "desktop-b"
+        assert payload["current_run"] == 73
     finally:
         server.shutdown(); server.server_close()
 
