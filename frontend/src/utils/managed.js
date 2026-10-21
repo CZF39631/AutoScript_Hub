@@ -32,6 +32,67 @@ export function dispatchResourceState({ loading = false, error = '', value = nul
 }
 
 export const THUMBNAIL_STALE_AFTER_MS = 2 * 60 * 1000
+export const MANAGED_PAGE_SIZE = 24
+
+const MANAGED_SORTS = new Set(['name', '-name', 'status', '-status', 'last_heartbeat', '-last_heartbeat', 'created_at', '-created_at'])
+const MANAGED_STATUSES = new Set(['online', 'offline', 'disabled'])
+const MANAGED_RUN_STATUSES = new Set(['idle', 'pending', 'running', 'success', 'failed', 'cancelled', 'expired'])
+
+export function parseManagedListSearch(value = '') {
+  const params = value instanceof URLSearchParams ? value : new URLSearchParams(value)
+  const page = Math.max(1, Number.parseInt(params.get('page') || '1', 10) || 1)
+  const groupId = Number.parseInt(params.get('group_id') || '', 10)
+  const status = params.get('status') || ''
+  const runStatus = params.get('run_status') || ''
+  const sort = params.get('sort') || '-last_heartbeat'
+  return {
+    query: (params.get('query') || '').slice(0, 200),
+    status: MANAGED_STATUSES.has(status) ? status : '',
+    runStatus: MANAGED_RUN_STATUSES.has(runStatus) ? runStatus : '',
+    groupId: Number.isInteger(groupId) && groupId > 0 ? groupId : null,
+    sort: MANAGED_SORTS.has(sort) ? sort : '-last_heartbeat',
+    page,
+    pageSize: MANAGED_PAGE_SIZE,
+  }
+}
+
+export function managedListSearchParams(filters = {}) {
+  const params = new URLSearchParams()
+  if (filters.query?.trim()) params.set('query', filters.query.trim())
+  if (filters.status) params.set('status', filters.status)
+  if (filters.runStatus) params.set('run_status', filters.runStatus)
+  if (filters.groupId) params.set('group_id', String(filters.groupId))
+  if (filters.sort && filters.sort !== '-last_heartbeat') params.set('sort', filters.sort)
+  if (Number(filters.page) > 1) params.set('page', String(filters.page))
+  return params
+}
+
+export function createManagedBatchSelection({ allMatching = false, selectedIds = [], filters = {} } = {}) {
+  if (!allMatching) {
+    return { mode: 'explicit', agent_ids: [...new Set(selectedIds.map(Number).filter(Number.isInteger))] }
+  }
+  return {
+    mode: 'all',
+    agent_ids: [],
+    filters: {
+      query: filters.query?.trim() || null,
+      status: filters.status || null,
+      run_status: filters.runStatus || null,
+      group_id: filters.groupId || null,
+      sort: filters.sort || '-last_heartbeat',
+    },
+  }
+}
+
+export function managedPageSelectionState(pageIds = [], selectedIds = []) {
+  const selected = new Set(selectedIds)
+  const count = pageIds.filter(id => selected.has(id)).length
+  return { checked: pageIds.length > 0 && count === pageIds.length, indeterminate: count > 0 && count < pageIds.length }
+}
+
+export function batchResultSummary(result = {}) {
+  return `${Number(result.success) || 0} 成功 · ${Number(result.failed) || 0} 失败 · ${Number(result.skipped) || 0} 跳过`
+}
 
 export function thumbnailTimestamp(agent) {
   return agent?.thumbnail_updated_at || null

@@ -31,7 +31,8 @@ def test_fresh_database_upgrades_to_head(tmp_path):
     assert {
         "users", "scripts", "runs", "agents", "user_presets", "user_settings",
         "groups", "user_groups", "script_groups", "server_settings",
-        "managed_schedules", "alembic_version",
+        "managed_schedules", "managed_agent_groups", "managed_agent_group_members",
+        "managed_agent_batches", "managed_agent_batch_items", "alembic_version",
     }.issubset(tables)
     inspector = inspect(create_engine(database_url))
     assert {
@@ -270,6 +271,38 @@ def test_thumbnail_pause_migration_upgrades_0009_and_downgrades_cleanly(tmp_path
         column["name"] for column in inspect(engine).get_columns("agents")
     }
     engine.dispose()
+
+
+def test_managed_scale_migration_upgrades_0010_and_downgrades_cleanly(tmp_path):
+    database_url = _sqlite_url(tmp_path / "managed-scale.db")
+    config = alembic_config(database_url)
+    command.upgrade(config, "0010_agent_thumbnail_capture_pause")
+    engine = create_engine(database_url)
+    # Fresh 0001 uses current metadata, so remove future tables to reproduce a deployed 0010 database.
+    with engine.begin() as connection:
+        for table in (
+            "managed_agent_batch_items", "managed_agent_batches",
+            "managed_agent_group_members", "managed_agent_groups",
+        ):
+            connection.execute(text("DROP TABLE IF EXISTS {}".format(table)))
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    tables = set(inspect(engine).get_table_names())
+    assert {
+        "managed_agent_groups", "managed_agent_group_members",
+        "managed_agent_batches", "managed_agent_batch_items",
+    }.issubset(tables)
+    assert "uq_managed_agent_batch_actor_key" in {
+        item["name"] for item in inspect(engine).get_unique_constraints("managed_agent_batches")
+    }
+    engine.dispose()
+
+    command.downgrade(config, "0010_agent_thumbnail_capture_pause")
+    tables = set(inspect(create_engine(database_url)).get_table_names())
+    assert "managed_agent_groups" not in tables
+    assert "managed_agent_batches" not in tables
 
 
 def test_managed_downgrade_terminates_directed_work_before_dropping_target(tmp_path):

@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 
 import {
   agentImpactCounts,
+  batchResultSummary,
   buildSchedulePayload,
   buildVisualCron,
   canConfirmAgentImpact,
+  createManagedBatchSelection,
   describeCron,
   dispatchResourceState,
   formatInterval,
@@ -15,7 +17,10 @@ import {
   isManagedClientMode,
   isThumbnailStale,
   MANAGED_FIRST_CONNECTION_GUIDE,
+  managedListSearchParams,
+  managedPageSelectionState,
   managedClientPath,
+  parseManagedListSearch,
   scheduleFormValues,
   scheduleStatusCounts,
   secondsToInterval,
@@ -23,6 +28,35 @@ import {
   shouldRefreshThumbnail,
   thumbnailTimestamp,
 } from './managed.js'
+
+test('managed scale filters round-trip through the URL with safe defaults', () => {
+  const parsed = parseManagedListSearch('query=%E4%B8%8A%E6%B5%B7&status=online&run_status=running&group_id=8&sort=name&page=3')
+  assert.deepEqual(parsed, {
+    query: '上海', status: 'online', runStatus: 'running', groupId: 8,
+    sort: 'name', page: 3, pageSize: 24,
+  })
+  assert.equal(managedListSearchParams(parsed).toString(), 'query=%E4%B8%8A%E6%B5%B7&status=online&run_status=running&group_id=8&sort=name&page=3')
+  assert.deepEqual(parseManagedListSearch('status=broken&sort=unknown&page=-3'), {
+    query: '', status: '', runStatus: '', groupId: null,
+    sort: '-last_heartbeat', page: 1, pageSize: 24,
+  })
+})
+
+test('page and all-filtered selection keep their semantics explicit', () => {
+  assert.deepEqual(managedPageSelectionState([1, 2, 3], [1, 3]), { checked: false, indeterminate: true })
+  assert.deepEqual(createManagedBatchSelection({ selectedIds: [3, 3, 5] }), {
+    mode: 'explicit', agent_ids: [3, 5],
+  })
+  assert.deepEqual(createManagedBatchSelection({
+    allMatching: true,
+    selectedIds: [99],
+    filters: { query: '华东', status: 'online', runStatus: 'idle', groupId: 2, sort: 'name' },
+  }), {
+    mode: 'all', agent_ids: [],
+    filters: { query: '华东', status: 'online', run_status: 'idle', group_id: 2, sort: 'name' },
+  })
+  assert.equal(batchResultSummary({ success: 8, failed: 2, skipped: 1 }), '8 成功 · 2 失败 · 1 跳过')
+})
 
 test('managed mode and its route whitelist are explicit', () => {
   assert.equal(isManagedClientMode({ _CLIENT_MODE: 'managed' }), true)

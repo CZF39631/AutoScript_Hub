@@ -29,6 +29,16 @@ script_groups = Table(
     Index("ix_script_groups_group_id", "group_id"),
 )
 
+managed_agent_group_members = Table(
+    "managed_agent_group_members",
+    Base.metadata,
+    Column("agent_id", Integer, ForeignKey("agents.id"), primary_key=True),
+    Column("group_id", Integer, ForeignKey("managed_agent_groups.id"), primary_key=True),
+    Column("created_at", DateTime, nullable=False, default=_utcnow),
+    Column("created_by", Integer, ForeignKey("users.id"), nullable=True),
+    Index("ix_managed_agent_group_members_group_id", "group_id"),
+)
+
 
 class Group(Base):
     __tablename__ = "groups"
@@ -113,6 +123,76 @@ class Agent(Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     is_deleted = Column(Boolean, nullable=False, default=False)
+
+    managed_groups = relationship(
+        "ManagedAgentGroup", secondary=managed_agent_group_members,
+        back_populates="agents",
+    )  # type: ignore[call-arg]
+
+
+class ManagedAgentGroup(Base):
+    __tablename__ = "managed_agent_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    is_deleted = Column(Boolean, nullable=False, default=False)
+
+    agents = relationship(
+        "Agent", secondary=managed_agent_group_members,
+        back_populates="managed_groups",
+    )  # type: ignore[call-arg]
+
+
+class ManagedAgentBatch(Base):
+    __tablename__ = "managed_agent_batches"
+    __table_args__ = (
+        UniqueConstraint("created_by", "idempotency_key", name="uq_managed_agent_batch_actor_key"),
+        Index("ix_managed_agent_batches_actor_created", "created_by", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    idempotency_key = Column(String(128), nullable=False)
+    request_hash = Column(String(64), nullable=False)
+    operation = Column(String(40), nullable=False)
+    status = Column(String(20), nullable=False, default="processing")
+    selection_json = Column(Text, nullable=False)
+    request_json = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=True)
+    total_count = Column(Integer, nullable=False, default=0)
+    success_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    skipped_count = Column(Integer, nullable=False, default=0)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    items = relationship(
+        "ManagedAgentBatchItem", back_populates="batch", order_by="ManagedAgentBatchItem.id"
+    )  # type: ignore[call-arg]
+
+
+class ManagedAgentBatchItem(Base):
+    __tablename__ = "managed_agent_batch_items"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "agent_id", name="uq_managed_agent_batch_item"),
+        Index("ix_managed_agent_batch_items_batch_result", "batch_id", "result"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("managed_agent_batches.id"), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
+    result = Column(String(20), nullable=False)
+    reason = Column(Text, nullable=True)
+    run_id = Column(Integer, ForeignKey("runs.id"), nullable=True)
+    detail_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    batch = relationship("ManagedAgentBatch", back_populates="items")  # type: ignore[call-arg]
 
 
 class Script(Base):

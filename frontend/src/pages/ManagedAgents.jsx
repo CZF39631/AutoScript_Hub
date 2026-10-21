@@ -4,26 +4,26 @@ import {
   Segmented, Select, Skeleton, Space, Switch, Tag, Tooltip, message,
 } from 'antd'
 import {
-  DeleteOutlined, DesktopOutlined, EditOutlined, EyeOutlined, LoadingOutlined,
-  PauseCircleOutlined, PictureOutlined, PlayCircleOutlined, ReloadOutlined, SafetyCertificateOutlined,
+  DeleteOutlined, DesktopOutlined, EditOutlined, EyeOutlined, FolderOutlined, LoadingOutlined,
+  PauseCircleOutlined, PictureOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined,
   SearchOutlined, SendOutlined, ThunderboltOutlined, WarningOutlined, ZoomInOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../api/client'
 import { loadManagedThumbnail } from '../api/managedThumbnails'
 import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
-  agentImpactCounts, apiErrorMessage, buildSchedulePayload, buildVisualCron,
-  canConfirmAgentImpact, describeCron, dispatchResourceState, formatSchedule, intervalToSeconds,
-  isThumbnailStale, isValidCronExpression, MANAGED_FIRST_CONNECTION_GUIDE,
-  scheduleFormValues, scheduleStatusCounts, shortMonthSkipDay, statusPresentation, thumbnailTimestamp,
+  agentImpactCounts, apiErrorMessage, batchResultSummary, buildSchedulePayload, buildVisualCron,
+  canConfirmAgentImpact, createManagedBatchSelection, describeCron, dispatchResourceState,
+  formatSchedule, intervalToSeconds, isThumbnailStale, isValidCronExpression,
+  managedListSearchParams, managedPageSelectionState, MANAGED_FIRST_CONNECTION_GUIDE,
+  parseManagedListSearch, scheduleFormValues, scheduleStatusCounts, shortMonthSkipDay,
+  statusPresentation, thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
 import usePageFocused from '../hooks/usePageFocused'
 import { refreshDelay } from '../utils/runHistory'
-
-const AGENTS_PER_PAGE = 24
 
 const durationUnits = [
   { value: 'minute', label: '分钟' },
@@ -183,7 +183,7 @@ function ThumbnailScreen({ agent }) {
   )
 }
 
-function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDispatch, onDelete, onOpenRun, onOpenHistory, onOpenThumbnailAudit }) {
+function AgentCard({ agent, checked, updating, scheduleSummary, onSelect, onPause, onRestore, onDispatch, onDelete, onGroups, onOpenRun, onOpenHistory, onOpenThumbnailAudit }) {
   const currentRun = agent.current_run
   const latestRun = agent.latest_run
   const earliestPending = agent.earliest_pending
@@ -195,6 +195,12 @@ function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDis
   return (
     <article className={`managed-agent-card${agent.enabled ? '' : ' is-disabled'}`}>
       <div className="managed-agent-card__header">
+        <Checkbox
+          className="managed-agent-card__selector"
+          checked={checked}
+          onChange={event => onSelect(agent.id, event.target.checked)}
+          aria-label={`选择设备 ${agent.machine_name}`}
+        />
         <div className="managed-agent-card__identity">
           <span className="managed-agent-card__device"><DesktopOutlined /></span>
           <div>
@@ -206,6 +212,13 @@ function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDis
       </div>
 
       <ThumbnailScreen agent={agent} />
+
+      <div className="managed-agent-card__groups">
+        {(agent.groups || []).length
+          ? agent.groups.map(group => <Tag key={group.id}>{group.name}</Tag>)
+          : <span>未分组</span>}
+        <Button type="link" size="small" icon={<FolderOutlined />} onClick={() => onGroups(agent)}>调整</Button>
+      </div>
 
       <dl className="managed-agent-card__details">
         <div><dt>Agent 版本</dt><dd>{agent.agent_version || '-'}</dd></div>
@@ -293,8 +306,12 @@ function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDis
 
 export default function ManagedAgents({ embedded = false }) {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const listFilters = useMemo(() => parseManagedListSearch(searchParams), [searchParams])
   const pageFocused = usePageFocused()
   const [agents, setAgents] = useState([])
+  const [totalAgents, setTotalAgents] = useState(0)
+  const [groups, setGroups] = useState([])
   const [schedules, setSchedules] = useState([])
   const [scripts, setScripts] = useState([])
   const [environments, setEnvironments] = useState([])
@@ -312,9 +329,12 @@ export default function ManagedAgents({ embedded = false }) {
   const [optionsResource, setOptionsResource] = useState({ status: 'empty', error: '' })
   const [scriptResource, setScriptResource] = useState({ status: 'empty', error: '', scriptId: null })
   const [submitting, setSubmitting] = useState(false)
-  const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [page, setPage] = useState(1)
+  const [selectedAgentIds, setSelectedAgentIds] = useState([])
+  const [allMatchingSelected, setAllMatchingSelected] = useState(false)
+  const [groupDialog, setGroupDialog] = useState({ open: false, agent: null, groupIds: [], name: '', editing: null, loading: false })
+  const [batchDialog, setBatchDialog] = useState({ open: false, operation: '', step: 'configure', preview: null, loading: false, result: null })
+  const [batchValues, setBatchValues] = useState({ script_id: null, environment_id: null, params_text: '{}', expires_in_seconds: 3600, group_ids: [] })
+  const [batchOptions, setBatchOptions] = useState({ scripts: [], environments: [] })
   const listRequest = useRef(null)
   const impactRequest = useRef(null)
   const optionsRequest = useRef(0)
@@ -341,12 +361,23 @@ export default function ManagedAgents({ embedded = false }) {
     if (!quiet) setLoading(true)
     setLoadError('')
     try {
-      const [agentResult, scheduleResult] = await Promise.allSettled([
-        api.get('/api/admin/managed-agents', { signal: controller.signal }),
+      const requestParams = {
+        query: listFilters.query || undefined,
+        status: listFilters.status || undefined,
+        run_status: listFilters.runStatus || undefined,
+        group_id: listFilters.groupId || undefined,
+        sort: listFilters.sort,
+        page: listFilters.page,
+        page_size: listFilters.pageSize,
+      }
+      const [agentResult, scheduleResult, groupResult] = await Promise.allSettled([
+        api.get('/api/admin/managed-agents/paged', { params: requestParams, signal: controller.signal }),
         api.get('/api/admin/managed-schedules', { signal: controller.signal }),
+        api.get('/api/admin/managed-agent-groups', { signal: controller.signal }),
       ])
       if (!controller.signal.aborted && agentResult.status === 'fulfilled') {
-        setAgents(Array.isArray(agentResult.value.data) ? agentResult.value.data : [])
+        setAgents(Array.isArray(agentResult.value.data?.items) ? agentResult.value.data.items : [])
+        setTotalAgents(Number(agentResult.value.data?.total) || 0)
       } else if (!controller.signal.aborted && agentResult.status === 'rejected') {
         throw agentResult.reason
       }
@@ -354,6 +385,11 @@ export default function ManagedAgents({ embedded = false }) {
         setSchedules(Array.isArray(scheduleResult.value.data) ? scheduleResult.value.data : [])
       } else if (!controller.signal.aborted && scheduleResult.status === 'rejected') {
         throw scheduleResult.reason
+      }
+      if (!controller.signal.aborted && groupResult.status === 'fulfilled') {
+        setGroups(Array.isArray(groupResult.value.data) ? groupResult.value.data : [])
+      } else if (!controller.signal.aborted && groupResult.status === 'rejected') {
+        throw groupResult.reason
       }
     } catch (error) {
       if (!controller.signal.aborted && error?.code !== 'ERR_CANCELED') {
@@ -365,7 +401,14 @@ export default function ManagedAgents({ embedded = false }) {
         listRequest.current = null
       }
     }
-  }, [])
+  }, [listFilters.groupId, listFilters.page, listFilters.pageSize, listFilters.query, listFilters.runStatus, listFilters.sort, listFilters.status])
+
+  const updateListFilters = useCallback(changes => {
+    const next = { ...listFilters, ...changes }
+    if (!Object.prototype.hasOwnProperty.call(changes, 'page')) next.page = 1
+    setSearchParams(managedListSearchParams(next), { replace: true })
+    setAllMatchingSelected(false)
+  }, [listFilters, setSearchParams])
 
   useEffect(() => {
     load()
@@ -426,26 +469,17 @@ export default function ManagedAgents({ embedded = false }) {
     return parseScriptConfig(detail?.config_json).params || []
   }, [scriptDetails, selectedScriptId])
 
-  const filteredAgents = useMemo(() => {
-    const keyword = query.trim().toLocaleLowerCase()
-    return agents.filter(agent => {
-      const matchesKeyword = !keyword || [agent.machine_name, agent.machine_ip, agent.agent_version]
-        .some(value => String(value || '').toLocaleLowerCase().includes(keyword))
-      const matchesStatus = statusFilter === 'all'
-        || (statusFilter === 'disabled' ? !agent.enabled : agent.enabled && agent.status === statusFilter)
-      return matchesKeyword && matchesStatus
-    })
-  }, [agents, query, statusFilter])
-
-  const pageAgents = useMemo(() => {
-    const start = (page - 1) * AGENTS_PER_PAGE
-    return filteredAgents.slice(start, start + AGENTS_PER_PAGE)
-  }, [filteredAgents, page])
+  const pageAgents = agents
+  const selectedSet = useMemo(() => new Set(selectedAgentIds), [selectedAgentIds])
+  const pageSelection = managedPageSelectionState(pageAgents.map(agent => agent.id), selectedAgentIds)
+  const selectedCount = allMatchingSelected ? totalAgents : selectedAgentIds.length
+  const batchSelection = useMemo(() => createManagedBatchSelection({
+    allMatching: allMatchingSelected, selectedIds: selectedAgentIds, filters: listFilters,
+  }), [allMatchingSelected, listFilters, selectedAgentIds])
 
   useEffect(() => {
-    const lastPage = Math.max(1, Math.ceil(filteredAgents.length / AGENTS_PER_PAGE))
-    if (page > lastPage) setPage(lastPage)
-  }, [filteredAgents.length, page])
+    setSelectedAgentIds(current => current.filter(id => totalAgents > 0 || agents.some(agent => agent.id === id)))
+  }, [agents, totalAgents])
 
   const schedulesByAgent = useMemo(() => {
     const result = new Map()
@@ -701,6 +735,153 @@ export default function ManagedAgents({ embedded = false }) {
     }
   }
 
+  const toggleAgentSelection = (agentId, checked) => {
+    setAllMatchingSelected(false)
+    setSelectedAgentIds(current => checked
+      ? [...new Set([...current, agentId])]
+      : current.filter(id => id !== agentId))
+  }
+
+  const togglePageSelection = checked => {
+    setAllMatchingSelected(false)
+    const pageIds = pageAgents.map(agent => agent.id)
+    setSelectedAgentIds(current => checked
+      ? [...new Set([...current, ...pageIds])]
+      : current.filter(id => !pageIds.includes(id)))
+  }
+
+  const openGroups = agent => setGroupDialog({
+    open: true, agent, groupIds: (agent?.groups || []).map(group => group.id),
+    name: '', editing: null, loading: false,
+  })
+
+  const saveAgentGroups = async () => {
+    if (!groupDialog.agent) return
+    setGroupDialog(current => ({ ...current, loading: true }))
+    try {
+      const response = await api.put(`/api/admin/managed-agents/${groupDialog.agent.id}/groups`, {
+        group_ids: groupDialog.groupIds,
+      })
+      setAgents(current => current.map(agent => agent.id === groupDialog.agent.id
+        ? { ...agent, groups: response.data }
+        : agent))
+      message.success(`设备“${groupDialog.agent.machine_name}”的分组已更新`)
+      setGroupDialog(current => ({ ...current, open: false, loading: false }))
+      await load({ quiet: true })
+    } catch (error) {
+      message.error(apiErrorMessage(error, '设备分组更新失败'))
+      setGroupDialog(current => ({ ...current, loading: false }))
+    }
+  }
+
+  const createGroup = async () => {
+    const name = groupDialog.name.trim()
+    if (!name) return
+    setGroupDialog(current => ({ ...current, loading: true }))
+    try {
+      const response = await api.post('/api/admin/managed-agent-groups', { name })
+      setGroups(current => [...current, response.data].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')))
+      setGroupDialog(current => ({ ...current, name: '', loading: false }))
+      message.success(`分组“${name}”已创建`)
+    } catch (error) {
+      message.error(apiErrorMessage(error, '创建设备分组失败'))
+      setGroupDialog(current => ({ ...current, loading: false }))
+    }
+  }
+
+  const renameGroup = async group => {
+    const name = groupDialog.name.trim()
+    if (!name) return
+    setGroupDialog(current => ({ ...current, loading: true }))
+    try {
+      const response = await api.patch(`/api/admin/managed-agent-groups/${group.id}`, { name })
+      setGroups(current => current.map(item => item.id === group.id ? response.data : item))
+      setAgents(current => current.map(agent => ({
+        ...agent,
+        groups: (agent.groups || []).map(item => item.id === group.id ? { id: group.id, name } : item),
+      })))
+      setGroupDialog(current => ({ ...current, editing: null, name: '', loading: false }))
+      message.success('分组已重命名')
+    } catch (error) {
+      message.error(apiErrorMessage(error, '重命名分组失败'))
+      setGroupDialog(current => ({ ...current, loading: false }))
+    }
+  }
+
+  const deleteGroup = async group => {
+    try {
+      await api.delete(`/api/admin/managed-agent-groups/${group.id}`)
+      setGroups(current => current.filter(item => item.id !== group.id))
+      setAgents(current => current.map(agent => ({ ...agent, groups: (agent.groups || []).filter(item => item.id !== group.id) })))
+      setGroupDialog(current => ({ ...current, groupIds: current.groupIds.filter(id => id !== group.id) }))
+      message.success(`分组“${group.name}”已删除，设备不会被删除`)
+    } catch (error) {
+      message.error(apiErrorMessage(error, '删除设备分组失败'))
+    }
+  }
+
+  const openBatch = async operation => {
+    setBatchValues({ script_id: null, environment_id: null, params_text: '{}', expires_in_seconds: 3600, group_ids: [] })
+    setBatchOptions({ scripts: [], environments: [] })
+    setBatchDialog({ open: true, operation, step: 'configure', preview: null, loading: false, result: null })
+    if (operation === 'dispatch_run') {
+      const representative = pageAgents.find(agent => selectedSet.has(agent.id)) || pageAgents[0]
+      if (representative) {
+        try {
+          const response = await api.get(`/api/admin/managed-agents/${representative.id}/options`)
+          setBatchOptions({ scripts: response.data?.scripts || [], environments: response.data?.environments || [] })
+        } catch (error) {
+          message.error(apiErrorMessage(error, '批量任务选项加载失败'))
+        }
+      }
+    }
+  }
+
+  const batchPayload = () => ({
+    operation: batchDialog.operation,
+    selection: batchSelection,
+    ...(batchDialog.operation === 'dispatch_run' ? {
+      script_id: batchValues.script_id,
+      params: JSON.parse(batchValues.params_text || '{}'),
+      environment_id: batchValues.environment_id ?? null,
+      expires_in_seconds: batchValues.expires_in_seconds,
+    } : {}),
+    ...(batchDialog.operation === 'set_groups' ? { group_ids: batchValues.group_ids } : {}),
+  })
+
+  const previewBatch = async () => {
+    setBatchDialog(current => ({ ...current, loading: true }))
+    try {
+      const payload = batchPayload()
+      if (payload.params && (Array.isArray(payload.params) || typeof payload.params !== 'object')) {
+        throw new Error('任务参数必须是 JSON 对象')
+      }
+      const response = await api.post('/api/admin/managed-agent-batches/preview', payload)
+      setBatchDialog(current => ({ ...current, loading: false, step: 'preview', preview: response.data }))
+    } catch (error) {
+      message.error(apiErrorMessage(error, '批量操作预览失败'))
+      setBatchDialog(current => ({ ...current, loading: false }))
+    }
+  }
+
+  const executeBatch = async () => {
+    setBatchDialog(current => ({ ...current, loading: true }))
+    const key = globalThis.crypto?.randomUUID?.() || `batch-${Date.now()}-${Math.random()}`
+    try {
+      const response = await api.post('/api/admin/managed-agent-batches', batchPayload(), {
+        headers: { 'Idempotency-Key': key },
+      })
+      setBatchDialog(current => ({ ...current, loading: false, step: 'result', result: response.data }))
+      message.success(`批量操作完成：${batchResultSummary(response.data)}`)
+      setSelectedAgentIds([])
+      setAllMatchingSelected(false)
+      await load({ quiet: true })
+    } catch (error) {
+      message.error(apiErrorMessage(error, '批量操作执行失败'))
+      setBatchDialog(current => ({ ...current, loading: false }))
+    }
+  }
+
   const dispatchSchedules = schedulesByAgent.get(dispatchAgent?.id) || []
   const dispatchScheduleCounts = scheduleStatusCounts(dispatchSchedules)
   const taskFieldsDisabled = selectedTaskType === 'manual'
@@ -732,28 +913,82 @@ export default function ManagedAgents({ embedded = false }) {
         />
       )}
 
-      {agents.length > 0 && (
-        <div className="managed-agent-toolbar">
-          <Input
-            allowClear
-            prefix={<SearchOutlined />}
-            placeholder="搜索设备名、IP 或版本"
-            value={query}
-            onChange={event => { setQuery(event.target.value); setPage(1) }}
-          />
-          <Select
-            aria-label="设备状态筛选"
-            value={statusFilter}
-            onChange={value => { setStatusFilter(value); setPage(1) }}
-            options={[
-              { value: 'all', label: '全部状态' },
-              { value: 'online', label: '在线' },
-              { value: 'offline', label: '离线' },
-              { value: 'disabled', label: '已停用' },
-            ]}
-          />
-          <span className="managed-agent-count">{filteredAgents.length} 台设备</span>
-        </div>
+      {(agents.length > 0 || totalAgents > 0 || listFilters.query || listFilters.status || listFilters.groupId) && (
+        <>
+          <div className="managed-agent-toolbar">
+            <Input
+              allowClear
+              prefix={<SearchOutlined />}
+              placeholder="搜索设备名、IP、版本或设备 ID"
+              value={listFilters.query}
+              onChange={event => updateListFilters({ query: event.target.value })}
+            />
+            <Select
+              aria-label="设备状态筛选"
+              value={listFilters.status || 'all'}
+              onChange={value => updateListFilters({ status: value === 'all' ? '' : value })}
+              options={[
+                { value: 'all', label: '全部状态' },
+                { value: 'online', label: '在线' },
+                { value: 'offline', label: '离线' },
+                { value: 'disabled', label: '已停用' },
+              ]}
+            />
+            <Select
+              aria-label="任务状态筛选"
+              value={listFilters.runStatus || 'all'}
+              onChange={value => updateListFilters({ runStatus: value === 'all' ? '' : value })}
+              options={[
+                { value: 'all', label: '全部任务' }, { value: 'idle', label: '空闲' },
+                { value: 'pending', label: '有等待任务' }, { value: 'running', label: '执行中' },
+                { value: 'failed', label: '有失败记录' }, { value: 'success', label: '有成功记录' },
+              ]}
+            />
+            <Select
+              allowClear
+              aria-label="设备分组筛选"
+              placeholder="全部分组"
+              value={listFilters.groupId || undefined}
+              onChange={value => updateListFilters({ groupId: value || null })}
+              options={groups.map(group => ({ value: group.id, label: `${group.name} (${group.member_count})` }))}
+            />
+            <Select
+              aria-label="设备排序"
+              value={listFilters.sort}
+              onChange={sort => updateListFilters({ sort })}
+              options={[
+                { value: '-last_heartbeat', label: '最近心跳优先' },
+                { value: 'name', label: '设备名升序' }, { value: '-name', label: '设备名降序' },
+                { value: '-created_at', label: '最新接入优先' }, { value: 'status', label: '状态排序' },
+              ]}
+            />
+            <Button icon={<FolderOutlined />} onClick={() => openGroups(null)}>管理分组</Button>
+            <span className="managed-agent-count">{totalAgents} 台设备</span>
+          </div>
+          <div className="managed-selection-bar" aria-label="设备批量选择与操作">
+            <div className="managed-selection-bar__scope">
+              <Checkbox
+                checked={pageSelection.checked}
+                indeterminate={pageSelection.indeterminate}
+                onChange={event => togglePageSelection(event.target.checked)}
+              >选中本页（{pageAgents.length} 台）</Checkbox>
+              {totalAgents > pageAgents.length && (
+                <Button type="link" onClick={() => { setAllMatchingSelected(true); setSelectedAgentIds([]) }}>
+                  选中全部筛选结果（{totalAgents} 台）
+                </Button>
+              )}
+              {selectedCount > 0 && <strong>{allMatchingSelected ? '已选全部筛选结果' : '已明确选择'} {selectedCount} 台</strong>}
+            </div>
+            <div className="managed-selection-bar__actions">
+              <Button disabled={!selectedCount} icon={<SendOutlined />} onClick={() => openBatch('dispatch_run')}>发布临时任务</Button>
+              <Button disabled={!selectedCount} icon={<PauseCircleOutlined />} onClick={() => openBatch('pause_agents')}>暂停接单</Button>
+              <Button disabled={!selectedCount} icon={<PlayCircleOutlined />} onClick={() => openBatch('resume_agents')}>恢复接单</Button>
+              <Button disabled={!selectedCount} onClick={() => openBatch('pause_schedules')}>暂停计划</Button>
+              <Button disabled={!selectedCount} icon={<FolderOutlined />} onClick={() => openBatch('set_groups')}>调整分组</Button>
+              {selectedCount > 0 && <Button type="text" onClick={() => { setSelectedAgentIds([]); setAllMatchingSelected(false) }}>清除选择</Button>}
+            </div>
+          </div>
+        </>
       )}
 
       {loading && !agents.length ? (
@@ -769,33 +1004,36 @@ export default function ManagedAgents({ embedded = false }) {
           <div className="managed-agent-grid">
             {pageAgents.map(agent => (
               <AgentCard
-                key={`${agent.id}:${page}:${statusFilter}:${query}`}
+                key={agent.id}
                 agent={agent}
+                checked={allMatchingSelected || selectedSet.has(agent.id)}
                 updating={Boolean(updating[agent.id])}
                 scheduleSummary={scheduleStatusCounts(schedulesByAgent.get(agent.id) || [])}
+                onSelect={toggleAgentSelection}
                 onPause={item => loadImpact(item, 'disable', { resetName: true })}
                 onRestore={restoreAgent}
                 onDispatch={openDispatch}
                 onDelete={item => loadImpact(item, 'delete', { resetName: true })}
+                onGroups={openGroups}
                 onOpenRun={runId => navigate(`/runs/${runId}`)}
                 onOpenHistory={agentId => navigate(`/runs?agent_id=${agentId}`)}
                 onOpenThumbnailAudit={() => navigate('/audit?action=managed_thumbnail.view')}
               />
             ))}
           </div>
-          {filteredAgents.length > AGENTS_PER_PAGE && (
+          {totalAgents > listFilters.pageSize && (
             <Pagination
               className="managed-agent-pagination"
-              current={page}
-              pageSize={AGENTS_PER_PAGE}
-              total={filteredAgents.length}
+              current={listFilters.page}
+              pageSize={listFilters.pageSize}
+              total={totalAgents}
               showSizeChanger={false}
               showLessItems
-              onChange={setPage}
+              onChange={page => updateListFilters({ page })}
             />
           )}
         </>
-      ) : agents.length ? (
+      ) : totalAgents || listFilters.query || listFilters.status || listFilters.runStatus || listFilters.groupId ? (
         <div className="managed-agent-empty managed-agent-empty--compact">
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合筛选条件的设备" />
         </div>
@@ -838,6 +1076,174 @@ export default function ManagedAgents({ embedded = false }) {
           </div>
         </section>
       ) : null}
+
+      <Modal
+        title={groupDialog.agent ? `调整“${groupDialog.agent.machine_name}”的分组` : '设备分组管理'}
+        open={groupDialog.open}
+        onCancel={() => !groupDialog.loading && setGroupDialog(current => ({ ...current, open: false }))}
+        onOk={groupDialog.agent ? saveAgentGroups : undefined}
+        okText={groupDialog.agent ? '保存设备分组' : undefined}
+        cancelText={groupDialog.agent ? '取消' : '关闭'}
+        okButtonProps={groupDialog.agent ? { loading: groupDialog.loading } : { style: { display: 'none' } }}
+        width={620}
+        destroyOnHidden
+      >
+        {groupDialog.agent && (
+          <Form.Item label="所属分组" extra="一台设备可以同时属于多个分组。">
+            <Select
+              mode="multiple"
+              value={groupDialog.groupIds}
+              onChange={groupIds => setGroupDialog(current => ({ ...current, groupIds }))}
+              options={groups.map(group => ({ value: group.id, label: group.name }))}
+              placeholder="可不选择分组"
+            />
+          </Form.Item>
+        )}
+        <section className="managed-group-manager">
+          <div className="managed-group-manager__create">
+            <Input
+              value={groupDialog.name}
+              maxLength={100}
+              placeholder={groupDialog.editing ? `输入“${groupDialog.editing.name}”的新名称` : '新分组名称'}
+              onPressEnter={() => groupDialog.editing ? renameGroup(groupDialog.editing) : createGroup()}
+              onChange={event => setGroupDialog(current => ({ ...current, name: event.target.value }))}
+            />
+            <Button
+              type="primary"
+              icon={groupDialog.editing ? <EditOutlined /> : <PlusOutlined />}
+              loading={groupDialog.loading}
+              disabled={!groupDialog.name.trim()}
+              onClick={() => groupDialog.editing ? renameGroup(groupDialog.editing) : createGroup()}
+            >{groupDialog.editing ? '保存名称' : '创建分组'}</Button>
+            {groupDialog.editing && <Button onClick={() => setGroupDialog(current => ({ ...current, editing: null, name: '' }))}>取消重命名</Button>}
+          </div>
+          <div className="managed-group-manager__list">
+            {groups.length ? groups.map(group => (
+              <div key={group.id}>
+                <span><strong>{group.name}</strong><small>{group.member_count} 台设备</small></span>
+                <Space size={2}>
+                  <Button type="text" size="small" icon={<EditOutlined />} onClick={() => setGroupDialog(current => ({ ...current, editing: group, name: group.name }))}>重命名</Button>
+                  <Popconfirm
+                    title={`删除分组“${group.name}”？`}
+                    description="只会解除设备归属，不会删除设备。"
+                    okText="删除分组"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => deleteGroup(group)}
+                  >
+                    <Button danger type="text" size="small" icon={<DeleteOutlined />}>删除</Button>
+                  </Popconfirm>
+                </Space>
+              </div>
+            )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未创建设备分组" />}
+          </div>
+        </section>
+      </Modal>
+
+      <Modal
+        title={{
+          dispatch_run: '批量发布临时任务', pause_agents: '批量暂停接单',
+          resume_agents: '批量恢复接单', pause_schedules: '批量暂停计划', set_groups: '批量调整分组',
+        }[batchDialog.operation] || '批量操作'}
+        open={batchDialog.open}
+        onCancel={() => !batchDialog.loading && setBatchDialog(current => ({ ...current, open: false }))}
+        width={720}
+        destroyOnHidden
+        okText={batchDialog.step === 'configure' ? '预览影响' : batchDialog.step === 'preview' ? '确认执行' : '完成'}
+        cancelText={batchDialog.step === 'result' ? undefined : '取消'}
+        okButtonProps={{
+          loading: batchDialog.loading,
+          danger: ['pause_agents', 'pause_schedules'].includes(batchDialog.operation) && batchDialog.step === 'preview',
+          disabled: batchDialog.operation === 'dispatch_run' && batchDialog.step === 'configure' && !batchValues.script_id,
+        }}
+        cancelButtonProps={batchDialog.step === 'result' ? { style: { display: 'none' } } : undefined}
+        onOk={() => batchDialog.step === 'configure'
+          ? previewBatch()
+          : batchDialog.step === 'preview'
+            ? executeBatch()
+            : setBatchDialog(current => ({ ...current, open: false }))}
+      >
+        <Alert
+          className="managed-page-alert"
+          type="info"
+          showIcon
+          title={allMatchingSelected ? `将作用于全部筛选结果（${selectedCount} 台）` : `将作用于明确选择的 ${selectedCount} 台设备`}
+          description="执行前会逐设备验证权限、状态和运行冲突；不符合条件的设备不会阻断其他设备。删除设备不提供普通批量入口。"
+        />
+        {batchDialog.step === 'configure' && batchDialog.operation === 'dispatch_run' && (
+          <div className="managed-batch-form">
+            <Form.Item label="脚本" required>
+              <Select
+                showSearch optionFilterProp="label" value={batchValues.script_id}
+                onChange={script_id => setBatchValues(current => ({ ...current, script_id }))}
+                options={batchOptions.scripts.map(script => ({ value: script.id, label: script.name, disabled: script.status !== 'active' }))}
+                placeholder="选择临时任务脚本"
+              />
+            </Form.Item>
+            <Form.Item label="任务参数（JSON 对象）" className="managed-batch-form__params">
+              <Input.TextArea
+                rows={3} value={batchValues.params_text} spellCheck={false}
+                onChange={event => setBatchValues(current => ({ ...current, params_text: event.target.value }))}
+                placeholder={'{"scope":"today"}'}
+              />
+            </Form.Item>
+            <Form.Item label="执行环境" extra="不同设备的环境权限会在预览时逐一验证。">
+              <Select
+                allowClear value={batchValues.environment_id}
+                onChange={environment_id => setBatchValues(current => ({ ...current, environment_id }))}
+                options={batchOptions.environments.map(item => ({ value: item.id, label: item.name }))}
+                placeholder="使用设备默认环境"
+              />
+            </Form.Item>
+            <Form.Item label="任务有效期（秒）">
+              <InputNumber
+                min={60} max={604800} value={batchValues.expires_in_seconds}
+                onChange={expires_in_seconds => setBatchValues(current => ({ ...current, expires_in_seconds }))}
+              />
+            </Form.Item>
+          </div>
+        )}
+        {batchDialog.step === 'configure' && batchDialog.operation === 'set_groups' && (
+          <Form.Item label="替换为以下分组" extra="留空表示将选中设备移出全部分组。">
+            <Select
+              mode="multiple" value={batchValues.group_ids}
+              onChange={group_ids => setBatchValues(current => ({ ...current, group_ids }))}
+              options={groups.map(group => ({ value: group.id, label: group.name }))}
+              placeholder="可不选择分组"
+            />
+          </Form.Item>
+        )}
+        {batchDialog.step === 'preview' && batchDialog.preview && (
+          <div className="managed-batch-preview">
+            <h3>影响预览：{batchResultSummary(batchDialog.preview)}</h3>
+            <div className="managed-batch-results">
+              {batchDialog.preview.items.map(item => (
+                <div key={item.agent_id} className={`is-${item.result}`}>
+                  <span><strong>{item.machine_name}</strong><small>#{item.agent_id}</small></span>
+                  <Tag color={item.result === 'success' ? 'green' : item.result === 'failed' ? 'red' : 'default'}>
+                    {item.result === 'success' ? '可执行' : item.result === 'failed' ? '失败' : '跳过'}
+                  </Tag>
+                  <p>{item.reason}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {batchDialog.step === 'result' && batchDialog.result && (
+          <div className="managed-batch-preview">
+            <Alert type={batchDialog.result.failed ? 'warning' : 'success'} showIcon title={`批次 #${batchDialog.result.batch_id} 已完成`} description={batchResultSummary(batchDialog.result)} />
+            <div className="managed-batch-results">
+              {batchDialog.result.items.map(item => (
+                <div key={item.agent_id} className={`is-${item.result}`}>
+                  <span><strong>{item.machine_name}</strong><small>#{item.agent_id}</small></span>
+                  <Tag color={item.result === 'success' ? 'green' : item.result === 'failed' ? 'red' : 'default'}>{item.result}</Tag>
+                  <p>{item.reason}{item.run_id ? ` · 任务 #${item.run_id}` : ''}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         className="managed-impact-modal"

@@ -1,18 +1,23 @@
 """Admin-only managed Agent dispatch and fixed-interval schedule APIs."""
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, func, or_
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, selectinload
 
 from app.auth import require_role
 from app.database import get_db
-from app.models import Agent, Environment, ManagedSchedule, Run, Script, User
+from app.models import (
+    Agent, AuditLog, Environment, ManagedAgentBatch, ManagedAgentBatchItem,
+    ManagedAgentGroup, ManagedSchedule, Run, Script, User,
+)
 from app.routers.agents import AgentItem
 from app.routers.runs import _enrich_run, _has_result_files
 from app.schemas import RunBrief
@@ -48,6 +53,13 @@ class ManagedRunSummary(BaseModel):
     has_result_files: bool = False
 
 
+class ManagedAgentGroupBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+
+
 class ManagedAgentItem(AgentItem):
     thumbnail_updated_at: Optional[datetime] = None
     thumbnail_size: Optional[int] = None
@@ -58,6 +70,15 @@ class ManagedAgentItem(AgentItem):
     # Retained for older admin clients.
     running_run_id: Optional[int] = None
     running_dispatch_type: Optional[str] = None
+    groups: List[ManagedAgentGroupBrief] = Field(default_factory=list)
+
+
+class ManagedAgentPage(BaseModel):
+    items: List[ManagedAgentItem]
+    total: int
+    page: int
+    page_size: int
+    pages: int
 
 
 class ManagedRunCreate(BaseModel):
@@ -70,6 +91,96 @@ class ManagedRunCreate(BaseModel):
 class ManagedAgentUpdate(BaseModel):
     enabled: bool
     impact_version: Optional[str] = None
+
+
+class ManagedAgentGroupCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ManagedAgentGroupUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ManagedAgentGroupItem(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    member_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ManagedAgentGroupMembersUpdate(BaseModel):
+    agent_ids: List[int] = Field(default_factory=list, max_length=200)
+
+
+class ManagedAgentGroupsUpdate(BaseModel):
+    group_ids: List[int] = Field(default_factory=list, max_length=50)
+
+
+class ManagedAgentFilters(BaseModel):
+    query: Optional[str] = Field(default=None, max_length=200)
+    status: Optional[Literal["online", "offline", "disabled"]] = None
+    run_status: Optional[Literal["idle", "pending", "running", "success", "failed", "cancelled", "expired"]] = None
+    group_id: Optional[int] = None
+    sort: str = "-last_heartbeat"
+
+
+class ManagedBatchSelection(BaseModel):
+    mode: Literal["explicit", "all"]
+    agent_ids: List[int] = Field(default_factory=list, max_length=200)
+    filters: Optional[ManagedAgentFilters] = None
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if self.mode == "explicit" and not self.agent_ids:
+            raise ValueError("明确选择至少需要一台设备")
+        if self.mode == "all" and self.agent_ids:
+            raise ValueError("全部筛选结果模式不可同时传 agent_ids")
+        return self
+
+
+BatchOperation = Literal["dispatch_run", "pause_agents", "resume_agents", "pause_schedules", "set_groups"]
+
+
+class ManagedBatchRequest(BaseModel):
+    operation: BatchOperation
+    selection: ManagedBatchSelection
+    script_id: Optional[int] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    environment_id: Optional[int] = None
+    expires_in_seconds: int = Field(default=3600, ge=60, le=604800)
+    group_ids: Optional[List[int]] = Field(default=None, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_operation_payload(self):
+        if self.operation == "dispatch_run" and self.script_id is None:
+            raise ValueError("批量发布临时任务必须选择脚本")
+        if self.operation == "set_groups" and self.group_ids is None:
+            raise ValueError("调整设备组必须提供 group_ids")
+        return self
+
+
+class ManagedBatchItemResult(BaseModel):
+    agent_id: int
+    machine_name: str
+    result: Literal["success", "failed", "skipped"]
+    reason: Optional[str] = None
+    run_id: Optional[int] = None
+    impact: Optional[Dict[str, Any]] = None
+
+
+class ManagedBatchResult(BaseModel):
+    batch_id: Optional[int] = None
+    operation: BatchOperation
+    total: int
+    success: int
+    failed: int
+    skipped: int
+    items: List[ManagedBatchItemResult]
+    replayed: bool = False
 
 
 class ImpactHistoryPolicy(BaseModel):
@@ -331,16 +442,55 @@ def _create_schedule_run(
     )
 
 
-@router.get("/managed-agents", response_model=List[ManagedAgentItem])
-def list_managed_agents(
-    enabled: Optional[bool] = Query(default=None),
-    current_user: User = Depends(require_role("admin")),
-    db: Session = Depends(get_db),
+def _apply_managed_agent_filters(
+    query, *, search: Optional[str] = None, status: Optional[str] = None,
+    run_status: Optional[str] = None, group_id: Optional[int] = None,
 ):
-    query = db.query(Agent).filter(Agent.mode == "managed", Agent.is_deleted == False)
-    if enabled is not None:
-        query = query.filter(Agent.enabled == enabled)
-    agents = query.order_by(Agent.enabled.desc(), Agent.last_heartbeat.desc()).all()
+    if search and search.strip():
+        term = "%{}%".format(search.strip().lower())
+        query = query.filter(or_(
+            func.lower(Agent.machine_name).like(term),
+            func.lower(func.coalesce(Agent.machine_ip, "")).like(term),
+            func.lower(func.coalesce(Agent.agent_version, "")).like(term),
+            func.lower(Agent.device_uid).like(term),
+        ))
+    if status == "disabled":
+        query = query.filter(Agent.enabled == False)
+    elif status in ("online", "offline"):
+        query = query.filter(Agent.enabled == True, Agent.status == status)
+    if group_id is not None:
+        query = query.filter(Agent.managed_groups.any(ManagedAgentGroup.id == group_id))
+    if run_status:
+        active = exists().where(and_(
+            or_(Run.target_agent_id == Agent.id, Run.agent_id == Agent.id),
+            Run.status.in_(["pending", "running"]), Run.is_deleted == False,
+        ))
+        if run_status == "idle":
+            query = query.filter(~active)
+        else:
+            query = query.filter(exists().where(and_(
+                or_(Run.target_agent_id == Agent.id, Run.agent_id == Agent.id),
+                Run.status == run_status, Run.is_deleted == False,
+            )))
+    return query
+
+
+def _managed_agent_order(sort: str):
+    descending = sort.startswith("-")
+    key = sort[1:] if descending else sort
+    columns = {
+        "name": Agent.machine_name,
+        "status": Agent.status,
+        "last_heartbeat": Agent.last_heartbeat,
+        "created_at": Agent.created_at,
+    }
+    column = columns.get(key)
+    if column is None:
+        raise HTTPException(status_code=422, detail="不支持的设备排序字段")
+    return [column.desc() if descending else column.asc(), Agent.id.asc()]
+
+
+def _serialize_managed_agents(db: Session, agents: List[Agent]) -> List[ManagedAgentItem]:
     agent_ids = [agent.id for agent in agents]
     pending_count = {agent_id: 0 for agent_id in agent_ids}
     pending_by_agent: Dict[int, Run] = {}
@@ -350,10 +500,8 @@ def list_managed_agents(
     if agent_ids:
         now = datetime.now(timezone.utc)
         pending_runs = db.query(Run).filter(
-            Run.target_agent_id.in_(agent_ids),
-            Run.status == "pending",
-            Run.is_deleted == False,
-            or_(Run.expires_at.is_(None), Run.expires_at > now),
+            Run.target_agent_id.in_(agent_ids), Run.status == "pending",
+            Run.is_deleted == False, or_(Run.expires_at.is_(None), Run.expires_at > now),
         ).order_by(
             Run.target_agent_id.asc(), Run.scheduled_for.asc(), Run.created_at.asc(), Run.id.asc()
         ).all()
@@ -362,8 +510,7 @@ def list_managed_agents(
             pending_by_agent.setdefault(run.target_agent_id, run)
 
         running_runs = db.query(Run).filter(
-            Run.status == "running",
-            Run.is_deleted == False,
+            Run.status == "running", Run.is_deleted == False,
             or_(Run.target_agent_id.in_(agent_ids), Run.agent_id.in_(agent_ids)),
         ).order_by(Run.started_at.asc(), Run.id.asc()).all()
         for run in running_runs:
@@ -373,11 +520,9 @@ def list_managed_agents(
 
         device_id_expr = func.coalesce(Run.target_agent_id, Run.agent_id)
         ranked_terminal = db.query(
-            Run.id.label("run_id"),
-            device_id_expr.label("device_id"),
+            Run.id.label("run_id"), device_id_expr.label("device_id"),
             func.row_number().over(
-                partition_by=device_id_expr,
-                order_by=(Run.finished_at.desc(), Run.id.desc()),
+                partition_by=device_id_expr, order_by=(Run.finished_at.desc(), Run.id.desc()),
             ).label("position"),
         ).filter(
             device_id_expr.in_(agent_ids),
@@ -385,38 +530,473 @@ def list_managed_agents(
             Run.dispatch_type.in_(["managed_manual", "managed_schedule"]),
             Run.is_deleted == False,
         ).subquery()
-        terminal_rows = db.query(Run, ranked_terminal.c.device_id).join(
+        for run, device_id in db.query(Run, ranked_terminal.c.device_id).join(
             ranked_terminal, Run.id == ranked_terminal.c.run_id
-        ).filter(ranked_terminal.c.position == 1).all()
-        for run, device_id in terminal_rows:
+        ).filter(ranked_terminal.c.position == 1).all():
             latest_by_agent[device_id] = run
-
-        selected_runs = list({
-            run.id: run for run in (
-                list(pending_by_agent.values())
-                + list(running_by_agent.values())
-                + list(latest_by_agent.values())
-            )
-        }.values())
+        selected_runs = list({run.id: run for run in (
+            list(pending_by_agent.values()) + list(running_by_agent.values())
+            + list(latest_by_agent.values())
+        )}.values())
     summaries = _managed_run_summaries(db, selected_runs)
-    return [
-        ManagedAgentItem.model_validate(agent).model_copy(
-            update={
-                "pending_count": pending_count.get(agent.id, 0),
-                "earliest_pending": summaries.get(pending_by_agent.get(agent.id).id)
-                if pending_by_agent.get(agent.id) else None,
-                "current_run": summaries.get(running_by_agent.get(agent.id).id)
-                if running_by_agent.get(agent.id) else None,
-                "latest_run": summaries.get(latest_by_agent.get(agent.id).id)
-                if latest_by_agent.get(agent.id) else None,
-                "running_run_id": running_by_agent.get(agent.id).id
-                if running_by_agent.get(agent.id) else None,
-                "running_dispatch_type": running_by_agent.get(agent.id).dispatch_type
-                if running_by_agent.get(agent.id) else None,
-            }
+    return [ManagedAgentItem.model_validate(agent).model_copy(update={
+        "pending_count": pending_count.get(agent.id, 0),
+        "earliest_pending": summaries.get(pending_by_agent[agent.id].id) if agent.id in pending_by_agent else None,
+        "current_run": summaries.get(running_by_agent[agent.id].id) if agent.id in running_by_agent else None,
+        "latest_run": summaries.get(latest_by_agent[agent.id].id) if agent.id in latest_by_agent else None,
+        "running_run_id": running_by_agent[agent.id].id if agent.id in running_by_agent else None,
+        "running_dispatch_type": running_by_agent[agent.id].dispatch_type if agent.id in running_by_agent else None,
+        "groups": [ManagedAgentGroupBrief.model_validate(group) for group in agent.managed_groups if not group.is_deleted],
+    }) for agent in agents]
+
+
+@router.get("/managed-agents", response_model=List[ManagedAgentItem])
+def list_managed_agents(
+    enabled: Optional[bool] = Query(default=None),
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    """Legacy unpaged response retained for existing admin clients."""
+    query = db.query(Agent).options(selectinload(Agent.managed_groups)).filter(
+        Agent.mode == "managed", Agent.is_deleted == False,
+    )
+    if enabled is not None:
+        query = query.filter(Agent.enabled == enabled)
+    agents = query.order_by(Agent.enabled.desc(), Agent.last_heartbeat.desc(), Agent.id.asc()).all()
+    return _serialize_managed_agents(db, agents)
+
+
+@router.get("/managed-agents/paged", response_model=ManagedAgentPage)
+def list_managed_agents_paged(
+    query: Optional[str] = Query(default=None, max_length=200),
+    status: Optional[Literal["online", "offline", "disabled"]] = Query(default=None),
+    run_status: Optional[Literal["idle", "pending", "running", "success", "failed", "cancelled", "expired"]] = Query(default=None),
+    group_id: Optional[int] = Query(default=None, ge=1),
+    sort: str = Query(default="-last_heartbeat"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=24, ge=1, le=100),
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    base = db.query(Agent).filter(Agent.mode == "managed", Agent.is_deleted == False)
+    base = _apply_managed_agent_filters(
+        base, search=query, status=status, run_status=run_status, group_id=group_id,
+    )
+    total = base.count()
+    agents = base.options(selectinload(Agent.managed_groups)).order_by(
+        *_managed_agent_order(sort)
+    ).offset((page - 1) * page_size).limit(page_size).all()
+    return ManagedAgentPage(
+        items=_serialize_managed_agents(db, agents), total=total, page=page,
+        page_size=page_size, pages=max(1, (total + page_size - 1) // page_size),
+    )
+
+
+def _group_item(db: Session, group: ManagedAgentGroup) -> ManagedAgentGroupItem:
+    count = db.query(func.count()).select_from(Agent).filter(
+        Agent.mode == "managed", Agent.is_deleted == False,
+        Agent.managed_groups.any(ManagedAgentGroup.id == group.id),
+    ).scalar() or 0
+    return ManagedAgentGroupItem(
+        id=group.id, name=group.name, description=group.description,
+        member_count=count, created_at=group.created_at, updated_at=group.updated_at,
+    )
+
+
+def _managed_group_or_404(db: Session, group_id: int) -> ManagedAgentGroup:
+    group = db.query(ManagedAgentGroup).filter(
+        ManagedAgentGroup.id == group_id, ManagedAgentGroup.is_deleted == False,
+    ).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="设备分组不存在")
+    return group
+
+
+@router.get("/managed-agent-groups", response_model=List[ManagedAgentGroupItem])
+def list_managed_agent_groups(
+    current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db),
+):
+    groups = db.query(ManagedAgentGroup).filter(
+        ManagedAgentGroup.is_deleted == False
+    ).order_by(ManagedAgentGroup.name.asc(), ManagedAgentGroup.id.asc()).all()
+    return [_group_item(db, group) for group in groups]
+
+
+@router.post("/managed-agent-groups", response_model=ManagedAgentGroupItem)
+def create_managed_agent_group(
+    req: ManagedAgentGroupCreate,
+    current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db),
+):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="分组名称不能为空")
+    if db.query(ManagedAgentGroup).filter(
+        func.lower(ManagedAgentGroup.name) == name.lower(), ManagedAgentGroup.is_deleted == False,
+    ).first():
+        raise HTTPException(status_code=409, detail="设备分组名称已存在")
+    group = ManagedAgentGroup(
+        name=name, description=req.description, created_by=current_user.id,
+        updated_by=current_user.id,
+    )
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+    write_audit(current_user.id, current_user.username, "managed_agent_group.create",
+                "managed_agent_group", group.id, detail="name={}".format(name), db=db)
+    return _group_item(db, group)
+
+
+@router.patch("/managed-agent-groups/{group_id}", response_model=ManagedAgentGroupItem)
+def update_managed_agent_group(
+    group_id: int, req: ManagedAgentGroupUpdate,
+    current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db),
+):
+    group = _managed_group_or_404(db, group_id)
+    values = req.model_dump(exclude_unset=True)
+    if "name" in values:
+        name = values["name"].strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="分组名称不能为空")
+        duplicate = db.query(ManagedAgentGroup).filter(
+            func.lower(ManagedAgentGroup.name) == name.lower(),
+            ManagedAgentGroup.id != group.id, ManagedAgentGroup.is_deleted == False,
+        ).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="设备分组名称已存在")
+        group.name = name
+    if "description" in values:
+        group.description = values["description"]
+    group.updated_by = current_user.id
+    db.commit()
+    db.refresh(group)
+    write_audit(current_user.id, current_user.username, "managed_agent_group.update",
+                "managed_agent_group", group.id, detail="fields={}".format(",".join(sorted(values))), db=db)
+    return _group_item(db, group)
+
+
+@router.delete("/managed-agent-groups/{group_id}")
+def delete_managed_agent_group(
+    group_id: int, current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    group = _managed_group_or_404(db, group_id)
+    member_count = len(group.agents)
+    group.agents = []
+    # Keep the audit row while releasing the unique human-facing name for reuse.
+    group.name = "{} [deleted:{}]".format(group.name[:75], group.id)
+    group.is_deleted = True
+    group.updated_by = current_user.id
+    db.commit()
+    write_audit(current_user.id, current_user.username, "managed_agent_group.delete",
+                "managed_agent_group", group.id, detail="members_removed={}".format(member_count), db=db)
+    return {"message": "设备分组已删除", "members_removed": member_count}
+
+
+@router.put("/managed-agent-groups/{group_id}/members", response_model=ManagedAgentGroupItem)
+def replace_managed_agent_group_members(
+    group_id: int, req: ManagedAgentGroupMembersUpdate,
+    current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db),
+):
+    group = _managed_group_or_404(db, group_id)
+    ids = list(dict.fromkeys(req.agent_ids))
+    agents = db.query(Agent).filter(
+        Agent.id.in_(ids), Agent.mode == "managed", Agent.is_deleted == False,
+    ).all() if ids else []
+    if len(agents) != len(ids):
+        raise HTTPException(status_code=422, detail="成员列表包含不存在的托管设备")
+    group.agents = agents
+    group.updated_by = current_user.id
+    db.commit()
+    db.refresh(group)
+    write_audit(current_user.id, current_user.username, "managed_agent_group.members.replace",
+                "managed_agent_group", group.id, detail="member_count={}".format(len(agents)), db=db)
+    return _group_item(db, group)
+
+
+@router.put("/managed-agents/{agent_id}/groups", response_model=List[ManagedAgentGroupBrief])
+def replace_managed_agent_groups(
+    agent_id: int, req: ManagedAgentGroupsUpdate,
+    current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db),
+):
+    agent = _managed_agent_or_404(db, agent_id)
+    ids = list(dict.fromkeys(req.group_ids))
+    groups = db.query(ManagedAgentGroup).filter(
+        ManagedAgentGroup.id.in_(ids), ManagedAgentGroup.is_deleted == False,
+    ).all() if ids else []
+    if len(groups) != len(ids):
+        raise HTTPException(status_code=422, detail="分组列表包含不存在的设备分组")
+    agent.managed_groups = groups
+    db.commit()
+    write_audit(current_user.id, current_user.username, "managed_agent.groups.replace",
+                "agent", agent.id, detail="group_ids={}".format(",".join(map(str, sorted(ids)))), db=db)
+    return [ManagedAgentGroupBrief.model_validate(group) for group in sorted(groups, key=lambda item: (item.name, item.id))]
+
+
+def _batch_targets(db: Session, selection: ManagedBatchSelection, limit: int) -> tuple[List[Agent], List[int]]:
+    query = db.query(Agent).options(selectinload(Agent.managed_groups)).filter(
+        Agent.mode == "managed", Agent.is_deleted == False,
+    )
+    missing: List[int] = []
+    if selection.mode == "explicit":
+        ids = list(dict.fromkeys(selection.agent_ids))
+        agents = query.filter(Agent.id.in_(ids)).order_by(Agent.id.asc()).all()
+        found = {agent.id for agent in agents}
+        missing = [agent_id for agent_id in ids if agent_id not in found]
+        return agents, missing
+    filters = selection.filters or ManagedAgentFilters()
+    query = _apply_managed_agent_filters(
+        query, search=filters.query, status=filters.status,
+        run_status=filters.run_status, group_id=filters.group_id,
+    )
+    agents = query.order_by(*_managed_agent_order(filters.sort)).limit(limit + 1).all()
+    if len(agents) > limit:
+        raise HTTPException(status_code=413, detail="筛选结果超过单批上限 {} 台，请缩小范围后重试".format(limit))
+    return agents, missing
+
+
+def _batch_item_check(db: Session, agent: Agent, req: ManagedBatchRequest) -> ManagedBatchItemResult:
+    operation = req.operation
+    impact = None
+    try:
+        if operation == "dispatch_run":
+            if not agent.enabled:
+                return ManagedBatchItemResult(agent_id=agent.id, machine_name=agent.machine_name, result="failed", reason="设备已暂停接单")
+            running = db.query(Run.id).filter(
+                Run.status == "running", Run.is_deleted == False,
+                or_(Run.target_agent_id == agent.id, Run.agent_id == agent.id),
+            ).first()
+            if running:
+                return ManagedBatchItemResult(agent_id=agent.id, machine_name=agent.machine_name, result="failed", reason="设备正在执行任务 #{}".format(running.id))
+            owner = db.query(User).filter(
+                User.id == agent.user_id, User.status == "active", User.is_deleted == False,
+            ).first()
+            if not owner:
+                return ManagedBatchItemResult(agent_id=agent.id, machine_name=agent.machine_name, result="failed", reason="设备所属用户不可用")
+            validate_run_request(db, owner, req.script_id, req.params, req.environment_id)
+        elif operation == "pause_agents":
+            if not agent.enabled:
+                return ManagedBatchItemResult(agent_id=agent.id, machine_name=agent.machine_name, result="skipped", reason="设备已暂停接单")
+            impact = preview_agent_impact(db, agent.id, "disable", managed_only=True)
+        elif operation == "resume_agents":
+            if agent.enabled:
+                return ManagedBatchItemResult(agent_id=agent.id, machine_name=agent.machine_name, result="skipped", reason="设备已在接单")
+        elif operation == "pause_schedules":
+            enabled_count = db.query(func.count(ManagedSchedule.id)).filter(
+                ManagedSchedule.agent_id == agent.id, ManagedSchedule.enabled == True,
+                ManagedSchedule.is_deleted == False,
+            ).scalar() or 0
+            if not enabled_count:
+                return ManagedBatchItemResult(agent_id=agent.id, machine_name=agent.machine_name, result="skipped", reason="没有启用中的计划")
+            impact = {"enabled_schedule_count": enabled_count}
+        elif operation == "set_groups":
+            impact = {"current_group_ids": sorted(group.id for group in agent.managed_groups if not group.is_deleted),
+                      "next_group_ids": sorted(req.group_ids or [])}
+            if impact["current_group_ids"] == impact["next_group_ids"]:
+                return ManagedBatchItemResult(agent_id=agent.id, machine_name=agent.machine_name, result="skipped", reason="设备分组无需调整", impact=impact)
+    except HTTPException as exc:
+        return ManagedBatchItemResult(
+            agent_id=agent.id, machine_name=agent.machine_name, result="failed",
+            reason=str(exc.detail), impact=impact,
         )
-        for agent in agents
-    ]
+    return ManagedBatchItemResult(
+        agent_id=agent.id, machine_name=agent.machine_name, result="success",
+        reason="验证通过", impact=impact,
+    )
+
+
+def _batch_preview(db: Session, req: ManagedBatchRequest) -> ManagedBatchResult:
+    limit = 50 if req.operation == "dispatch_run" else 200
+    agents, missing = _batch_targets(db, req.selection, limit)
+    if req.operation == "set_groups":
+        group_ids = list(dict.fromkeys(req.group_ids or []))
+        found = db.query(func.count(ManagedAgentGroup.id)).filter(
+            ManagedAgentGroup.id.in_(group_ids), ManagedAgentGroup.is_deleted == False,
+        ).scalar() if group_ids else 0
+        if found != len(group_ids):
+            raise HTTPException(status_code=422, detail="分组列表包含不存在的设备分组")
+    items = [_batch_item_check(db, agent, req) for agent in agents]
+    items.extend(ManagedBatchItemResult(
+        agent_id=agent_id, machine_name="设备 #{}".format(agent_id), result="failed", reason="托管设备不存在",
+    ) for agent_id in missing)
+    counts = {status: sum(item.result == status for item in items) for status in ("success", "failed", "skipped")}
+    return ManagedBatchResult(
+        operation=req.operation, total=len(items), success=counts["success"],
+        failed=counts["failed"], skipped=counts["skipped"], items=items,
+    )
+
+
+@router.post("/managed-agent-batches/preview", response_model=ManagedBatchResult)
+def preview_managed_agent_batch(
+    req: ManagedBatchRequest, current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    return _batch_preview(db, req)
+
+
+def _batch_result_from_record(batch: ManagedAgentBatch, *, replayed: bool) -> ManagedBatchResult:
+    payload = json.loads(batch.result_json or "{}")
+    payload["batch_id"] = batch.id
+    payload["replayed"] = replayed
+    return ManagedBatchResult.model_validate(payload)
+
+
+@router.post("/managed-agent-batches", response_model=ManagedBatchResult)
+def execute_managed_agent_batch(
+    req: ManagedBatchRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=8, max_length=128),
+    current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db),
+):
+    canonical = json.dumps(req.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    request_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    existing = db.query(ManagedAgentBatch).filter(
+        ManagedAgentBatch.created_by == current_user.id,
+        ManagedAgentBatch.idempotency_key == idempotency_key,
+    ).first()
+    if existing:
+        if existing.request_hash != request_hash:
+            raise HTTPException(status_code=409, detail="幂等键已用于不同的批量请求")
+        if not existing.result_json:
+            raise HTTPException(status_code=409, detail="相同批量请求仍在处理中")
+        return _batch_result_from_record(existing, replayed=True)
+
+    active_since = datetime.now(timezone.utc) - timedelta(minutes=10)
+    active_count = db.query(func.count(ManagedAgentBatch.id)).filter(
+        ManagedAgentBatch.status == "processing",
+        ManagedAgentBatch.created_at >= active_since,
+    ).scalar() or 0
+    if active_count >= 2:
+        raise HTTPException(status_code=429, detail="当前已有 2 个批次在处理，请稍后重试")
+
+    recent = datetime.now(timezone.utc) - timedelta(minutes=1)
+    burst_count = db.query(func.count(ManagedAgentBatch.id)).filter(
+        ManagedAgentBatch.created_by == current_user.id,
+        ManagedAgentBatch.created_at >= recent,
+    ).scalar() or 0
+    if burst_count >= 10:
+        raise HTTPException(status_code=429, detail="一分钟内最多执行 10 个批次，请稍后重试")
+
+    preview = _batch_preview(db, req)
+    batch = ManagedAgentBatch(
+        idempotency_key=idempotency_key, request_hash=request_hash, operation=req.operation,
+        status="processing", selection_json=json.dumps(req.selection.model_dump(mode="json"), ensure_ascii=False),
+        request_json=canonical, total_count=preview.total, created_by=current_user.id,
+    )
+    db.add(batch)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        concurrent = db.query(ManagedAgentBatch).filter(
+            ManagedAgentBatch.created_by == current_user.id,
+            ManagedAgentBatch.idempotency_key == idempotency_key,
+        ).first()
+        if concurrent and concurrent.request_hash == request_hash and concurrent.result_json:
+            return _batch_result_from_record(concurrent, replayed=True)
+        raise HTTPException(status_code=409, detail="相同批量请求已在处理中")
+    db.refresh(batch)
+
+    groups = []
+    if req.operation == "set_groups" and req.group_ids:
+        groups = db.query(ManagedAgentGroup).filter(
+            ManagedAgentGroup.id.in_(req.group_ids), ManagedAgentGroup.is_deleted == False,
+        ).all()
+    executed: List[ManagedBatchItemResult] = []
+    agents, _missing = _batch_targets(db, req.selection, 50 if req.operation == "dispatch_run" else 200)
+    agents_by_id = {agent.id: agent for agent in agents}
+    for item in preview.items:
+        if item.result != "success":
+            executed.append(item)
+            continue
+        agent = agents_by_id.get(item.agent_id)
+        if not agent:
+            executed.append(item.model_copy(update={"result": "failed", "reason": "设备状态已变化"}))
+            continue
+        current = _batch_item_check(db, agent, req)
+        if current.result != "success":
+            executed.append(current)
+            continue
+        try:
+            run_id = None
+            if req.operation == "dispatch_run":
+                owner = db.query(User).filter(User.id == agent.user_id).one()
+                now = datetime.now(timezone.utc)
+                run = create_validated_run(
+                    db, run_user=owner, script_id=req.script_id, params=req.params,
+                    environment_id=req.environment_id, requested_by=current_user.id,
+                    dispatch_type="managed_manual", target_agent_id=agent.id,
+                    scheduled_for=now, expires_at=now + timedelta(seconds=req.expires_in_seconds),
+                )
+                run_id = run.id
+                write_audit(current_user.id, current_user.username, "managed_run.batch_dispatch",
+                            "run", run.id, detail="batch={} agent={}".format(batch.id, agent.id), db=db)
+            elif req.operation == "pause_agents":
+                impact = current.impact or preview_agent_impact(db, agent.id, "disable", managed_only=True)
+                disable_agent(db, agent.id, current_user, expected_version=impact["version"], managed_only=True)
+            elif req.operation == "resume_agents":
+                enable_agent(db, agent.id, current_user, managed_only=True)
+            elif req.operation == "pause_schedules":
+                changed = db.query(ManagedSchedule).filter(
+                    ManagedSchedule.agent_id == agent.id, ManagedSchedule.enabled == True,
+                    ManagedSchedule.is_deleted == False,
+                ).update({
+                    ManagedSchedule.enabled: False, ManagedSchedule.updated_by: current_user.id,
+                    ManagedSchedule.updated_at: datetime.now(timezone.utc),
+                }, synchronize_session=False)
+                db.commit()
+                write_audit(current_user.id, current_user.username, "managed_schedule.batch_pause",
+                            "agent", agent.id, detail="batch={} schedules={}".format(batch.id, changed), db=db)
+            elif req.operation == "set_groups":
+                agent.managed_groups = groups
+                db.commit()
+                write_audit(current_user.id, current_user.username, "managed_agent.groups.batch_replace",
+                            "agent", agent.id, detail="batch={} group_ids={}".format(batch.id, req.group_ids or []), db=db)
+            executed.append(current.model_copy(update={"reason": "操作成功", "run_id": run_id}))
+        except Exception as exc:
+            db.rollback()
+            detail = exc.detail if isinstance(exc, HTTPException) else "执行失败：{}".format(type(exc).__name__)
+            executed.append(current.model_copy(update={"result": "failed", "reason": str(detail)}))
+
+    counts = {status: sum(item.result == status for item in executed) for status in ("success", "failed", "skipped")}
+    result = ManagedBatchResult(
+        batch_id=batch.id, operation=req.operation, total=len(executed),
+        success=counts["success"], failed=counts["failed"], skipped=counts["skipped"], items=executed,
+    )
+    batch = db.query(ManagedAgentBatch).filter(ManagedAgentBatch.id == batch.id).one()
+    persisted_agent_ids = set(agents_by_id)
+    for item in executed:
+        if item.agent_id not in persisted_agent_ids:
+            continue
+        db.add(ManagedAgentBatchItem(
+            batch_id=batch.id, agent_id=item.agent_id, result=item.result,
+            reason=item.reason, run_id=item.run_id,
+            detail_json=json.dumps(item.impact, ensure_ascii=False) if item.impact else None,
+        ))
+    batch.status = "completed"
+    batch.success_count = counts["success"]
+    batch.failed_count = counts["failed"]
+    batch.skipped_count = counts["skipped"]
+    batch.completed_at = datetime.now(timezone.utc)
+    batch.result_json = result.model_dump_json()
+    db.add(AuditLog(
+        user_id=current_user.id, username=current_user.username,
+        action="managed_agent.batch.execute", target_type="managed_agent_batch", target_id=batch.id,
+        detail="operation={} total={} success={} failed={} skipped={}".format(
+            req.operation, result.total, result.success, result.failed, result.skipped,
+        ), created_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
+    return result
+
+
+@router.get("/managed-agent-batches/{batch_id}", response_model=ManagedBatchResult)
+def get_managed_agent_batch(
+    batch_id: int, current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    batch = db.query(ManagedAgentBatch).filter(ManagedAgentBatch.id == batch_id).first()
+    if not batch or not batch.result_json:
+        raise HTTPException(status_code=404, detail="批次不存在或尚未完成")
+    return _batch_result_from_record(batch, replayed=False)
 
 
 @router.get("/managed-agents/{agent_id}/impact", response_model=ManagedAgentImpact)

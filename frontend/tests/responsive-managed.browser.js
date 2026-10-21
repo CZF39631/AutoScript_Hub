@@ -30,6 +30,10 @@ async page => {
     } })
     if (path === '/api/settings') return route.fulfill({ json: { update_manifest_urls: [] } })
     if (path === '/api/admin/managed-agents') return route.fulfill({ json: showAgent ? [agent] : [] })
+    if (path === '/api/admin/managed-agents/paged') return route.fulfill({ json: {
+      items: showAgent ? [agent] : [], total: showAgent ? 1 : 0, page: 1, page_size: 24, pages: 1,
+    } })
+    if (path === '/api/admin/managed-agent-groups') return route.fulfill({ json: [] })
     if (path === '/api/admin/managed-schedules') return route.fulfill({ json: [] })
     if (path === '/api/admin/managed-agents/7/options') {
       optionsAttempts += 1
@@ -99,8 +103,16 @@ async page => {
   await assertNoDocumentOverflow('900px')
   await assertNoHiddenFocusable('900px')
 
-  await login(1280)
   showAgent = true
+  await login(390)
+  await page.getByLabel('选择设备 验收设备').check()
+  await page.getByRole('button', { name: '发布临时任务' }).waitFor()
+  const selectionBar = page.locator('.managed-selection-bar')
+  const selectionBox = await selectionBar.boundingBox()
+  if (!selectionBox || selectionBox.x < -1 || selectionBox.x + selectionBox.width > 391) throw new Error('390px batch bar overflow')
+  await assertNoDocumentOverflow('390px batch bar')
+
+  await login(1280)
   await page.locator('.managed-section-heading').getByRole('button').click()
   await page.getByRole('button', { name: '发布任务' }).click()
   const dispatchDrawer = page.getByRole('dialog', { name: /向 验收设备 发布任务/ })
