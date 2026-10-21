@@ -17,8 +17,9 @@ from app.database import get_db
 from app.models import User, Agent, Run
 from app.schemas import RunBrief
 from app.auth import create_agent_token, get_current_user, require_role, verify_agent_token
-from app.services.agent_thumbnails import delete_thumbnail, read_bounded_jpeg, replace_thumbnail
+from app.services.agent_thumbnails import read_bounded_jpeg, replace_thumbnail
 from app.services.audit import write_audit
+from app.services.managed_agent_lifecycle import delete_agent as delete_agent_lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -317,21 +318,11 @@ def delete_agent(
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
-    """Soft-delete an agent record. Admin only."""
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id, Agent.is_deleted == False
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent 不存在")
-    # Refuse to report a successful device deletion if its retained screen data
-    # could not also be removed.
-    delete_thumbnail(agent.id)
-    agent.thumbnail_updated_at = None
-    agent.thumbnail_size = None
-    agent.is_deleted = True
-    agent.status = "offline"
-    db.commit()
-    write_audit(current_user.id, current_user.username, "agent.offline",
-                target_type="agent", target_id=agent_id,
-                detail="管理员删除")
-    return {"message": "Agent 已移除"}
+    """Compatibility endpoint using the unified lifecycle transaction."""
+    return delete_agent_lifecycle(
+        db,
+        agent_id,
+        current_user,
+        require_preview=False,
+        managed_only=False,
+    )

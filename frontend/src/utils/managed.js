@@ -114,6 +114,20 @@ export function scheduleStatusCounts(schedules = []) {
   }, { enabled: 0, paused: 0 })
 }
 
+export function agentImpactCounts(impact = {}) {
+  return [
+    { key: 'pending', label: '待执行任务', value: Number(impact.pending_count) || 0 },
+    { key: 'running', label: '运行中任务', value: Number(impact.running_count) || 0 },
+    { key: 'enabled-schedules', label: '启用计划', value: Number(impact.enabled_schedule_count) || 0 },
+    { key: 'paused-schedules', label: '已暂停计划', value: Number(impact.paused_schedule_count) || 0 },
+  ]
+}
+
+export function canConfirmAgentImpact(action, input, machineName) {
+  if (action !== 'delete') return true
+  return String(input || '') === String(machineName || '')
+}
+
 export function shortMonthSkipDay(values = {}, expression = '') {
   let day = null
   if (values.cron_mode !== 'advanced' && values.cron_preset === 'monthly') {

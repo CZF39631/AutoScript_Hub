@@ -13,9 +13,10 @@ import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
-  apiErrorMessage, buildSchedulePayload, buildVisualCron, describeCron, formatSchedule,
-  intervalToSeconds, isThumbnailStale, isValidCronExpression, scheduleFormValues,
-  scheduleStatusCounts, shortMonthSkipDay, statusPresentation, thumbnailTimestamp,
+  agentImpactCounts, apiErrorMessage, buildSchedulePayload, buildVisualCron,
+  canConfirmAgentImpact, describeCron, formatSchedule, intervalToSeconds,
+  isThumbnailStale, isValidCronExpression, scheduleFormValues, scheduleStatusCounts,
+  shortMonthSkipDay, statusPresentation, thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
 import usePageFocused from '../hooks/usePageFocused'
@@ -162,7 +163,7 @@ function ThumbnailScreen({ agent }) {
   )
 }
 
-function AgentCard({ agent, updating, deleting, scheduleSummary, onToggle, onDispatch, onDelete, onOpenRun, onOpenHistory }) {
+function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDispatch, onDelete, onOpenRun, onOpenHistory }) {
   const currentRun = agent.current_run
   const latestRun = agent.latest_run
   const earliestPending = agent.earliest_pending
@@ -243,34 +244,24 @@ function AgentCard({ agent, updating, deleting, scheduleSummary, onToggle, onDis
       </section>
 
       <div className="managed-agent-card__actions">
-        <div className="managed-agent-toggle">
-          <span>允许接收任务</span>
-          <Switch
-            checked={agent.enabled}
-            loading={updating}
-            onChange={() => onToggle(agent)}
-            aria-label={`${agent.machine_name}启用状态`}
-          />
-        </div>
+        <Button
+          className="managed-agent-acceptance-action"
+          icon={agent.enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+          loading={updating}
+          onClick={() => agent.enabled ? onPause(agent) : onRestore(agent)}
+        >
+          {agent.enabled ? '暂停接单' : '恢复接单'}
+        </Button>
         <div className="managed-agent-card__primary-actions">
           <Button type="text" icon={<EyeOutlined />} onClick={() => onOpenHistory(agent.id)}>历史</Button>
-          <Tooltip title={!agent.enabled ? '设备已停用，仍可查看已安排的定时任务' : ''}>
-            <Button type="primary" icon={<SendOutlined />} onClick={() => onDispatch(agent)}>
+          <Tooltip title={!agent.enabled ? '设备已停用；可查看计划，但不能发布新任务' : ''}>
+            <Button type="primary" icon={<SendOutlined />} disabled={!agent.enabled} onClick={() => onDispatch(agent)}>
               发布任务
             </Button>
           </Tooltip>
-          <Popconfirm
-            title={`删除设备“${agent.machine_name}”？`}
-            description={agent.status === 'online' ? '设备当前在线，删除后再次连接会重新注册。' : '设备记录和最新缩略图将被删除，历史任务仍保留。'}
-            okText="删除设备"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => onDelete(agent)}
-          >
-            <Tooltip title="删除设备">
-              <Button danger type="text" icon={<DeleteOutlined />} loading={deleting} aria-label={`删除设备${agent.machine_name}`} />
-            </Tooltip>
-          </Popconfirm>
+          <Tooltip title="删除设备">
+            <Button danger type="text" icon={<DeleteOutlined />} onClick={() => onDelete(agent)} aria-label={`删除设备${agent.machine_name}`} />
+          </Tooltip>
         </div>
       </div>
     </article>
@@ -287,7 +278,10 @@ export default function ManagedAgents({ embedded = false }) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [updating, setUpdating] = useState({})
-  const [deleting, setDeleting] = useState({})
+  const [impactDialog, setImpactDialog] = useState({
+    open: false, action: 'disable', agent: null, data: null,
+    loading: false, submitting: false, error: '', confirmName: '',
+  })
   const [scheduleActionLoading, setScheduleActionLoading] = useState({})
   const [dispatchAgent, setDispatchAgent] = useState(null)
   const [editingSchedule, setEditingSchedule] = useState(null)
@@ -298,6 +292,7 @@ export default function ManagedAgents({ embedded = false }) {
   const [statusFilter, setStatusFilter] = useState('all')
   const [page, setPage] = useState(1)
   const listRequest = useRef(null)
+  const impactRequest = useRef(null)
   const [form] = Form.useForm()
   const selectedScriptId = Form.useWatch('script_id', form)
   const selectedTaskType = Form.useWatch('task_type', form) || 'manual'
@@ -348,7 +343,10 @@ export default function ManagedAgents({ embedded = false }) {
 
   useEffect(() => {
     load()
-    return () => listRequest.current?.abort()
+    return () => {
+      listRequest.current?.abort()
+      impactRequest.current?.abort()
+    }
   }, [load])
 
   const hasActiveWork = useMemo(
@@ -514,30 +512,92 @@ export default function ManagedAgents({ embedded = false }) {
     }
   }
 
-  const toggleAgent = async agent => {
+  const loadImpact = useCallback(async (agent, action, { resetName = false } = {}) => {
+    impactRequest.current?.abort()
+    const controller = new AbortController()
+    impactRequest.current = controller
+    setImpactDialog(current => ({
+      ...current,
+      open: true,
+      action,
+      agent,
+      data: null,
+      loading: true,
+      submitting: false,
+      error: '',
+      confirmName: resetName ? '' : current.confirmName,
+    }))
+    try {
+      const response = await api.get(`/api/admin/managed-agents/${agent.id}/impact`, {
+        params: { action },
+        signal: controller.signal,
+      })
+      if (!controller.signal.aborted) {
+        setImpactDialog(current => current.agent?.id === agent.id && current.action === action
+          ? { ...current, data: response.data, loading: false }
+          : current)
+      }
+    } catch (error) {
+      if (!controller.signal.aborted && error?.code !== 'ERR_CANCELED') {
+        setImpactDialog(current => current.agent?.id === agent.id && current.action === action
+          ? { ...current, loading: false, error: apiErrorMessage(error, '无法读取操作影响，请重试') }
+          : current)
+      }
+    } finally {
+      if (impactRequest.current === controller) impactRequest.current = null
+    }
+  }, [])
+
+  const closeImpact = () => {
+    if (impactDialog.submitting) return
+    impactRequest.current?.abort()
+    impactRequest.current = null
+    setImpactDialog(current => ({ ...current, open: false }))
+  }
+
+  const restoreAgent = async agent => {
     setUpdating(current => ({ ...current, [agent.id]: true }))
     try {
-      const response = await api.patch(`/api/admin/managed-agents/${agent.id}`, { enabled: !agent.enabled })
+      const response = await api.patch(`/api/admin/managed-agents/${agent.id}`, { enabled: true })
       setAgents(current => current.map(item => item.id === agent.id ? { ...item, ...response.data } : item))
-      message.success(response.data.enabled ? '设备已启用' : '设备已停用')
+      message.success('设备已恢复接单；原有定时计划仍保持暂停')
     } catch (error) {
-      message.error(apiErrorMessage(error, '设备状态更新失败'))
+      message.error(apiErrorMessage(error, '恢复接单失败'))
     } finally {
       setUpdating(current => ({ ...current, [agent.id]: false }))
     }
   }
 
-  const deleteAgent = async agent => {
-    setDeleting(current => ({ ...current, [agent.id]: true }))
+  const confirmImpact = async () => {
+    const { action, agent, data } = impactDialog
+    if (!agent || !data) return
+    setImpactDialog(current => ({ ...current, submitting: true, error: '' }))
     try {
-      await api.delete(`/api/agents/${agent.id}`)
-      setAgents(current => current.filter(item => item.id !== agent.id))
-      if (dispatchAgent?.id === agent.id) closeDispatch()
-      message.success(`设备“${agent.machine_name}”已删除`)
+      if (action === 'disable') {
+        const response = await api.patch(`/api/admin/managed-agents/${agent.id}`, {
+          enabled: false,
+          impact_version: data.version,
+        })
+        setAgents(current => current.map(item => item.id === agent.id ? { ...item, ...response.data } : item))
+        message.success(`设备“${agent.machine_name}”已暂停接单，关联启用计划已暂停`)
+      } else {
+        await api.delete(`/api/admin/managed-agents/${agent.id}`, {
+          params: { impact_version: data.version },
+        })
+        setAgents(current => current.filter(item => item.id !== agent.id))
+        if (dispatchAgent?.id === agent.id) closeDispatch()
+        message.success(`设备“${agent.machine_name}”已删除；同一设备身份不会自动恢复`)
+      }
+      setImpactDialog(current => ({ ...current, open: false, submitting: false }))
+      await load({ quiet: true })
     } catch (error) {
-      message.error(apiErrorMessage(error, '设备删除失败'))
-    } finally {
-      setDeleting(current => ({ ...current, [agent.id]: false }))
+      const conflict = error?.response?.status === 409
+      setImpactDialog(current => ({
+        ...current,
+        submitting: false,
+        data: conflict ? null : current.data,
+        error: apiErrorMessage(error, conflict ? '设备状态已变化，请重新获取影响预览' : '操作失败'),
+      }))
     }
   }
 
@@ -598,6 +658,7 @@ export default function ManagedAgents({ embedded = false }) {
   const taskFieldsDisabled = selectedTaskType === 'manual'
     ? !dispatchAgent?.enabled || Boolean(dispatchAgent?.current_run || dispatchAgent?.running_run_id)
     : !dispatchAgent?.enabled && !editingSchedule
+  const impactMachineName = impactDialog.data?.machine_name || impactDialog.agent?.machine_name
 
   return (
     <div className="managed-admin-page">
@@ -660,11 +721,11 @@ export default function ManagedAgents({ embedded = false }) {
                 key={agent.id}
                 agent={agent}
                 updating={Boolean(updating[agent.id])}
-                deleting={Boolean(deleting[agent.id])}
                 scheduleSummary={scheduleStatusCounts(schedulesByAgent.get(agent.id) || [])}
-                onToggle={toggleAgent}
+                onPause={item => loadImpact(item, 'disable', { resetName: true })}
+                onRestore={restoreAgent}
                 onDispatch={openDispatch}
-                onDelete={deleteAgent}
+                onDelete={item => loadImpact(item, 'delete', { resetName: true })}
                 onOpenRun={runId => navigate(`/runs/${runId}`)}
                 onOpenHistory={agentId => navigate(`/runs?agent_id=${agentId}`)}
               />
@@ -691,6 +752,95 @@ export default function ManagedAgents({ embedded = false }) {
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有托管设备连接到服务器" />
         </div>
       ) : null}
+
+      <Modal
+        className="managed-impact-modal"
+        title={impactDialog.action === 'delete' ? '删除设备前确认影响' : '暂停接单前确认影响'}
+        open={impactDialog.open}
+        onCancel={closeImpact}
+        width={620}
+        centered
+        destroyOnHidden
+        okText={impactDialog.action === 'delete' ? '永久删除设备' : '确认暂停接单'}
+        cancelText="取消"
+        okButtonProps={{
+          danger: impactDialog.action === 'delete',
+          disabled: impactDialog.loading || !impactDialog.data || !canConfirmAgentImpact(
+            impactDialog.action,
+            impactDialog.confirmName,
+            impactMachineName,
+          ),
+          loading: impactDialog.submitting,
+        }}
+        cancelButtonProps={{ disabled: impactDialog.submitting }}
+        onOk={confirmImpact}
+      >
+        {impactDialog.loading ? (
+          <div className="managed-impact-loading"><Skeleton active paragraph={{ rows: 4 }} /></div>
+        ) : impactDialog.error ? (
+          <Alert
+            type="error"
+            showIcon
+            title="无法继续操作"
+            description={impactDialog.error}
+            action={(
+              <Button
+                size="small"
+                onClick={() => loadImpact(impactDialog.agent, impactDialog.action)}
+              >
+                重新获取
+              </Button>
+            )}
+          />
+        ) : impactDialog.data ? (
+          <div className="managed-impact-content">
+            <Alert
+              type={impactDialog.action === 'delete' ? 'error' : 'warning'}
+              showIcon
+              title={`设备“${impactMachineName}”${impactDialog.action === 'delete' ? '将被删除' : '将停止接收任务'}`}
+              description="以下数量来自刚刚获取的服务端预览；确认时若状态已变化，操作会被拒绝。"
+            />
+            <dl className="managed-impact-counts">
+              {agentImpactCounts(impactDialog.data).map(item => (
+                <div key={item.key}>
+                  <dt>{item.label}</dt>
+                  <dd>{item.value}</dd>
+                </div>
+              ))}
+            </dl>
+            <ul className="managed-impact-consequences">
+              <li>{impactDialog.data.pending_count} 个待执行任务将取消，{impactDialog.data.running_count} 个运行中任务将终止。</li>
+              <li>{impactDialog.data.enabled_schedule_count} 个启用计划将暂停；已有暂停计划保持不变。</li>
+              <li>{impactDialog.data.history_policy?.message}</li>
+              <li>
+                {impactDialog.action === 'delete'
+                  ? `最新屏幕缩略图${impactDialog.data.thumbnail_exists ? '将永久删除' : '不存在，无需清理'}。`
+                  : `最新屏幕缩略图${impactDialog.data.thumbnail_exists ? '将保留' : '当前不存在'}。`}
+              </li>
+              <li>{impactDialog.data.identity_recovery?.message}</li>
+            </ul>
+            {impactDialog.action === 'delete' && (
+              <div className="managed-impact-name-confirmation">
+                <label htmlFor="managed-delete-device-name">
+                  输入设备名 <strong>{impactMachineName}</strong> 以确认删除
+                </label>
+                <Input
+                  id="managed-delete-device-name"
+                  value={impactDialog.confirmName}
+                  status={impactDialog.confirmName && !canConfirmAgentImpact(
+                    'delete', impactDialog.confirmName, impactMachineName,
+                  ) ? 'error' : undefined}
+                  placeholder="完整输入设备名"
+                  autoComplete="off"
+                  onChange={event => setImpactDialog(current => ({
+                    ...current, confirmName: event.target.value,
+                  }))}
+                />
+              </div>
+            )}
+          </div>
+        ) : null}
+      </Modal>
 
       <Drawer
         title={editingSchedule

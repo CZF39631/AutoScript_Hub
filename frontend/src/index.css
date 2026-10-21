@@ -300,8 +300,21 @@ button, input, select, textarea { font: inherit; }
 .managed-agent-card__actions .ant-btn { height: 30px; padding-inline: 10px; font-size: 12px; }
 .managed-agent-card__primary-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
 .managed-agent-card__primary-actions > .ant-btn:last-child { width: 30px; padding-inline: 0; }
-.managed-agent-toggle { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #48484a; font-size: 12px; }
-.managed-agent-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-acceptance-action { width: 100%; justify-content: center; color: #7a4b00; border-color: rgba(178,80,0,.3); background: rgba(255,159,10,.08); }
+.is-disabled .managed-agent-acceptance-action { color: #0066cc; border-color: rgba(0,122,255,.26); background: rgba(0,122,255,.07); }
+.managed-impact-modal .ant-modal-body { padding-top: 6px; }
+.managed-impact-loading { padding: 10px 0 2px; }
+.managed-impact-content { display: grid; gap: 16px; }
+.managed-impact-counts { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid rgba(0,0,0,.08); border-radius: 12px; background: #f7f7f9; }
+.managed-impact-counts > div { min-width: 0; padding: 12px 10px; border-inline-end: 1px solid rgba(0,0,0,.07); text-align: center; }
+.managed-impact-counts > div:last-child { border-inline-end: 0; }
+.managed-impact-counts dt { overflow: hidden; color: var(--apple-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-impact-counts dd { margin: 4px 0 0; color: var(--apple-text); font-size: 20px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.managed-impact-consequences { margin: 0; padding-inline-start: 20px; color: #3a3a3c; font-size: 13px; line-height: 1.65; }
+.managed-impact-consequences li + li { margin-top: 4px; }
+.managed-impact-name-confirmation { padding: 14px; border-radius: 12px; background: rgba(255,59,48,.065); }
+.managed-impact-name-confirmation label { display: block; margin-bottom: 9px; color: #5f1915; font-size: 13px; }
+.managed-impact-name-confirmation strong { overflow-wrap: anywhere; }
 .managed-agent-empty { min-height: 330px; display: grid; place-items: center; border: 1px dashed rgba(0,0,0,.13); border-radius: 16px; background: rgba(255,255,255,.58); }
 .managed-agent-empty--compact { min-height: 220px; }
 .managed-agent-pagination { margin-top: 18px; display: flex; justify-content: flex-end; }
@@ -366,9 +379,11 @@ button, input, select, textarea { font: inherit; }
   .managed-agent-grid { gap: 10px; }
   .managed-agent-card { padding: 12px; }
   .managed-agent-card__actions { grid-template-columns: 1fr; }
-  .managed-agent-toggle { min-height: 32px; }
   .managed-agent-card__actions > .ant-btn { width: 100%; }
   .managed-agent-card__primary-actions { justify-content: flex-end; }
+  .managed-impact-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .managed-impact-counts > div:nth-child(2) { border-inline-end: 0; }
+  .managed-impact-counts > div:nth-child(-n+2) { border-bottom: 1px solid rgba(0,0,0,.07); }
   .managed-thumbnail-modal { max-width: calc(100vw - 20px); }
   .managed-thumbnail-modal .ant-modal-body { padding-inline: 0; }
   .managed-monitor--preview { padding: 6px 6px 0; border-radius: 10px; }

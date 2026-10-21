@@ -18,6 +18,12 @@ from app.routers.runs import _enrich_run, _has_result_files
 from app.schemas import RunBrief
 from app.services.agent_thumbnails import thumbnail_path
 from app.services.audit import write_audit
+from app.services.managed_agent_lifecycle import (
+    delete_agent as delete_agent_lifecycle,
+    disable_agent,
+    enable_agent,
+    preview_agent_impact,
+)
 from app.services.run_dispatch import create_validated_run, validate_run_request
 from app.services.script_access import restrict_script_query
 from app.services.schedule_time import (
@@ -63,6 +69,34 @@ class ManagedRunCreate(BaseModel):
 
 class ManagedAgentUpdate(BaseModel):
     enabled: bool
+    impact_version: Optional[str] = None
+
+
+class ImpactHistoryPolicy(BaseModel):
+    runs_retained: bool
+    schedules_retained: bool
+    message: str
+
+
+class ImpactIdentityRecovery(BaseModel):
+    can_restore: bool
+    automatic_restore: bool
+    method: str
+    message: str
+
+
+class ManagedAgentImpact(BaseModel):
+    action: Literal["disable", "delete"]
+    agent_id: int
+    machine_name: str
+    version: str
+    pending_count: int
+    running_count: int
+    enabled_schedule_count: int
+    paused_schedule_count: int
+    thumbnail_exists: bool
+    history_policy: ImpactHistoryPolicy
+    identity_recovery: ImpactIdentityRecovery
 
 
 class ManagedScheduleCreate(BaseModel):
@@ -385,6 +419,16 @@ def list_managed_agents(
     ]
 
 
+@router.get("/managed-agents/{agent_id}/impact", response_model=ManagedAgentImpact)
+def get_managed_agent_impact(
+    agent_id: int,
+    action: Literal["disable", "delete"] = Query(...),
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    return preview_agent_impact(db, agent_id, action, managed_only=True)
+
+
 @router.get("/managed-agents/{agent_id}/thumbnail")
 def get_managed_agent_thumbnail(
     agent_id: int,
@@ -444,46 +488,32 @@ def update_managed_agent(
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
-    agent = _managed_agent_or_404(db, agent_id)
-    agent.enabled = req.enabled
-    if not req.enabled:
-        agent.status = "offline"
-        now = datetime.now(timezone.utc)
-        db.query(Run).filter(
-            Run.target_agent_id == agent.id,
-            Run.status == "pending",
-            Run.is_deleted == False,
-        ).update(
-            {
-                Run.status: "cancelled",
-                Run.finished_at: now,
-                Run.error_msg: "托管 Agent 已被禁用，任务已取消",
-            },
-            synchronize_session=False,
-        )
-        db.query(Run).filter(
-            or_(Run.target_agent_id == agent.id, Run.agent_id == agent.id),
-            Run.status == "running",
-            Run.is_deleted == False,
-        ).update(
-            {
-                Run.status: "failed",
-                Run.finished_at: now,
-                Run.error_msg: "托管 Agent 已被禁用，任务执行失败",
-            },
-            synchronize_session=False,
-        )
-    db.commit()
-    db.refresh(agent)
-    write_audit(
-        current_user.id,
-        current_user.username,
-        "managed_agent.update",
-        target_type="agent",
-        target_id=agent.id,
-        detail="enabled={}".format(req.enabled),
+    if req.enabled:
+        return enable_agent(db, agent_id, current_user, managed_only=True)
+    return disable_agent(
+        db,
+        agent_id,
+        current_user,
+        expected_version=req.impact_version,
+        managed_only=True,
     )
-    return agent
+
+
+@router.delete("/managed-agents/{agent_id}")
+def delete_managed_agent(
+    agent_id: int,
+    impact_version: str = Query(...),
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    return delete_agent_lifecycle(
+        db,
+        agent_id,
+        current_user,
+        expected_version=impact_version,
+        require_preview=True,
+        managed_only=True,
+    )
 
 
 @router.post("/managed-agents/{agent_id}/runs", response_model=RunBrief)

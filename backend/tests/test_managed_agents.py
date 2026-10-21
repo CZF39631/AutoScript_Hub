@@ -39,6 +39,15 @@ def _register_managed(client, token, uid, name, agent_token=None):
     return response.json()
 
 
+def _impact(client, token, agent_id, action):
+    response = client.get(
+        "/api/admin/managed-agents/{}/impact?action={}".format(agent_id, action),
+        headers=_headers(token),
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def test_registration_uses_stable_device_uid_and_preserves_legacy_defaults(client, dev_token):
     first = _register_managed(client, dev_token, "device-stable-001", "old-name")
     second = _register_managed(
@@ -87,9 +96,10 @@ def test_device_uid_cannot_be_rebound_and_disabled_agent_cannot_heartbeat(
         json={"device_uid": "exclusive-device", "machine_name": "hijack", "mode": "managed"},
         headers={"Authorization": "Bearer {}".format(admin_token)},
     )
+    preview = _impact(client, admin_token, agent["id"], "disable")
     disabled = client.patch(
         "/api/admin/managed-agents/{}".format(agent["id"]),
-        json={"enabled": False},
+        json={"enabled": False, "impact_version": preview["version"]},
         headers={"Authorization": "Bearer {}".format(admin_token)},
     )
     heartbeat = client.post(
@@ -720,9 +730,10 @@ def test_disabling_managed_agent_terminates_directed_active_runs(
         headers=_headers(dev_token, agent["agent_token"]),
     )
 
+    preview = _impact(client, admin_token, agent["id"], "disable")
     disabled = client.patch(
         "/api/admin/managed-agents/{}".format(agent["id"]),
-        json={"enabled": False},
+        json={"enabled": False, "impact_version": preview["version"]},
         headers=_headers(admin_token),
     )
     assert disabled.status_code == 200
@@ -733,6 +744,244 @@ def test_disabling_managed_agent_terminates_directed_active_runs(
     assert running.status == "failed"
     assert pending.finished_at is not None
     assert running.finished_at is not None
+    db.close()
+
+
+def test_lifecycle_preview_conflict_side_effects_history_identity_and_audit(
+    client, admin_token, dev_token, fresh_db, tmp_path, monkeypatch
+):
+    from app.services import agent_thumbnails
+
+    TestSession, _ = fresh_db
+    monkeypatch.setattr(agent_thumbnails, "THUMBNAILS_DIR", str(tmp_path / "thumbnails"))
+    script_id = _upload(client, admin_token)
+    agent = _register_managed(client, dev_token, "lifecycle-device", "受控工作站")
+    enabled_schedule = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "启用计划", "agent_id": agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/enabled.txt"}, "interval_seconds": 3600,
+        },
+        headers=_headers(admin_token),
+    ).json()
+    paused_schedule = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "暂停计划", "agent_id": agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/paused.txt"}, "interval_seconds": 3600,
+            "enabled": False,
+        },
+        headers=_headers(admin_token),
+    ).json()
+    pending = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/pending.txt"}},
+        headers=_headers(admin_token),
+    ).json()
+    running = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/running.txt"}},
+        headers=_headers(admin_token),
+    ).json()
+    claimed = client.post(
+        "/api/runs/{}/claim".format(running["id"]),
+        json={"agent_id": agent["id"]},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert claimed.status_code == 200
+
+    thumbnail = agent_thumbnails.thumbnail_path(agent["id"])
+    thumbnail.parent.mkdir(parents=True)
+    thumbnail.write_bytes(b"retained-screen")
+    db = TestSession()
+    row = db.query(Agent).filter(Agent.id == agent["id"]).one()
+    row.thumbnail_updated_at = datetime.now(timezone.utc)
+    row.thumbnail_size = thumbnail.stat().st_size
+    db.commit()
+    db.close()
+
+    first_preview = _impact(client, admin_token, agent["id"], "disable")
+    repeated_preview = _impact(client, admin_token, agent["id"], "disable")
+    assert repeated_preview == first_preview
+    assert first_preview["pending_count"] == 1
+    assert first_preview["running_count"] == 1
+    assert first_preview["enabled_schedule_count"] == 1
+    assert first_preview["paused_schedule_count"] == 1
+    assert first_preview["thumbnail_exists"] is True
+    assert first_preview["history_policy"] == {
+        "runs_retained": True,
+        "schedules_retained": True,
+        "message": "任务运行历史和计划记录均会保留，关联启用计划将暂停。",
+    }
+    assert first_preview["identity_recovery"]["can_restore"] is True
+    assert first_preview["identity_recovery"]["automatic_restore"] is False
+    wrong_action_confirmation = client.delete(
+        "/api/admin/managed-agents/{}?impact_version={}".format(
+            agent["id"], first_preview["version"]
+        ),
+        headers=_headers(admin_token),
+    )
+    assert wrong_action_confirmation.status_code == 409
+
+    late_schedule = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "预览后新增计划", "agent_id": agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/late.txt"}, "interval_seconds": 3600,
+        },
+        headers=_headers(admin_token),
+    ).json()
+    stale = client.patch(
+        "/api/admin/managed-agents/{}".format(agent["id"]),
+        json={"enabled": False, "impact_version": first_preview["version"]},
+        headers=_headers(admin_token),
+    )
+    assert stale.status_code == 409
+    assert "状态已变化" in stale.json()["detail"]
+
+    current_preview = _impact(client, admin_token, agent["id"], "disable")
+    assert current_preview["pending_count"] == 1
+    assert current_preview["enabled_schedule_count"] == 2
+    disabled = client.patch(
+        "/api/admin/managed-agents/{}".format(agent["id"]),
+        json={"enabled": False, "impact_version": current_preview["version"]},
+        headers=_headers(admin_token),
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+
+    db = TestSession()
+    assert db.query(Run).filter(Run.id == pending["id"], Run.status == "cancelled").count() == 1
+    saved_running = db.query(Run).filter(Run.id == running["id"]).one()
+    assert saved_running.status == "failed"
+    assert saved_running.is_deleted is False
+    saved_schedules = db.query(ManagedSchedule).filter(
+        ManagedSchedule.id.in_([
+            enabled_schedule["id"], paused_schedule["id"], late_schedule["id"],
+        ])
+    ).all()
+    assert all(not item.enabled and not item.is_deleted for item in saved_schedules)
+    disabled_audit = db.query(AuditLog).filter(
+        AuditLog.action == "managed_agent.disable", AuditLog.target_id == agent["id"]
+    ).one()
+    assert "pending=1" in disabled_audit.detail
+    assert "enabled_schedules=2" in disabled_audit.detail
+    db.close()
+
+    restored = client.patch(
+        "/api/admin/managed-agents/{}".format(agent["id"]),
+        json={"enabled": True},
+        headers=_headers(admin_token),
+    )
+    assert restored.status_code == 200
+    assert restored.json()["enabled"] is True
+    assert restored.json()["status"] == "offline"
+
+    delete_preview = _impact(client, admin_token, agent["id"], "delete")
+    assert delete_preview["pending_count"] == 0
+    assert delete_preview["running_count"] == 0
+    assert delete_preview["enabled_schedule_count"] == 0
+    assert delete_preview["paused_schedule_count"] == 3
+    assert delete_preview["identity_recovery"]["can_restore"] is False
+    assert "device_uid" in delete_preview["identity_recovery"]["message"]
+
+    changed_after_preview = client.post(
+        "/api/agents/register",
+        json={
+            "device_uid": "lifecycle-device",
+            "machine_name": "受控工作站已改名",
+            "mode": "managed",
+        },
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert changed_after_preview.status_code == 200
+    stale_delete = client.delete(
+        "/api/admin/managed-agents/{}?impact_version={}".format(
+            agent["id"], delete_preview["version"]
+        ),
+        headers=_headers(admin_token),
+    )
+    assert stale_delete.status_code == 409
+
+    delete_preview = _impact(client, admin_token, agent["id"], "delete")
+    deleted = client.delete(
+        "/api/admin/managed-agents/{}?impact_version={}".format(
+            agent["id"], delete_preview["version"]
+        ),
+        headers=_headers(admin_token),
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["identity_recovery"]["automatic_restore"] is False
+    assert not thumbnail.exists()
+
+    db = TestSession()
+    saved_agent = db.query(Agent).filter(Agent.id == agent["id"]).one()
+    assert saved_agent.is_deleted is True
+    assert saved_agent.enabled is False
+    assert db.query(Run).filter(Run.id.in_([pending["id"], running["id"]]), Run.is_deleted == False).count() == 2
+    assert db.query(ManagedSchedule).filter(
+        ManagedSchedule.id.in_([
+            enabled_schedule["id"], paused_schedule["id"], late_schedule["id"],
+        ]),
+        ManagedSchedule.is_deleted == False,
+    ).count() == 3
+    assert db.query(AuditLog).filter(
+        AuditLog.action == "managed_agent.enable", AuditLog.target_id == agent["id"]
+    ).count() == 1
+    assert db.query(AuditLog).filter(
+        AuditLog.action == "managed_agent.delete", AuditLog.target_id == agent["id"]
+    ).count() == 1
+    db.close()
+
+    rejected_registration = client.post(
+        "/api/agents/register",
+        json={
+            "device_uid": "lifecycle-device",
+            "machine_name": "受控工作站",
+            "mode": "managed",
+        },
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert rejected_registration.status_code == 403
+    assert "管理员移除" in rejected_registration.json()["detail"]
+
+
+def test_legacy_agent_delete_uses_unified_lifecycle_service(
+    client, admin_token, dev_token, fresh_db
+):
+    TestSession, _ = fresh_db
+    script_id = _upload(client, admin_token)
+    agent = _register_managed(client, dev_token, "legacy-delete-device", "旧入口设备")
+    schedule = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "旧入口计划", "agent_id": agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/legacy.txt"}, "interval_seconds": 3600,
+        },
+        headers=_headers(admin_token),
+    ).json()
+    run = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/legacy.txt"}},
+        headers=_headers(admin_token),
+    ).json()
+
+    deleted = client.delete(
+        "/api/agents/{}".format(agent["id"]), headers=_headers(admin_token)
+    )
+    assert deleted.status_code == 200
+
+    db = TestSession()
+    assert db.query(Agent).filter(Agent.id == agent["id"]).one().is_deleted is True
+    saved_schedule = db.query(ManagedSchedule).filter(ManagedSchedule.id == schedule["id"]).one()
+    saved_run = db.query(Run).filter(Run.id == run["id"]).one()
+    assert saved_schedule.enabled is False
+    assert saved_schedule.is_deleted is False
+    assert saved_run.status == "cancelled"
+    assert saved_run.is_deleted is False
+    assert db.query(AuditLog).filter(
+        AuditLog.action == "managed_agent.delete", AuditLog.target_id == agent["id"]
+    ).count() == 1
     db.close()
 
 

@@ -132,9 +132,13 @@ def test_thumbnail_upload_requires_owner_enabled_managed_agent_and_bound_device_
     assert wrong_device_token.status_code == 403
     assert wrong_owner.status_code == 404
 
+    impact = client.get(
+        "/api/admin/managed-agents/{}/impact?action=disable".format(target["id"]),
+        headers=_headers(admin_token),
+    ).json()
     disabled = client.patch(
         "/api/admin/managed-agents/{}".format(target["id"]),
-        json={"enabled": False},
+        json={"enabled": False, "impact_version": impact["version"]},
         headers=_headers(admin_token),
     )
     assert disabled.status_code == 200

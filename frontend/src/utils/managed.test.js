@@ -2,8 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  agentImpactCounts,
   buildSchedulePayload,
   buildVisualCron,
+  canConfirmAgentImpact,
   describeCron,
   formatInterval,
   formatSchedule,
@@ -90,6 +92,24 @@ test('schedule maintenance helpers distinguish enabled state and warn about shor
   assert.equal(shortMonthSkipDay({ cron_mode: 'advanced' }, '0 9 31 * *'), 31)
   assert.equal(shortMonthSkipDay({ cron_mode: 'visual', cron_preset: 'daily', cron_monthday: 31 }), null)
   assert.equal(shortMonthSkipDay({ cron_mode: 'advanced' }, '0 9 * * *'), null)
+})
+
+test('agent lifecycle confirmation exposes every affected count and requires an exact delete name', () => {
+  assert.deepEqual(agentImpactCounts({
+    pending_count: 2,
+    running_count: 1,
+    enabled_schedule_count: 3,
+    paused_schedule_count: 4,
+  }), [
+    { key: 'pending', label: '待执行任务', value: 2 },
+    { key: 'running', label: '运行中任务', value: 1 },
+    { key: 'enabled-schedules', label: '启用计划', value: 3 },
+    { key: 'paused-schedules', label: '已暂停计划', value: 4 },
+  ])
+  assert.equal(canConfirmAgentImpact('disable', '', '工作站 A'), true)
+  assert.equal(canConfirmAgentImpact('delete', '工作站 A', '工作站 A'), true)
+  assert.equal(canConfirmAgentImpact('delete', '工作站 a', '工作站 A'), false)
+  assert.equal(canConfirmAgentImpact('delete', ' 工作站 A ', '工作站 A'), false)
 })
 
 test('Cron schedule payload excludes interval and legacy schedules still format as intervals', () => {
