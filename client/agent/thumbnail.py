@@ -5,9 +5,9 @@ import io
 import sys
 
 
-MAX_THUMBNAIL_BYTES = 512 * 1024
-MAX_THUMBNAIL_EDGE = 640
-JPEG_QUALITY = 65
+MAX_THUMBNAIL_BYTES = 1024 * 1024
+MAX_THUMBNAIL_EDGE = 1280
+JPEG_QUALITY = 82
 _DESKTOP_SWITCHDESKTOP = 0x0100
 
 
@@ -68,9 +68,9 @@ def _encode_jpeg(image):
     rgb = image.convert("RGB")
     rgb.thumbnail((MAX_THUMBNAIL_EDGE, MAX_THUMBNAIL_EDGE), Image.Resampling.LANCZOS)
 
-    # Quality 65 is the normal path. Lower values and dimensions are only a
-    # hard-size fallback for unusually noisy captures.
-    for quality in (JPEG_QUALITY, 55, 45, 35, 25):
+    # Quality 82 keeps desktop text readable in the enlarged preview. Lower
+    # values and dimensions are only a hard-size fallback for noisy captures.
+    for quality in (JPEG_QUALITY, 75, 68, 60, 50, 40):
         stream = io.BytesIO()
         rgb.save(stream, format="JPEG", quality=quality, optimize=True)
         payload = stream.getvalue()
@@ -84,12 +84,12 @@ def _encode_jpeg(image):
             Image.Resampling.LANCZOS,
         )
         stream = io.BytesIO()
-        rgb.save(stream, format="JPEG", quality=25, optimize=True)
+        rgb.save(stream, format="JPEG", quality=40, optimize=True)
         payload = stream.getvalue()
         if len(payload) <= MAX_THUMBNAIL_BYTES:
             return payload
 
-    raise ValueError("缩略图编码后仍超过 512 KiB")
+    raise ValueError("缩略图编码后仍超过 1 MiB")
 
 
 def capture_thumbnail():

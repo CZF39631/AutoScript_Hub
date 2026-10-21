@@ -13,8 +13,8 @@ from PIL import Image, UnidentifiedImageError
 from app.config import THUMBNAILS_DIR
 
 
-MAX_THUMBNAIL_BYTES = 512 * 1024
-MAX_THUMBNAIL_DIMENSION = 640
+MAX_THUMBNAIL_BYTES = 1024 * 1024
+MAX_THUMBNAIL_DIMENSION = 1280
 
 
 def thumbnail_path(agent_id: int) -> Path:
@@ -23,7 +23,7 @@ def thumbnail_path(agent_id: int) -> Path:
 
 
 async def read_bounded_jpeg(request: Request) -> Tuple[bytes, int, int]:
-    """Read at most 512 KiB and fully validate a small, genuine JPEG."""
+    """Read at most 1 MiB and fully validate a bounded, genuine JPEG."""
     media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if media_type != "image/jpeg":
         raise HTTPException(
@@ -40,12 +40,12 @@ async def read_bounded_jpeg(request: Request) -> Tuple[bytes, int, int]:
         if declared_size < 0:
             raise HTTPException(status_code=400, detail="无效的 Content-Length")
         if declared_size > MAX_THUMBNAIL_BYTES:
-            raise HTTPException(status_code=413, detail="缩略图不得超过 512 KiB")
+            raise HTTPException(status_code=413, detail="缩略图不得超过 1 MiB")
 
     payload = bytearray()
     async for chunk in request.stream():
         if len(payload) + len(chunk) > MAX_THUMBNAIL_BYTES:
-            raise HTTPException(status_code=413, detail="缩略图不得超过 512 KiB")
+            raise HTTPException(status_code=413, detail="缩略图不得超过 1 MiB")
         payload.extend(chunk)
     data = bytes(payload)
     if not data:
@@ -69,7 +69,7 @@ async def read_bounded_jpeg(request: Request) -> Tuple[bytes, int, int]:
                     or width > MAX_THUMBNAIL_DIMENSION
                     or height > MAX_THUMBNAIL_DIMENSION
                 ):
-                    raise HTTPException(status_code=400, detail="缩略图宽高不得超过 640 像素")
+                    raise HTTPException(status_code=400, detail="缩略图宽高不得超过 1280 像素")
                 image.verify()
             # verify() validates the structure without decoding pixels. Reopen and
             # decode once so truncated/corrupt scan data cannot be persisted.

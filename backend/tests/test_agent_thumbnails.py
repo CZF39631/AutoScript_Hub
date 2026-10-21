@@ -172,12 +172,12 @@ def test_thumbnail_upload_rejects_wrong_type_corrupt_oversize_and_oversized_dime
     )
     oversize = client.post(
         url,
-        content=b"\xff\xd8" + (b"x" * (512 * 1024)) + b"\xff\xd9",
+        content=b"\xff\xd8" + (b"x" * (1024 * 1024)) + b"\xff\xd9",
         headers={**auth, "Content-Type": "image/jpeg"},
     )
     dimensions = client.post(
         url,
-        content=_image_bytes(size=(641, 1)),
+        content=_image_bytes(size=(1281, 1)),
         headers={**auth, "Content-Type": "image/jpeg"},
     )
 
