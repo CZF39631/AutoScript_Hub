@@ -81,6 +81,15 @@ def test_managed_agent_thumbnail_round_trip_metadata_is_admin_only_and_not_in_re
     assert downloaded.headers["cache-control"] == "no-store"
     assert downloaded.headers["x-content-type-options"] == "nosniff"
 
+    audit = client.get(
+        "/api/audit?action=managed_thumbnail.view", headers=_headers(admin_token)
+    )
+    assert audit.status_code == 200
+    view = next(item for item in audit.json() if item["target_id"] == agent["id"])
+    assert view["username"] == "admin"
+    assert view["target_type"] == "agent"
+    assert view["detail"] == "device=thumbnail-round-trip"
+
     second_jpeg = _image_bytes(color=(4, 5, 6))
     replaced = client.post(
         "/api/agents/{}/thumbnail".format(agent["id"]),
@@ -156,6 +165,53 @@ def test_thumbnail_upload_requires_owner_enabled_managed_agent_and_bound_device_
         headers={**_headers(dev_token), "Content-Type": "image/jpeg"},
     )
     assert standard_upload.status_code == 404
+
+
+def test_device_pause_is_authoritative_and_old_protocol_omission_preserves_state(
+    client, admin_token, dev_token
+):
+    registered = client.post(
+        "/api/agents/register",
+        json={
+            "device_uid": "thumbnail-paused",
+            "machine_name": "thumbnail-paused",
+            "mode": "managed",
+            "thumbnail_capture_paused": True,
+        },
+        headers=_headers(dev_token),
+    )
+    assert registered.status_code == 200
+    agent = registered.json()
+    assert agent["thumbnail_capture_paused"] is True
+
+    # An older heartbeat omits the optional field and must not silently resume it.
+    heartbeat = client.post(
+        "/api/agents/{}/heartbeat".format(agent["id"]),
+        json={},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert heartbeat.status_code == 200
+    assert heartbeat.json()["thumbnail_capture_paused"] is True
+
+    denied = client.post(
+        "/api/agents/{}/thumbnail".format(agent["id"]),
+        content=_image_bytes(),
+        headers={**_headers(dev_token, agent["agent_token"]), "Content-Type": "image/jpeg"},
+    )
+    assert denied.status_code == 404
+
+    managed = client.get("/api/admin/managed-agents", headers=_headers(admin_token)).json()
+    assert next(item for item in managed if item["id"] == agent["id"])[
+        "thumbnail_capture_paused"
+    ] is True
+
+    resumed = client.post(
+        "/api/agents/{}/heartbeat".format(agent["id"]),
+        json={"thumbnail_capture_paused": False},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["thumbnail_capture_paused"] is False
 
 
 def test_thumbnail_upload_rejects_wrong_type_corrupt_oversize_and_oversized_dimensions(

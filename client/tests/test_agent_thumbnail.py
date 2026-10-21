@@ -112,6 +112,57 @@ def test_thumbnail_failure_is_contained_and_does_not_post(monkeypatch):
     assert posts == []
 
 
+def test_local_pause_persists_across_restart_and_prevents_capture_and_upload(tmp_path, monkeypatch):
+    config_path = tmp_path / "client_config.json"
+    config_path.write_text(
+        '{"client_mode":"managed","device_uid":"device-paused"}', encoding="utf-8"
+    )
+    captures = []
+    posts = []
+    monkeypatch.setattr(agent, "_CLIENT_CONFIG_PATH", str(config_path))
+    monkeypatch.setattr(agent, "_client_config", {
+        "client_mode": "managed", "device_uid": "device-paused",
+    })
+    monkeypatch.setattr(agent, "_agent_id", 17)
+    monkeypatch.setattr(agent, "_token", "bearer-secret")
+    monkeypatch.setattr(agent, "_agent_token", "device-secret")
+    monkeypatch.setattr(agent, "capture_thumbnail", lambda: captures.append(True) or b"jpeg")
+    monkeypatch.setattr(agent.requests, "post", lambda *args, **kwargs: posts.append(True))
+
+    state = agent.set_thumbnail_capture_paused(True)
+    assert state == {
+        "thumbnail_capture_paused": True,
+        "thumbnail_capture_allowed": False,
+    }
+    saved = __import__("json").loads(config_path.read_text(encoding="utf-8"))
+    assert saved["thumbnail_capture_paused"] is True
+
+    # Simulate process restart by restoring the persisted configuration object.
+    monkeypatch.setattr(agent, "_client_config", saved)
+    assert agent._attempt_thumbnail_upload() is False
+    assert captures == []
+    assert posts == []
+
+
+def test_pause_wins_when_set_during_capture_and_discards_bytes(monkeypatch):
+    posts = []
+    config = {"client_mode": "managed", "thumbnail_capture_paused": False}
+    monkeypatch.setattr(agent, "_client_config", config)
+    monkeypatch.setattr(agent, "_agent_id", 17)
+    monkeypatch.setattr(agent, "_token", "bearer-secret")
+    monkeypatch.setattr(agent, "_agent_token", "device-secret")
+
+    def capture_then_pause():
+        config["thumbnail_capture_paused"] = True
+        return b"jpeg"
+
+    monkeypatch.setattr(agent, "capture_thumbnail", capture_then_pause)
+    monkeypatch.setattr(agent.requests, "post", lambda *args, **kwargs: posts.append(True))
+
+    assert agent._attempt_thumbnail_upload() is False
+    assert posts == []
+
+
 def test_thumbnail_worker_is_managed_only_and_daemonized(monkeypatch):
     started = []
 

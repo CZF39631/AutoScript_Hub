@@ -181,6 +181,33 @@ def test_local_result_open_endpoint_calls_agent_callback():
         server.shutdown(); server.server_close()
 
 
+def test_local_thumbnail_pause_and_resume_endpoints_call_device_callback():
+    states = []
+    AgentHandler.set_thumbnail_capture_paused_fn = lambda paused: (
+        states.append(paused) or {
+            "thumbnail_capture_paused": paused,
+            "thumbnail_capture_allowed": not paused,
+        }
+    )
+    server = _server()
+    try:
+        base = "http://127.0.0.1:{}".format(server.server_port)
+        for action, expected in (("pause", True), ("resume", False)):
+            request = urllib.request.Request(
+                base + "/local/thumbnail-capture/" + action,
+                data=b"{}",
+                headers=_headers(**{"Content-Type": "application/json"}),
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=3) as response:
+                payload = json.loads(response.read())
+            assert payload["thumbnail_capture_paused"] is expected
+        assert states == [True, False]
+    finally:
+        AgentHandler.set_thumbnail_capture_paused_fn = None
+        server.shutdown(); server.server_close()
+
+
 def test_lifecycle_shutdown_endpoint_requests_drain_and_exit():
     requested = []
     AgentHandler.request_shutdown_fn = lambda: requested.append(True)

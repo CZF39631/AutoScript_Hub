@@ -5,11 +5,12 @@ import {
 } from 'antd'
 import {
   DeleteOutlined, DesktopOutlined, EditOutlined, EyeOutlined, LoadingOutlined,
-  PauseCircleOutlined, PictureOutlined, PlayCircleOutlined, ReloadOutlined, SearchOutlined,
-  SendOutlined, ThunderboltOutlined, WarningOutlined, ZoomInOutlined,
+  PauseCircleOutlined, PictureOutlined, PlayCircleOutlined, ReloadOutlined, SafetyCertificateOutlined,
+  SearchOutlined, SendOutlined, ThunderboltOutlined, WarningOutlined, ZoomInOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import api from '../api/client'
+import { loadManagedThumbnail } from '../api/managedThumbnails'
 import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
@@ -49,8 +50,9 @@ function parameterDefaults(params) {
 function ThumbnailScreen({ agent }) {
   const timestamp = thumbnailTimestamp(agent)
   const [attempt, setAttempt] = useState(0)
+  const [requested, setRequested] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [image, setImage] = useState({ status: timestamp ? 'loading' : 'empty', url: '' })
+  const [image, setImage] = useState({ status: timestamp ? 'masked' : 'empty', url: '' })
   const stale = isThumbnailStale(timestamp)
 
   useEffect(() => {
@@ -58,18 +60,22 @@ function ThumbnailScreen({ agent }) {
       setImage({ status: 'empty', url: '' })
       return undefined
     }
+    if (!requested) {
+      setImage({ status: 'masked', url: '' })
+      return undefined
+    }
 
     const controller = new AbortController()
-    let objectUrl = ''
+    let loadedImage = null
     setImage({ status: 'loading', url: '' })
 
-    api.get(`/api/admin/managed-agents/${agent.id}/thumbnail`, {
-      responseType: 'blob',
-      signal: controller.signal,
-    }).then(response => {
-      if (controller.signal.aborted) return
-      objectUrl = URL.createObjectURL(response.data)
-      setImage({ status: 'ready', url: objectUrl })
+    loadManagedThumbnail(api, agent.id, { signal: controller.signal }).then(result => {
+      loadedImage = result
+      if (controller.signal.aborted) {
+        result.release()
+        return
+      }
+      setImage({ status: 'ready', url: result.url })
     }).catch(error => {
       if (controller.signal.aborted || error?.code === 'ERR_CANCELED') return
       setImage({ status: error?.response?.status === 404 ? 'empty' : 'error', url: '' })
@@ -77,9 +83,9 @@ function ThumbnailScreen({ agent }) {
 
     return () => {
       controller.abort()
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      loadedImage?.release()
     }
-  }, [agent.id, attempt, timestamp])
+  }, [agent.id, attempt, requested, timestamp])
 
   const openPreview = () => {
     if (image.status === 'ready') setPreviewOpen(true)
@@ -107,10 +113,24 @@ function ThumbnailScreen({ agent }) {
       >
         <div className="managed-monitor__screen">
         {screenImage}
+        {image.status === 'masked' && (
+          <div className="managed-thumbnail-state managed-thumbnail-state--masked">
+            <SafetyCertificateOutlined />
+            <span>画面已遮罩，查看操作会记录审计</span>
+            <Button
+              size="small"
+              type="primary"
+              icon={<EyeOutlined />}
+              onClick={() => setRequested(true)}
+            >
+              查看画面
+            </Button>
+          </div>
+        )}
         {image.status === 'loading' && (
           <div className="managed-thumbnail-state">
             <LoadingOutlined spin />
-            <span>正在读取画面</span>
+            <span>正在安全读取画面</span>
           </div>
         )}
         {image.status === 'empty' && (
@@ -163,7 +183,7 @@ function ThumbnailScreen({ agent }) {
   )
 }
 
-function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDispatch, onDelete, onOpenRun, onOpenHistory }) {
+function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDispatch, onDelete, onOpenRun, onOpenHistory, onOpenThumbnailAudit }) {
   const currentRun = agent.current_run
   const latestRun = agent.latest_run
   const earliestPending = agent.earliest_pending
@@ -190,7 +210,9 @@ function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDis
       <dl className="managed-agent-card__details">
         <div><dt>Agent 版本</dt><dd>{agent.agent_version || '-'}</dd></div>
         <div><dt>最近心跳</dt><dd>{agent.last_heartbeat ? formatServerTime(agent.last_heartbeat) : '从未连接'}</dd></div>
-        <div><dt>画面更新时间</dt><dd>{updatedAt ? formatServerTime(updatedAt) : '暂无画面'}</dd></div>
+        <div><dt>采集允许</dt><dd>{agent.enabled ? '服务端允许上传' : '设备停用，不接收上传'}</dd></div>
+        <div><dt>设备端暂停</dt><dd>{agent.thumbnail_capture_paused ? '已暂停（管理员不可恢复）' : '未暂停'}</dd></div>
+        <div><dt>最近上传</dt><dd>{updatedAt ? formatServerTime(updatedAt) : '尚未上传'}</dd></div>
         <div>
           <dt>定时任务</dt>
           <dd>{scheduleSummary.enabled || scheduleSummary.paused
@@ -253,6 +275,7 @@ function AgentCard({ agent, updating, scheduleSummary, onPause, onRestore, onDis
           {agent.enabled ? '暂停接单' : '恢复接单'}
         </Button>
         <div className="managed-agent-card__primary-actions">
+          <Button type="text" icon={<SafetyCertificateOutlined />} onClick={() => onOpenThumbnailAudit(agent.id)}>查看记录</Button>
           <Button type="text" icon={<EyeOutlined />} onClick={() => onOpenHistory(agent.id)}>历史</Button>
           <Tooltip title={!agent.enabled ? '设备已停用；可查看计划，但不能发布新任务' : ''}>
             <Button type="primary" icon={<SendOutlined />} disabled={!agent.enabled} onClick={() => onDispatch(agent)}>
@@ -718,7 +741,7 @@ export default function ManagedAgents({ embedded = false }) {
           <div className="managed-agent-grid">
             {pageAgents.map(agent => (
               <AgentCard
-                key={agent.id}
+                key={`${agent.id}:${page}:${statusFilter}:${query}`}
                 agent={agent}
                 updating={Boolean(updating[agent.id])}
                 scheduleSummary={scheduleStatusCounts(schedulesByAgent.get(agent.id) || [])}
@@ -728,6 +751,7 @@ export default function ManagedAgents({ embedded = false }) {
                 onDelete={item => loadImpact(item, 'delete', { resetName: true })}
                 onOpenRun={runId => navigate(`/runs/${runId}`)}
                 onOpenHistory={agentId => navigate(`/runs?agent_id=${agentId}`)}
+                onOpenThumbnailAudit={() => navigate('/audit?action=managed_thumbnail.view')}
               />
             ))}
           </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Table, Input, Select, Space, message } from 'antd'
+import { useSearchParams } from 'react-router-dom'
 import api from '../api/client'
 import { formatServerTime } from '../utils/dateTime'
 
@@ -16,14 +17,16 @@ const actionLabels = {
   create_user: '创建用户',
   update_user: '修改用户',
   delete_user: '删除用户',
+  'managed_thumbnail.view': '查看托管设备画面',
 }
 
 const actionOptions = Object.entries(actionLabels).map(([k, v]) => ({ label: v, value: k }))
 
 export default function AuditLog() {
+  const [searchParams] = useSearchParams()
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(true)
-  const [action, setAction] = useState(undefined)
+  const [action, setAction] = useState(searchParams.get('action') || undefined)
   const [username, setUsername] = useState('')
 
   const load = () => {

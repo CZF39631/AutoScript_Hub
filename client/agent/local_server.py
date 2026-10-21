@@ -102,6 +102,7 @@ class AgentHandler(BaseHTTPRequestHandler):
     check_update_fn = None            # () -> durable signed-update state
     install_update_fn = None          # () -> durable signed-update state
     get_runtime_info_fn = None        # () -> managed private-Python diagnostics
+    set_thumbnail_capture_paused_fn = None  # (paused: bool) -> persisted capture state
     request_shutdown_fn = None        # () -> request drain-then-exit
 
     def _update_status(self, callback, fallback):
@@ -189,7 +190,25 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
         if not self._authorized():
             return
-        if self.path == "/lifecycle/shutdown":
+        if self.path in (
+            "/local/thumbnail-capture/pause",
+            "/local/thumbnail-capture/resume",
+        ):
+            if not self._consume_body():
+                return
+            callback = type(self).set_thumbnail_capture_paused_fn
+            if not callback:
+                self._json({"error": "画面采集开关不可用"}, 503)
+                return
+            try:
+                paused = self.path.endswith("/pause")
+                self._json(callback(paused))
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 409)
+            except Exception:
+                logger.exception("更新本地画面采集状态失败")
+                self._json({"error": "画面采集状态保存失败"}, 500)
+        elif self.path == "/lifecycle/shutdown":
             if not self._consume_body():
                 return
             callback = type(self).request_shutdown_fn
@@ -322,6 +341,7 @@ def start_local_server(
     check_update_fn=None,
     install_update_fn=None,
     get_runtime_info_fn=None,
+    set_thumbnail_capture_paused_fn=None,
     request_shutdown_fn=None,
 ):
     if not api_token:
@@ -342,6 +362,7 @@ def start_local_server(
     AgentHandler.check_update_fn = check_update_fn
     AgentHandler.install_update_fn = install_update_fn
     AgentHandler.get_runtime_info_fn = get_runtime_info_fn
+    AgentHandler.set_thumbnail_capture_paused_fn = set_thumbnail_capture_paused_fn
     AgentHandler.request_shutdown_fn = request_shutdown_fn
     # 更新检查和安装可能持续数分钟；并发处理可确保连接状态、进度等接口仍可响应。
     ports = (port,) if isinstance(port, int) else tuple(port)

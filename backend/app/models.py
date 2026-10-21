@@ -107,6 +107,9 @@ class Agent(Base):
     agent_token_issued_at = Column(DateTime, nullable=True)
     thumbnail_updated_at = Column(DateTime, nullable=True)
     thumbnail_size = Column(Integer, nullable=True)
+    thumbnail_capture_paused = Column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     is_deleted = Column(Boolean, nullable=False, default=False)

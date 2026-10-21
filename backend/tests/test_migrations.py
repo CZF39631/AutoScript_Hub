@@ -36,7 +36,7 @@ def test_fresh_database_upgrades_to_head(tmp_path):
     inspector = inspect(create_engine(database_url))
     assert {
         "device_uid", "mode", "enabled", "agent_token_issued_at",
-        "thumbnail_updated_at", "thumbnail_size",
+        "thumbnail_updated_at", "thumbnail_size", "thumbnail_capture_paused",
     }.issubset(
         {column["name"] for column in inspector.get_columns("agents")}
     )
@@ -225,6 +225,49 @@ def test_retry_lineage_migration_upgrades_0008_and_downgrades_cleanly(tmp_path):
     engine = create_engine(database_url)
     assert "retry_of_run_id" not in {
         column["name"] for column in inspect(engine).get_columns("runs")
+    }
+    engine.dispose()
+
+
+def test_thumbnail_pause_migration_upgrades_0009_and_downgrades_cleanly(tmp_path):
+    database_url = _sqlite_url(tmp_path / "agent-thumbnail-pause.db")
+    config = alembic_config(database_url)
+    command.upgrade(config, "0009_run_retry_lineage")
+    # Fresh 0001 uses current metadata; remove the future column to reproduce a
+    # deployed database whose actual head is 0009.
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE agents DROP COLUMN thumbnail_capture_paused"))
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    columns = {column["name"]: column for column in inspect(engine).get_columns("agents")}
+    assert columns["thumbnail_capture_paused"]["nullable"] is False
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, password_hash, auth_source, display_name, role, status, "
+            "created_at, updated_at, is_deleted) VALUES "
+            "(1, 'owner', 'hash', 'local', 'Owner', 'operator', 'active', "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ))
+        connection.execute(text(
+            "INSERT INTO agents "
+            "(id, device_uid, machine_name, user_id, mode, enabled, status, "
+            "created_at, updated_at, is_deleted) VALUES "
+            "(1, 'pause-default', 'pc', 1, 'managed', 1, 'online', "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ))
+        assert connection.execute(text(
+            "SELECT thumbnail_capture_paused FROM agents WHERE id=1"
+        )).scalar() == 0
+    engine.dispose()
+
+    command.downgrade(config, "0009_run_retry_lineage")
+    engine = create_engine(database_url)
+    assert "thumbnail_capture_paused" not in {
+        column["name"] for column in inspect(engine).get_columns("agents")
     }
     engine.dispose()
 

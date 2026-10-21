@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import func, or_
@@ -432,6 +432,7 @@ def get_managed_agent_impact(
 @router.get("/managed-agents/{agent_id}/thumbnail")
 def get_managed_agent_thumbnail(
     agent_id: int,
+    request: Request,
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
@@ -439,6 +440,16 @@ def get_managed_agent_thumbnail(
     path = thumbnail_path(agent.id)
     if agent.thumbnail_updated_at is None or agent.thumbnail_size is None or not path.is_file():
         raise HTTPException(status_code=404, detail="缩略图不存在")
+    write_audit(
+        current_user.id,
+        current_user.username,
+        "managed_thumbnail.view",
+        target_type="agent",
+        target_id=agent.id,
+        detail="device={}".format(agent.machine_name),
+        ip_address=request.client.host if request.client else None,
+        db=db,
+    )
     return FileResponse(
         path=str(path),
         media_type="image/jpeg",

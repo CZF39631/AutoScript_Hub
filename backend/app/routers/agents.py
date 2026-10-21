@@ -36,11 +36,13 @@ class AgentRegister(BaseModel):
     agent_version: Optional[str] = None
     mode: Optional[Literal["standard", "managed"]] = None
     enabled: Optional[bool] = None
+    thumbnail_capture_paused: Optional[bool] = None
 
 
 class AgentHeartbeat(BaseModel):
     machine_ip: Optional[str] = None
     agent_version: Optional[str] = None
+    thumbnail_capture_paused: Optional[bool] = None
 
 
 class AgentItem(BaseModel):
@@ -54,6 +56,7 @@ class AgentItem(BaseModel):
     status: str
     agent_version: Optional[str] = None
     last_heartbeat: Optional[datetime] = None
+    thumbnail_capture_paused: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -132,6 +135,8 @@ def register_agent(
         agent.agent_version = req.agent_version
         if req.mode is not None:
             agent.mode = req.mode
+        if req.thumbnail_capture_paused is not None:
+            agent.thumbnail_capture_paused = req.thumbnail_capture_paused
         agent.status = "online" if agent.enabled else "offline"
         agent.last_heartbeat = now
         agent.agent_token_issued_at = agent.agent_token_issued_at or now
@@ -153,6 +158,7 @@ def register_agent(
         agent_version=req.agent_version,
         last_heartbeat=now,
         agent_token_issued_at=now,
+        thumbnail_capture_paused=bool(req.thumbnail_capture_paused),
     )
     db.add(agent)
     db.commit()
@@ -196,8 +202,14 @@ def heartbeat(
         agent.machine_ip = req.machine_ip
     if req.agent_version is not None:
         agent.agent_version = req.agent_version
+    if req.thumbnail_capture_paused is not None:
+        agent.thumbnail_capture_paused = req.thumbnail_capture_paused
     db.commit()
-    return {"status": "ok", "agent_id": agent_id}
+    return {
+        "status": "ok",
+        "agent_id": agent_id,
+        "thumbnail_capture_paused": agent.thumbnail_capture_paused,
+    }
 
 
 @router.post("/{agent_id}/thumbnail")
@@ -214,10 +226,11 @@ async def upload_thumbnail(
         Agent.user_id == current_user.id,
         Agent.mode == "managed",
         Agent.enabled == True,
+        Agent.thumbnail_capture_paused == False,
         Agent.is_deleted == False,
     ).first()
     if not agent:
-        raise HTTPException(status_code=404, detail="托管 Agent 不存在或已禁用")
+        raise HTTPException(status_code=404, detail="托管 Agent 不存在、已禁用或设备已暂停画面采集")
     verify_agent_token(agent_token, agent)
 
     data, width, height = await read_bounded_jpeg(request)

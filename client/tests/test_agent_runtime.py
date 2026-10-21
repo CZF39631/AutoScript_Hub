@@ -87,6 +87,8 @@ def test_client_info_exposes_identity_and_structured_current_run(monkeypatch):
         "client_mode": "managed",
         "device_uid": "stable-device-uid",
         "machine_name": "desktop-a",
+        "thumbnail_capture_paused": False,
+        "thumbnail_capture_allowed": True,
         "last_thumbnail_attempt_at": 120.0,
         "last_thumbnail_success_at": 121.0,
         "current_run": {
@@ -128,6 +130,7 @@ def test_registration_reports_stable_identity_and_mode(monkeypatch):
             "machine_name": "desktop-a",
             "machine_ip": "10.0.0.8",
             "agent_version": agent.get_version(),
+            "thumbnail_capture_paused": False,
         },
     )]
 
@@ -157,7 +160,7 @@ def test_registration_persists_device_token_and_agent_calls_send_header(
     ])
 
     def fake_post(url, **kwargs):
-        calls.append((url, kwargs.get("headers", {}).copy()))
+        calls.append((url, kwargs.get("headers", {}).copy(), kwargs.get("json")))
         return next(responses)
 
     monkeypatch.setattr(agent, "_CLIENT_CONFIG_PATH", str(config_path))
@@ -177,6 +180,7 @@ def test_registration_persists_device_token_and_agent_calls_send_header(
     assert saved["agent_token"] == "signed-device-secret"
     assert "X-Agent-Token" not in calls[0][1]
     assert calls[1][1]["X-Agent-Token"] == "signed-device-secret"
+    assert calls[1][2]["thumbnail_capture_paused"] is False
     assert "signed-device-secret" not in capsys.readouterr().out
 
 

@@ -9,6 +9,12 @@ function normalizedRuns(items) {
  * identity/current_run on connection or status; older versions still work via
  * run_id and the local history endpoint.
  */
+export async function setThumbnailCapturePaused(localApi, paused) {
+  const action = paused ? 'pause' : 'resume'
+  const response = await localApi.post(`/local/thumbnail-capture/${action}`, {})
+  return response.data || {}
+}
+
 export async function loadManagedPanelData(localApi) {
   const [connectionResult, statusResult, runsResult, runtimeResult] = await Promise.allSettled([
     localApi.get('/local/connection'),
@@ -41,6 +47,14 @@ export async function loadManagedPanelData(localApi) {
     currentRun,
     recentRuns,
     paused: Boolean(connection.paused || status.paused || connection.enabled === false),
+    thumbnailCapture: {
+      paused: Boolean(connection.thumbnail_capture_paused ?? status.thumbnail_capture_paused),
+      allowed: connection.thumbnail_capture_allowed
+        ?? status.thumbnail_capture_allowed
+        ?? !(connection.thumbnail_capture_paused ?? status.thumbnail_capture_paused),
+      lastAttemptAt: connection.last_thumbnail_attempt_at ?? status.last_thumbnail_attempt_at,
+      lastSuccessAt: connection.last_thumbnail_success_at ?? status.last_thumbnail_success_at,
+    },
     runtime: runtimeResult.status === 'fulfilled' ? runtimeResult.value.data : null,
     source: 'local-agent',
   }

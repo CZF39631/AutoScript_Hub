@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Descriptions, Empty, Skeleton, Table, Tag } from 'antd'
 import {
   CheckCircleOutlined, CloudServerOutlined, DisconnectOutlined, LaptopOutlined,
-  LoadingOutlined, PauseCircleOutlined, ReloadOutlined, SafetyCertificateOutlined,
+  LoadingOutlined, PauseCircleOutlined, PictureOutlined, PlayCircleOutlined,
+  ReloadOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons'
 import { useConnection } from '../contexts/ConnectionContext'
-import { loadManagedPanelData } from '../api/managedLocal'
+import { loadManagedPanelData, setThumbnailCapturePaused } from '../api/managedLocal'
 import { apiErrorMessage } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
 
@@ -34,6 +35,7 @@ export default function ManagedClientPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [lastRefresh, setLastRefresh] = useState(null)
+  const [captureUpdating, setCaptureUpdating] = useState(false)
 
   const load = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true)
@@ -61,6 +63,8 @@ export default function ManagedClientPanel() {
   const recentRuns = overview?.recentRuns || []
   const connectedToServer = Boolean(connection.online)
   const deviceName = device.machine_name || connection.machine_name || '本机被控设备'
+  const thumbnailCapture = overview?.thumbnailCapture || {}
+  const capturePaused = Boolean(thumbnailCapture.paused)
 
   const connectionState = useMemo(() => {
     if (!agentOnline) return { icon: <DisconnectOutlined />, tone: 'error', title: '本地 Agent 未连接', detail: '请确认 AutoScript Agent 正在运行。' }
@@ -78,6 +82,18 @@ export default function ManagedClientPanel() {
   const manualRefresh = () => {
     refreshConnection()
     load()
+  }
+
+  const toggleThumbnailCapture = async () => {
+    setCaptureUpdating(true)
+    try {
+      await setThumbnailCapturePaused(localApi, !capturePaused)
+      await load({ quiet: true })
+    } catch (updateError) {
+      setError(apiErrorMessage(updateError, capturePaused ? '恢复画面采集失败' : '暂停画面采集失败'))
+    } finally {
+      setCaptureUpdating(false)
+    }
   }
 
   return (
@@ -100,7 +116,18 @@ export default function ManagedClientPanel() {
           showIcon
           icon={<SafetyCertificateOutlined />}
           title="屏幕缩略图隐私说明"
-          description="设备解锁时每分钟上传一张低分辨率缩略图，服务端只保留最新一张；锁屏时不采集。这不是视频，也不采集声音。"
+          description={capturePaused
+            ? '画面采集已由本机暂停。暂停优先于管理员设置，Agent 不会截图或上传；恢复前服务端无法绕过。'
+            : '设备解锁时每分钟上传一张低分辨率缩略图，服务端只保留最新一张；锁屏时不采集。这不是视频，也不采集声音。'}
+          action={overview && (
+            <Button
+              icon={capturePaused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+              loading={captureUpdating}
+              onClick={toggleThumbnailCapture}
+            >
+              {capturePaused ? '恢复画面采集' : '暂停画面采集'}
+            </Button>
+          )}
         />
 
         {overview?.paused && (
@@ -148,6 +175,14 @@ export default function ManagedClientPanel() {
                 <div className="managed-status-card__icon"><CloudServerOutlined /></div>
                 <div><span>当前任务</span><strong>{currentRun ? (currentRun.script_name || `任务 #${currentRun.id}`) : '暂无任务'}</strong><small>{currentRun ? '任务由管理员远程下发' : '设备保持待命'}</small></div>
               </Card>
+              <Card className={`managed-status-card managed-status-card--${capturePaused ? 'warning' : 'success'}`}>
+                <div className="managed-status-card__icon"><PictureOutlined /></div>
+                <div>
+                  <span>画面采集</span>
+                  <strong>{capturePaused ? '本机已暂停' : '允许采集'}</strong>
+                  <small>{thumbnailCapture.lastSuccessAt ? `最近上传 ${localTime(thumbnailCapture.lastSuccessAt)}` : '尚未成功上传'}</small>
+                </div>
+              </Card>
             </div>
 
             <div className="managed-client-grid">
@@ -158,6 +193,9 @@ export default function ManagedClientPanel() {
                   <Descriptions.Item label="Agent 版本">{connection.agent_version || '-'}</Descriptions.Item>
                   <Descriptions.Item label="运行环境">{overview?.runtime?.status === 'ready' ? `Python ${overview.runtime.version || '已就绪'}` : '等待就绪'}</Descriptions.Item>
                   <Descriptions.Item label="最近联机">{connection.last_online_at ? localTime(connection.last_online_at) : connectedToServer ? '当前在线' : '-'}</Descriptions.Item>
+                  <Descriptions.Item label="画面采集">{capturePaused ? '本机暂停（不可远程恢复）' : '本机允许'}</Descriptions.Item>
+                  <Descriptions.Item label="最近采集尝试">{thumbnailCapture.lastAttemptAt ? localTime(thumbnailCapture.lastAttemptAt) : '暂无'}</Descriptions.Item>
+                  <Descriptions.Item label="最近上传成功">{thumbnailCapture.lastSuccessAt ? localTime(thumbnailCapture.lastSuccessAt) : '暂无'}</Descriptions.Item>
                 </Descriptions>
               </Card>
 

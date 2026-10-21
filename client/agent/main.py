@@ -88,6 +88,7 @@ _last_script_access_sync_time = 0
 _thumbnail_worker = None
 _thumbnail_worker_lock = threading.Lock()
 _thumbnail_state_lock = threading.Lock()
+_config_write_lock = threading.Lock()
 _last_thumbnail_attempt_at = None
 _last_thumbnail_success_at = None
 
@@ -280,29 +281,48 @@ def _agent_headers():
     return headers
 
 
+def _persist_client_config_value(key, value):
+    """Merge and atomically persist one local setting without losing concurrent changes."""
+    global _client_config
+    with _config_write_lock:
+        local = dict(_client_config)
+        if os.path.isfile(_CLIENT_CONFIG_PATH):
+            try:
+                with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as stream:
+                    saved = json.load(stream)
+                if isinstance(saved, dict):
+                    local.update(saved)
+            except (OSError, json.JSONDecodeError):
+                pass
+        local[key] = value
+        temporary = _CLIENT_CONFIG_PATH + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(local, stream, indent=2, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, _CLIENT_CONFIG_PATH)
+        _client_config = local
+
+
 def _persist_agent_token(token):
     """Persist the device credential atomically without ever logging it."""
-    global _agent_token, _client_config
+    global _agent_token
     if not token or token == _agent_token:
         return
-    local = dict(_client_config)
-    if os.path.isfile(_CLIENT_CONFIG_PATH):
-        try:
-            with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as stream:
-                saved = json.load(stream)
-            if isinstance(saved, dict):
-                local.update(saved)
-        except (OSError, json.JSONDecodeError):
-            pass
-    local["agent_token"] = token
-    temporary = _CLIENT_CONFIG_PATH + ".tmp"
-    with open(temporary, "w", encoding="utf-8") as stream:
-        json.dump(local, stream, indent=2, ensure_ascii=False)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, _CLIENT_CONFIG_PATH)
-    _client_config = local
+    _persist_client_config_value("agent_token", token)
     _agent_token = token
+
+
+def set_thumbnail_capture_paused(paused):
+    """Persist the device owner's capture choice; only the local API calls this."""
+    if _client_config.get("client_mode", "standard") != "managed":
+        raise ValueError("仅被控模式支持画面采集开关")
+    value = bool(paused)
+    _persist_client_config_value("thumbnail_capture_paused", value)
+    return {
+        "thumbnail_capture_paused": value,
+        "thumbnail_capture_allowed": not value,
+    }
 
 
 def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
@@ -431,23 +451,24 @@ def _sync_client_settings():
             return False
         remote = resp.json() or {}
 
-        local = dict(_client_config)
-        if os.path.isfile(_CLIENT_CONFIG_PATH):
-            try:
-                with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
-                    local = json.load(f) or local
-            except (OSError, json.JSONDecodeError):
-                pass
+        with _config_write_lock:
+            local = dict(_client_config)
+            if os.path.isfile(_CLIENT_CONFIG_PATH):
+                try:
+                    with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+                        local = json.load(f) or local
+                except (OSError, json.JSONDecodeError):
+                    pass
 
-        for key in _CLIENT_SETTING_KEYS:
-            if key in remote and remote[key] is not None:
-                local[key] = remote[key]
+            for key in _CLIENT_SETTING_KEYS:
+                if key in remote and remote[key] is not None:
+                    local[key] = remote[key]
 
-        temp_path = _CLIENT_CONFIG_PATH + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(local, f, indent=2, ensure_ascii=False)
-        os.replace(temp_path, _CLIENT_CONFIG_PATH)
-        _client_config = local
+            temp_path = _CLIENT_CONFIG_PATH + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(local, f, indent=2, ensure_ascii=False)
+            os.replace(temp_path, _CLIENT_CONFIG_PATH)
+            _client_config = local
         return True
     except (requests.RequestException, OSError, TypeError, ValueError):
         return False
@@ -657,6 +678,9 @@ def register_agent():
                 "machine_name": machine_name,
                 "machine_ip": machine_ip,
                 "agent_version": agent_version,
+                "thumbnail_capture_paused": bool(
+                    _client_config.get("thumbnail_capture_paused", False)
+                ),
             },
             headers=_agent_headers(),
             timeout=10,
@@ -683,7 +707,12 @@ def send_heartbeat():
     try:
         resp = requests.post(
             "{}/api/agents/{}/heartbeat".format(BACKEND_URL, _agent_id),
-            json={"machine_ip": machine_ip},
+            json={
+                "machine_ip": machine_ip,
+                "thumbnail_capture_paused": bool(
+                    _client_config.get("thumbnail_capture_paused", False)
+                ),
+            },
             headers=_agent_headers(),
             timeout=5,
         )
@@ -703,19 +732,24 @@ def _attempt_thumbnail_upload():
     """Capture and upload one managed-mode thumbnail without leaking failures."""
     global _last_thumbnail_attempt_at, _last_thumbnail_success_at
 
-    with _thumbnail_state_lock:
-        _last_thumbnail_attempt_at = time.time()
-
     if (
         _client_config.get("client_mode", "standard") != "managed"
+        or bool(_client_config.get("thumbnail_capture_paused", False))
         or not _agent_id
         or not _token
         or not _agent_token
     ):
         return False
 
+    with _thumbnail_state_lock:
+        _last_thumbnail_attempt_at = time.time()
+
     try:
         payload = capture_thumbnail()
+        # Local pause is authoritative. If it changes during capture, discard the
+        # bytes and never start an upload.
+        if bool(_client_config.get("thumbnail_capture_paused", False)):
+            return False
         headers = _agent_headers()
         headers["Content-Type"] = "image/jpeg"
         response = requests.post(
@@ -1291,8 +1325,11 @@ def get_client_info():
         "current_run": current_run,
     }
     if info["client_mode"] == "managed":
+        paused = bool(_client_config.get("thumbnail_capture_paused", False))
         with _thumbnail_state_lock:
             info.update({
+                "thumbnail_capture_paused": paused,
+                "thumbnail_capture_allowed": not paused,
                 "last_thumbnail_attempt_at": _last_thumbnail_attempt_at,
                 "last_thumbnail_success_at": _last_thumbnail_success_at,
             })
@@ -1785,6 +1822,7 @@ def initialize_agent_runtime():
         check_update_fn=_check_and_stage_update,
         install_update_fn=_install_staged_update,
         get_runtime_info_fn=_get_runtime_info,
+        set_thumbnail_capture_paused_fn=set_thumbnail_capture_paused,
         request_shutdown_fn=request_shutdown_when_idle,
     )
     server_thread.daemon = True
