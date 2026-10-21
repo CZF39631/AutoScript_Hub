@@ -248,6 +248,7 @@ button, input, select, textarea { font: inherit; }
 .managed-dispatch-schedule-row__summary strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .managed-dispatch-schedule-row__summary .ant-tag { margin: 0; flex: 0 0 auto; font-size: 10px; line-height: 18px; }
 .managed-dispatch-schedule-row__summary span, .managed-dispatch-schedule-row__summary small { overflow: hidden; color: var(--apple-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-dispatch-schedule-row__summary .managed-dispatch-schedule-row__missed { color: #9a5a00; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
 .managed-dispatch-schedule-row__actions { margin-top: 5px; }
 .managed-dispatch-schedule-row__actions .ant-btn { min-height: 44px; padding-inline: 8px; font-size: 11px; }
 .managed-dispatch-schedules .ant-empty { margin-block: 12px 4px; }
@@ -492,6 +493,7 @@ button, input, select, textarea { font: inherit; }
   .managed-batch-form { grid-template-columns: 1fr; gap: 0; }
   .managed-agent-grid { gap: 10px; }
   .managed-agent-card { padding: 12px; }
+  .managed-agent-card__selector { width: 44px; height: 44px; margin: -7px 0 -7px -8px; display: grid; place-items: center; }
   .managed-agent-card__actions { grid-template-columns: 1fr; }
   .managed-agent-card__actions > .ant-btn { width: 100%; }
   .managed-agent-card__primary-actions { justify-content: flex-end; }

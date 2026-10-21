@@ -146,6 +146,24 @@ def _utc_naive(value: datetime) -> datetime:
     return aware.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _record_schedule_miss(
+    db, schedule: ManagedSchedule, *, due_at: datetime, now: datetime, reason: str,
+    audit_detail: Optional[str] = None,
+) -> None:
+    """Persist the latest skipped occurrence for operators and audit history."""
+    schedule.last_missed_at = _utc_naive(due_at)
+    schedule.last_missed_reason = reason
+    db.add(AuditLog(
+        user_id=schedule.created_by,
+        username="scheduler",
+        action="managed_schedule.missed",
+        target_type="managed_schedule",
+        target_id=schedule.id,
+        detail=audit_detail or "due_at={} reason={}".format(due_at.isoformat(), reason),
+        created_at=now,
+    ))
+
+
 def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
     """Expire unclaimed work and materialize each due schedule at most once.
 
@@ -193,17 +211,13 @@ def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
 
             original_expires_at = due_at + timedelta(seconds=schedule.expires_after_seconds)
             if original_expires_at <= now:
-                db.add(AuditLog(
-                    user_id=schedule.created_by,
-                    username="scheduler",
-                    action="managed_schedule.missed",
-                    target_type="managed_schedule",
-                    target_id=schedule.id,
-                    detail="due_at={} expired_at={}".format(
+                _record_schedule_miss(
+                    db, schedule, due_at=due_at, now=now,
+                    reason="调度扫描时本次执行已超过任务有效期",
+                    audit_detail="due_at={} expired_at={} reason=任务有效期已过".format(
                         due_at.isoformat(), original_expires_at.isoformat()
                     ),
-                    created_at=now,
-                ))
+                )
                 continue
 
             active = db.query(Run).filter(
@@ -212,6 +226,10 @@ def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
                 Run.is_deleted == False,
             ).first()
             if active:
+                _record_schedule_miss(
+                    db, schedule, due_at=due_at, now=now,
+                    reason="已有待执行或运行中任务，本次执行已跳过",
+                )
                 continue
 
             agent = db.query(Agent).filter(
@@ -221,6 +239,10 @@ def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
                 Agent.is_deleted == False,
             ).first()
             if not agent:
+                _record_schedule_miss(
+                    db, schedule, due_at=due_at, now=now,
+                    reason="目标设备已停用或不可用，本次执行已跳过",
+                )
                 continue
             owner = db.query(User).filter(
                 User.id == agent.user_id,
@@ -228,6 +250,10 @@ def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
                 User.is_deleted == False,
             ).first()
             if not owner:
+                _record_schedule_miss(
+                    db, schedule, due_at=due_at, now=now,
+                    reason="设备所属用户不可用，本次执行已跳过",
+                )
                 continue
             try:
                 run = create_validated_run(
@@ -246,6 +272,10 @@ def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
                 )
             except (HTTPException, TypeError, json.JSONDecodeError) as exc:
                 logger.warning("Managed schedule %s was skipped: %s", schedule.id, exc)
+                _record_schedule_miss(
+                    db, schedule, due_at=due_at, now=now,
+                    reason="任务配置校验失败，本次执行已跳过",
+                )
                 continue
             schedule.last_run_at = now
             db.add(AuditLog(

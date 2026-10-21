@@ -448,6 +448,62 @@ def test_schedule_crud_toggle_and_run_now(client, admin_token, dev_token):
     assert deleted.status_code == 200
 
 
+def test_disabled_device_keeps_existing_schedule_maintenance_but_blocks_new_work(
+    client, admin_token, dev_token
+):
+    script_id = _upload(client, admin_token)
+    agent = _register_managed(client, dev_token, "disabled-schedule-agent", "停用计划设备")
+    schedule = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "可维护计划", "agent_id": agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/maintenance.txt"}, "interval_seconds": 3600,
+        },
+        headers=_headers(admin_token),
+    ).json()
+    preview = _impact(client, admin_token, agent["id"], "disable")
+    assert client.patch(
+        "/api/admin/managed-agents/{}".format(agent["id"]),
+        json={"enabled": False, "impact_version": preview["version"]},
+        headers=_headers(admin_token),
+    ).status_code == 200
+
+    listed = client.get(
+        "/api/admin/managed-schedules?agent_id={}".format(agent["id"]),
+        headers=_headers(admin_token),
+    )
+    options = client.get(
+        "/api/admin/managed-agents/{}/options".format(agent["id"]),
+        headers=_headers(admin_token),
+    )
+    maintained = client.patch(
+        "/api/admin/managed-schedules/{}".format(schedule["id"]),
+        json={"name": "停用后仍可维护", "enabled": False},
+        headers=_headers(admin_token),
+    )
+    created = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "不应创建", "agent_id": agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/blocked.txt"}, "interval_seconds": 3600,
+        },
+        headers=_headers(admin_token),
+    )
+    enabled = client.post(
+        "/api/admin/managed-schedules/{}/enable".format(schedule["id"]),
+        headers=_headers(admin_token),
+    )
+    run_now = client.post(
+        "/api/admin/managed-schedules/{}/run-now".format(schedule["id"]),
+        headers=_headers(admin_token),
+    )
+
+    assert listed.status_code == options.status_code == maintained.status_code == 200
+    assert listed.json()[0]["enabled"] is False
+    assert maintained.json()["name"] == "停用后仍可维护"
+    assert created.status_code == enabled.status_code == run_now.status_code == 404
+
+
 def test_schedule_list_filters_latest_run_and_delete_cancels_only_pending(
     client, admin_token, dev_token, fresh_db
 ):
@@ -562,6 +618,16 @@ def test_scheduler_materializes_once_skips_backlog_and_expires_pending(
     scheduler._managed_schedule_scan(now + timedelta(seconds=1))
     db = TestSession()
     assert db.query(Run).filter(Run.schedule_id == schedule_id).count() == 1
+    missed_schedule = db.query(ManagedSchedule).filter(ManagedSchedule.id == schedule_id).one()
+    assert missed_schedule.last_missed_at is not None
+    assert "已有待执行或运行中任务" in missed_schedule.last_missed_reason
+    listed = client.get(
+        "/api/admin/managed-schedules/{}".format(schedule_id),
+        headers=_headers(admin_token),
+    )
+    assert listed.status_code == 200
+    assert listed.json()["last_missed_at"] is not None
+    assert "已有待执行或运行中任务" in listed.json()["last_missed_reason"]
     pending = db.query(Run).filter(Run.id == first_run_id).one()
     pending.expires_at = now - timedelta(seconds=1)
     schedule = db.query(ManagedSchedule).filter(ManagedSchedule.id == schedule_id).one()
@@ -741,9 +807,20 @@ def test_disabling_managed_agent_terminates_directed_active_runs(
     pending = db.query(Run).filter(Run.id == first["id"]).one()
     running = db.query(Run).filter(Run.id == second["id"]).one()
     assert pending.status == "cancelled"
-    assert running.status == "failed"
+    assert running.status == "cancelled"
+    assert "客户端将终止进程" in running.error_msg
     assert pending.finished_at is not None
     assert running.finished_at is not None
+    db.close()
+
+    late_completion = client.patch(
+        "/api/runs/{}/status".format(second["id"]),
+        json={"status": "success", "agent_id": agent["id"]},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert late_completion.status_code == 409
+    db = TestSession()
+    assert db.query(Run).filter(Run.id == second["id"]).one().status == "cancelled"
     db.close()
 
 
@@ -853,7 +930,7 @@ def test_lifecycle_preview_conflict_side_effects_history_identity_and_audit(
     db = TestSession()
     assert db.query(Run).filter(Run.id == pending["id"], Run.status == "cancelled").count() == 1
     saved_running = db.query(Run).filter(Run.id == running["id"]).one()
-    assert saved_running.status == "failed"
+    assert saved_running.status == "cancelled"
     assert saved_running.is_deleted is False
     saved_schedules = db.query(ManagedSchedule).filter(
         ManagedSchedule.id.in_([
@@ -965,6 +1042,12 @@ def test_legacy_agent_delete_uses_unified_lifecycle_service(
         json={"script_id": script_id, "params": {"url_file": "C:/legacy.txt"}},
         headers=_headers(admin_token),
     ).json()
+    claimed = client.post(
+        "/api/runs/{}/claim".format(run["id"]),
+        json={"agent_id": agent["id"]},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert claimed.status_code == 200
 
     deleted = client.delete(
         "/api/agents/{}".format(agent["id"]), headers=_headers(admin_token)
@@ -978,6 +1061,7 @@ def test_legacy_agent_delete_uses_unified_lifecycle_service(
     assert saved_schedule.enabled is False
     assert saved_schedule.is_deleted is False
     assert saved_run.status == "cancelled"
+    assert "客户端将终止进程" in saved_run.error_msg
     assert saved_run.is_deleted is False
     assert db.query(AuditLog).filter(
         AuditLog.action == "managed_agent.delete", AuditLog.target_id == agent["id"]

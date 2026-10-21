@@ -173,9 +173,12 @@ def _stop_active_work(db: Session, agent: Agent, reason: str, actor_id: int) -> 
         Run.is_deleted == False,
     ).update(
         {
-            Run.status: "failed",
+            # Managed clients terminate their subprocess only after observing the
+            # authoritative cancelled state.  Keep this terminal state stable so
+            # a delayed completion report cannot resurrect the run.
+            Run.status: "cancelled",
             Run.finished_at: now,
-            Run.error_msg: "{}，执行已终止".format(reason),
+            Run.error_msg: "{}，运行中任务已取消，客户端将终止进程".format(reason),
             Run.updated_at: now,
         },
         synchronize_session=False,

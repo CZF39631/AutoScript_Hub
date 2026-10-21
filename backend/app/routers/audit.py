@@ -29,6 +29,8 @@ class AuditLogItem(BaseModel):
 def list_audit_logs(
     action: Optional[str] = None,
     username: Optional[str] = None,
+    target_type: Optional[str] = Query(default=None, max_length=50),
+    target_id: Optional[int] = Query(default=None, ge=1),
     limit: int = Query(default=100, le=500),
     offset: int = 0,
     current_user: User = Depends(require_role("admin")),
@@ -39,4 +41,8 @@ def list_audit_logs(
         q = q.filter(AuditLog.action == action)
     if username:
         q = q.filter(AuditLog.username.contains(username))
+    if target_type:
+        q = q.filter(AuditLog.target_type == target_type)
+    if target_id is not None:
+        q = q.filter(AuditLog.target_id == target_id)
     return q.offset(offset).limit(limit).all()

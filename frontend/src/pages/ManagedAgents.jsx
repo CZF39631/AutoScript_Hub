@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Checkbox, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm,
-  Segmented, Select, Skeleton, Space, Switch, Tag, Tooltip, message,
+  Alert, App as AntdApp, Button, Checkbox, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm,
+  Segmented, Select, Skeleton, Space, Switch, Tag, Tooltip,
 } from 'antd'
 import {
   DeleteOutlined, DesktopOutlined, EditOutlined, EyeOutlined, FolderOutlined, LoadingOutlined,
@@ -17,7 +17,7 @@ import {
   agentImpactCounts, apiErrorMessage, batchResultSummary, buildSchedulePayload, buildVisualCron,
   canConfirmAgentImpact, createManagedBatchSelection, describeCron, dispatchResourceState,
   formatSchedule, intervalToSeconds, isThumbnailStale, isValidCronExpression,
-  managedListSearchParams, managedPageSelectionState, MANAGED_FIRST_CONNECTION_GUIDE,
+  managedBatchLimit, managedBatchLimitError, managedListSearchParams, managedPageSelectionState, MANAGED_FIRST_CONNECTION_GUIDE,
   parseManagedListSearch, scheduleFormValues, scheduleStatusCounts, shortMonthSkipDay,
   statusPresentation, thumbnailTimestamp,
 } from '../utils/managed'
@@ -290,9 +290,9 @@ function AgentCard({ agent, checked, updating, scheduleSummary, onSelect, onPaus
         <div className="managed-agent-card__primary-actions">
           <Button type="text" icon={<SafetyCertificateOutlined />} onClick={() => onOpenThumbnailAudit(agent.id)}>查看记录</Button>
           <Button type="text" icon={<EyeOutlined />} onClick={() => onOpenHistory(agent.id)}>历史</Button>
-          <Tooltip title={!agent.enabled ? '设备已停用；可查看计划，但不能发布新任务' : ''}>
-            <Button type="primary" icon={<SendOutlined />} disabled={!agent.enabled} onClick={() => onDispatch(agent)}>
-              发布任务
+          <Tooltip title={!agent.enabled ? '设备已停用；仍可查看、编辑、暂停或删除已有计划' : ''}>
+            <Button type={agent.enabled ? 'primary' : 'default'} icon={agent.enabled ? <SendOutlined /> : <EyeOutlined />} onClick={() => onDispatch(agent)}>
+              {agent.enabled ? '发布任务' : '查看计划'}
             </Button>
           </Tooltip>
           <Tooltip title="删除设备">
@@ -305,6 +305,7 @@ function AgentCard({ agent, checked, updating, scheduleSummary, onSelect, onPaus
 }
 
 export default function ManagedAgents({ embedded = false }) {
+  const { message } = AntdApp.useApp()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const listFilters = useMemo(() => parseManagedListSearch(searchParams), [searchParams])
@@ -335,6 +336,8 @@ export default function ManagedAgents({ embedded = false }) {
   const [batchDialog, setBatchDialog] = useState({ open: false, operation: '', step: 'configure', preview: null, loading: false, result: null })
   const [batchValues, setBatchValues] = useState({ script_id: null, environment_id: null, params_text: '{}', expires_in_seconds: 3600, group_ids: [] })
   const [batchOptions, setBatchOptions] = useState({ scripts: [], environments: [] })
+  const [batchOptionsResource, setBatchOptionsResource] = useState({ status: 'empty', error: '' })
+  const batchKey = useRef({ fingerprint: '', key: '' })
   const listRequest = useRef(null)
   const impactRequest = useRef(null)
   const optionsRequest = useRef(0)
@@ -370,21 +373,28 @@ export default function ManagedAgents({ embedded = false }) {
         page: listFilters.page,
         page_size: listFilters.pageSize,
       }
-      const [agentResult, scheduleResult, groupResult] = await Promise.allSettled([
+      const [agentResult, groupResult] = await Promise.allSettled([
         api.get('/api/admin/managed-agents/paged', { params: requestParams, signal: controller.signal }),
-        api.get('/api/admin/managed-schedules', { signal: controller.signal }),
         api.get('/api/admin/managed-agent-groups', { signal: controller.signal }),
       ])
+      let nextAgents = []
       if (!controller.signal.aborted && agentResult.status === 'fulfilled') {
-        setAgents(Array.isArray(agentResult.value.data?.items) ? agentResult.value.data.items : [])
+        nextAgents = Array.isArray(agentResult.value.data?.items) ? agentResult.value.data.items : []
+        setAgents(nextAgents)
         setTotalAgents(Number(agentResult.value.data?.total) || 0)
       } else if (!controller.signal.aborted && agentResult.status === 'rejected') {
         throw agentResult.reason
       }
-      if (!controller.signal.aborted && scheduleResult.status === 'fulfilled') {
-        setSchedules(Array.isArray(scheduleResult.value.data) ? scheduleResult.value.data : [])
-      } else if (!controller.signal.aborted && scheduleResult.status === 'rejected') {
-        throw scheduleResult.reason
+      if (!controller.signal.aborted) {
+        if (nextAgents.length) {
+          const scheduleResult = await api.get('/api/admin/managed-schedules', {
+            params: { agent_ids: nextAgents.map(agent => agent.id).join(',') },
+            signal: controller.signal,
+          })
+          setSchedules(Array.isArray(scheduleResult.data) ? scheduleResult.data : [])
+        } else {
+          setSchedules([])
+        }
       }
       if (!controller.signal.aborted && groupResult.status === 'fulfilled') {
         setGroups(Array.isArray(groupResult.value.data) ? groupResult.value.data : [])
@@ -407,7 +417,10 @@ export default function ManagedAgents({ embedded = false }) {
     const next = { ...listFilters, ...changes }
     if (!Object.prototype.hasOwnProperty.call(changes, 'page')) next.page = 1
     setSearchParams(managedListSearchParams(next), { replace: true })
-    setAllMatchingSelected(false)
+    if (Object.keys(changes).some(key => key !== 'page')) {
+      setSelectedAgentIds([])
+      setAllMatchingSelected(false)
+    }
   }, [listFilters, setSearchParams])
 
   useEffect(() => {
@@ -471,7 +484,7 @@ export default function ManagedAgents({ embedded = false }) {
 
   const pageAgents = agents
   const selectedSet = useMemo(() => new Set(selectedAgentIds), [selectedAgentIds])
-  const pageSelection = managedPageSelectionState(pageAgents.map(agent => agent.id), selectedAgentIds)
+  const pageSelection = managedPageSelectionState(pageAgents.map(agent => agent.id), selectedAgentIds, allMatchingSelected)
   const selectedCount = allMatchingSelected ? totalAgents : selectedAgentIds.length
   const batchSelection = useMemo(() => createManagedBatchSelection({
     allMatching: allMatchingSelected, selectedIds: selectedAgentIds, filters: listFilters,
@@ -528,7 +541,7 @@ export default function ManagedAgents({ embedded = false }) {
     form.resetFields()
     form.setFieldsValue({
       ...scheduleFormValues(null),
-      task_type: 'manual',
+      task_type: agent.enabled ? 'manual' : 'schedule',
     })
     void loadDispatchOptions(agent)
   }
@@ -544,6 +557,10 @@ export default function ManagedAgents({ embedded = false }) {
   }
 
   const runScheduleAction = async (schedule, action) => {
+    if (!dispatchAgent?.enabled && ['enable', 'run-now'].includes(action)) {
+      message.error('设备已停用，不能恢复计划或立即发布任务；仍可编辑、暂停或删除已有计划')
+      return
+    }
     const actionKey = `${schedule.id}:${action}`
     setScheduleActionLoading(current => ({ ...current, [actionKey]: true }))
     try {
@@ -661,14 +678,14 @@ export default function ManagedAgents({ embedded = false }) {
           impact_version: data.version,
         })
         setAgents(current => current.map(item => item.id === agent.id ? { ...item, ...response.data } : item))
-        message.success(`设备“${agent.machine_name}”已暂停接单，关联启用计划已暂停`)
+        message.success(`设备“${agent.machine_name}”已暂停接单；运行中任务已取消，客户端将停止进程`)
       } else {
         await api.delete(`/api/admin/managed-agents/${agent.id}`, {
           params: { impact_version: data.version },
         })
         setAgents(current => current.filter(item => item.id !== agent.id))
         if (dispatchAgent?.id === agent.id) closeDispatch()
-        message.success(`设备“${agent.machine_name}”已删除；同一设备身份不会自动恢复`)
+        message.success(`设备“${agent.machine_name}”已删除；运行中任务已取消，同一设备身份不会自动恢复`)
       }
       setImpactDialog(current => ({ ...current, open: false, submitting: false }))
       await load({ quiet: true })
@@ -820,21 +837,32 @@ export default function ManagedAgents({ embedded = false }) {
     }
   }
 
-  const openBatch = async operation => {
+  const loadBatchOptions = async () => {
+    const representativeId = allMatchingSelected ? pageAgents[0]?.id : selectedAgentIds[0]
+    if (!representativeId) {
+      setBatchOptionsResource({ status: 'error', error: '找不到用于读取选项的已选设备，请重新选择后重试。' })
+      return
+    }
+    setBatchOptionsResource({ status: 'loading', error: '' })
+    try {
+      const response = await api.get(`/api/admin/managed-agents/${representativeId}/options`)
+      const nextScripts = response.data?.scripts || []
+      setBatchOptions({ scripts: nextScripts, environments: response.data?.environments || [] })
+      setBatchOptionsResource({ status: dispatchResourceState({ value: nextScripts }), error: '' })
+    } catch (error) {
+      setBatchOptionsResource({
+        status: 'error',
+        error: apiErrorMessage(error, '批量任务选项加载失败，请重试'),
+      })
+    }
+  }
+
+  const openBatch = operation => {
     setBatchValues({ script_id: null, environment_id: null, params_text: '{}', expires_in_seconds: 3600, group_ids: [] })
     setBatchOptions({ scripts: [], environments: [] })
+    setBatchOptionsResource({ status: operation === 'dispatch_run' ? 'loading' : 'empty', error: '' })
     setBatchDialog({ open: true, operation, step: 'configure', preview: null, loading: false, result: null })
-    if (operation === 'dispatch_run') {
-      const representative = pageAgents.find(agent => selectedSet.has(agent.id)) || pageAgents[0]
-      if (representative) {
-        try {
-          const response = await api.get(`/api/admin/managed-agents/${representative.id}/options`)
-          setBatchOptions({ scripts: response.data?.scripts || [], environments: response.data?.environments || [] })
-        } catch (error) {
-          message.error(apiErrorMessage(error, '批量任务选项加载失败'))
-        }
-      }
-    }
+    if (operation === 'dispatch_run') void loadBatchOptions()
   }
 
   const batchPayload = () => ({
@@ -849,13 +877,30 @@ export default function ManagedAgents({ embedded = false }) {
     ...(batchDialog.operation === 'set_groups' ? { group_ids: batchValues.group_ids } : {}),
   })
 
+  const requestKeyFor = payload => {
+    const fingerprint = JSON.stringify(payload)
+    if (!batchKey.current.key || batchKey.current.fingerprint !== fingerprint) {
+      batchKey.current = {
+        fingerprint,
+        key: globalThis.crypto?.randomUUID?.() || `batch-${Date.now()}-${Math.random()}`,
+      }
+    }
+    return batchKey.current.key
+  }
+
   const previewBatch = async () => {
+    const limitError = managedBatchLimitError(batchDialog.operation, selectedCount)
+    if (limitError) {
+      message.error(limitError)
+      return
+    }
     setBatchDialog(current => ({ ...current, loading: true }))
     try {
       const payload = batchPayload()
       if (payload.params && (Array.isArray(payload.params) || typeof payload.params !== 'object')) {
         throw new Error('任务参数必须是 JSON 对象')
       }
+      requestKeyFor(payload)
       const response = await api.post('/api/admin/managed-agent-batches/preview', payload)
       setBatchDialog(current => ({ ...current, loading: false, step: 'preview', preview: response.data }))
     } catch (error) {
@@ -866,22 +911,25 @@ export default function ManagedAgents({ embedded = false }) {
 
   const executeBatch = async () => {
     setBatchDialog(current => ({ ...current, loading: true }))
-    const key = globalThis.crypto?.randomUUID?.() || `batch-${Date.now()}-${Math.random()}`
     try {
-      const response = await api.post('/api/admin/managed-agent-batches', batchPayload(), {
-        headers: { 'Idempotency-Key': key },
+      const payload = batchPayload()
+      const response = await api.post('/api/admin/managed-agent-batches', payload, {
+        headers: { 'Idempotency-Key': requestKeyFor(payload) },
       })
+      batchKey.current = { fingerprint: '', key: '' }
       setBatchDialog(current => ({ ...current, loading: false, step: 'result', result: response.data }))
       message.success(`批量操作完成：${batchResultSummary(response.data)}`)
       setSelectedAgentIds([])
       setAllMatchingSelected(false)
       await load({ quiet: true })
     } catch (error) {
-      message.error(apiErrorMessage(error, '批量操作执行失败'))
+      message.error(apiErrorMessage(error, '批量操作执行失败；重试将复用同一个请求标识，不会重复执行'))
       setBatchDialog(current => ({ ...current, loading: false }))
     }
   }
 
+  const batchLimit = managedBatchLimit(batchDialog.operation)
+  const batchLimitError = managedBatchLimitError(batchDialog.operation, selectedCount)
   const dispatchSchedules = schedulesByAgent.get(dispatchAgent?.id) || []
   const dispatchScheduleCounts = scheduleStatusCounts(dispatchSchedules)
   const taskFieldsDisabled = selectedTaskType === 'manual'
@@ -1017,7 +1065,7 @@ export default function ManagedAgents({ embedded = false }) {
                 onGroups={openGroups}
                 onOpenRun={runId => navigate(`/runs/${runId}`)}
                 onOpenHistory={agentId => navigate(`/runs?agent_id=${agentId}`)}
-                onOpenThumbnailAudit={() => navigate('/audit?action=managed_thumbnail.view')}
+                onOpenThumbnailAudit={agentId => navigate(`/audit?action=managed_thumbnail.view&target_type=agent&target_id=${agentId}`)}
               />
             ))}
           </div>
@@ -1154,7 +1202,11 @@ export default function ManagedAgents({ embedded = false }) {
         okButtonProps={{
           loading: batchDialog.loading,
           danger: ['pause_agents', 'pause_schedules'].includes(batchDialog.operation) && batchDialog.step === 'preview',
-          disabled: batchDialog.operation === 'dispatch_run' && batchDialog.step === 'configure' && !batchValues.script_id,
+          disabled: Boolean(batchLimitError) || (
+            batchDialog.operation === 'dispatch_run'
+            && batchDialog.step === 'configure'
+            && (!batchValues.script_id || batchOptionsResource.status !== 'ready')
+          ),
         }}
         cancelButtonProps={batchDialog.step === 'result' ? { style: { display: 'none' } } : undefined}
         onOk={() => batchDialog.step === 'configure'
@@ -1168,13 +1220,47 @@ export default function ManagedAgents({ embedded = false }) {
           type="info"
           showIcon
           title={allMatchingSelected ? `将作用于全部筛选结果（${selectedCount} 台）` : `将作用于明确选择的 ${selectedCount} 台设备`}
-          description="执行前会逐设备验证权限、状态和运行冲突；不符合条件的设备不会阻断其他设备。删除设备不提供普通批量入口。"
+          description={`执行前会逐设备验证权限、状态和运行冲突；不符合条件的设备不会阻断其他设备。此操作单批最多 ${batchLimit} 台，删除设备不提供普通批量入口。`}
         />
+        {batchLimitError && (
+          <Alert
+            className="managed-page-alert"
+            type="error"
+            showIcon
+            title="当前选择超过批量上限"
+            description={batchLimitError}
+          />
+        )}
+        {batchDialog.step === 'configure' && batchDialog.operation === 'dispatch_run' && batchOptionsResource.status === 'loading' && (
+          <Alert className="managed-page-alert" type="info" showIcon title="正在读取批量任务选项" description="当前配置会保留，可在选项加载完成后继续。" />
+        )}
+        {batchDialog.step === 'configure' && batchDialog.operation === 'dispatch_run' && batchOptionsResource.status === 'error' && (
+          <Alert
+            className="managed-page-alert"
+            type="error"
+            showIcon
+            title="批量任务选项加载失败"
+            description={batchOptionsResource.error}
+            action={<Button size="small" onClick={() => void loadBatchOptions()}>重试加载</Button>}
+          />
+        )}
+        {batchDialog.step === 'configure' && batchDialog.operation === 'dispatch_run' && batchOptionsResource.status === 'empty' && (
+          <Alert
+            className="managed-page-alert"
+            type="warning"
+            showIcon
+            title="没有可用于批量发布的脚本"
+            description="已选设备的可用选项已读取，但当前没有启用脚本。调整脚本权限或状态后可重试加载。"
+            action={<Button size="small" onClick={() => void loadBatchOptions()}>重新读取</Button>}
+          />
+        )}
         {batchDialog.step === 'configure' && batchDialog.operation === 'dispatch_run' && (
           <div className="managed-batch-form">
             <Form.Item label="脚本" required>
               <Select
                 showSearch optionFilterProp="label" value={batchValues.script_id}
+                loading={batchOptionsResource.status === 'loading'}
+                disabled={batchOptionsResource.status !== 'ready'}
                 onChange={script_id => setBatchValues(current => ({ ...current, script_id }))}
                 options={batchOptions.scripts.map(script => ({ value: script.id, label: script.name, disabled: script.status !== 'active' }))}
                 placeholder="选择临时任务脚本"
@@ -1190,6 +1276,7 @@ export default function ManagedAgents({ embedded = false }) {
             <Form.Item label="执行环境" extra="不同设备的环境权限会在预览时逐一验证。">
               <Select
                 allowClear value={batchValues.environment_id}
+                disabled={batchOptionsResource.status !== 'ready'}
                 onChange={environment_id => setBatchValues(current => ({ ...current, environment_id }))}
                 options={batchOptions.environments.map(item => ({ value: item.id, label: item.name }))}
                 placeholder="使用设备默认环境"
@@ -1301,7 +1388,7 @@ export default function ManagedAgents({ embedded = false }) {
               ))}
             </dl>
             <ul className="managed-impact-consequences">
-              <li>{impactDialog.data.pending_count} 个待执行任务将取消，{impactDialog.data.running_count} 个运行中任务将终止。</li>
+              <li>{impactDialog.data.pending_count} 个待执行任务将取消；{impactDialog.data.running_count} 个运行中任务将标记为已取消，客户端收到状态后会终止进程。</li>
               <li>{impactDialog.data.enabled_schedule_count} 个启用计划将暂停；已有暂停计划保持不变。</li>
               <li>{impactDialog.data.history_policy?.message}</li>
               <li>
@@ -1337,10 +1424,12 @@ export default function ManagedAgents({ embedded = false }) {
       <Drawer
         title={editingSchedule
           ? `编辑 ${dispatchAgent?.machine_name || ''} 的定时任务`
-          : `向 ${dispatchAgent?.machine_name || ''} 发布任务`}
+          : dispatchAgent?.enabled
+            ? `向 ${dispatchAgent?.machine_name || ''} 发布任务`
+            : `${dispatchAgent?.machine_name || ''} 的任务与计划`}
         open={Boolean(dispatchAgent)}
         onClose={() => !submitting && closeDispatch()}
-        width={620}
+        size={620}
         rootClassName="managed-dispatch-drawer"
         extra={(
           <Button
@@ -1350,12 +1439,22 @@ export default function ManagedAgents({ embedded = false }) {
             disabled={taskFieldsDisabled || dispatchDataUnavailable}
             onClick={() => form.submit()}
           >
-            {editingSchedule ? '保存定时任务' : selectedTaskType === 'schedule' ? '创建定时任务' : '发布临时任务'}
+            {!dispatchAgent?.enabled && !editingSchedule
+              ? '设备已停用'
+              : editingSchedule ? '保存定时任务' : selectedTaskType === 'schedule' ? '创建定时任务' : '发布临时任务'}
           </Button>
         )}
         destroyOnHidden
       >
-        {dispatchAgent?.current_run || dispatchAgent?.running_run_id ? (
+        {!dispatchAgent?.enabled ? (
+          <Alert
+            className="managed-drawer-alert"
+            type="warning"
+            showIcon
+            title="设备已停用，只开放已有计划维护"
+            description="你仍可查看、编辑、暂停或删除已有计划；恢复设备接单前，不能发布临时任务、创建新计划、恢复计划或立即运行。"
+          />
+        ) : dispatchAgent?.current_run || dispatchAgent?.running_run_id ? (
           <Alert
             className="managed-drawer-alert"
             type="warning"
@@ -1439,6 +1538,11 @@ export default function ManagedAgents({ embedded = false }) {
                                   ? `最近运行 #${schedule.latest_run_id} · ${runStatusLabels[schedule.latest_run_status] || schedule.latest_run_status || '状态未知'}`
                                   : '暂无最近运行'}
                               </small>
+                              {schedule.last_missed_at && (
+                                <small className="managed-dispatch-schedule-row__missed" title={schedule.last_missed_reason || ''}>
+                                  最近漏跑 {formatServerTime(schedule.last_missed_at)} · {schedule.last_missed_reason || '原因未记录'}
+                                </small>
+                              )}
                             </div>
                             <Space className="managed-dispatch-schedule-row__actions" size={2} wrap>
                               <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEditSchedule(schedule)}>编辑</Button>
@@ -1454,6 +1558,7 @@ export default function ManagedAgents({ embedded = false }) {
                                   size="small"
                                   icon={schedule.enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
                                   loading={scheduleActionLoading[`${schedule.id}:${toggleAction}`]}
+                                  disabled={!dispatchAgent?.enabled && toggleAction === 'enable'}
                                 >
                                   {toggleText}
                                 </Button>
@@ -1465,7 +1570,7 @@ export default function ManagedAgents({ embedded = false }) {
                                 cancelText="取消"
                                 onConfirm={() => runScheduleAction(schedule, 'run-now')}
                               >
-                                <Button type="text" size="small" icon={<ThunderboltOutlined />} loading={scheduleActionLoading[`${schedule.id}:run-now`]}>运行</Button>
+                                <Button type="text" size="small" icon={<ThunderboltOutlined />} disabled={!dispatchAgent?.enabled} loading={scheduleActionLoading[`${schedule.id}:run-now`]}>运行</Button>
                               </Popconfirm>
                               <Tooltip title={schedule.latest_run_id ? `查看运行 #${schedule.latest_run_id}` : '暂无最近运行'}>
                                 <Button

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Table, Input, Select, Space, message } from 'antd'
+import { App as AntdApp, Table, Input, Select, Space } from 'antd'
 import { useSearchParams } from 'react-router-dom'
 import api from '../api/client'
 import { formatServerTime } from '../utils/dateTime'
@@ -23,6 +23,7 @@ const actionLabels = {
 const actionOptions = Object.entries(actionLabels).map(([k, v]) => ({ label: v, value: k }))
 
 export default function AuditLog() {
+  const { message } = AntdApp.useApp()
   const [searchParams] = useSearchParams()
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -34,6 +35,8 @@ export default function AuditLog() {
     const params = new URLSearchParams()
     if (action) params.set('action', action)
     if (username) params.set('username', username)
+    if (searchParams.get('target_type')) params.set('target_type', searchParams.get('target_type'))
+    if (searchParams.get('target_id')) params.set('target_id', searchParams.get('target_id'))
     params.set('limit', '200')
     api.get(`/api/audit?${params.toString()}`)
       .then(r => setLogs(r.data))
@@ -41,7 +44,7 @@ export default function AuditLog() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [action, username])
+  useEffect(load, [action, message, username, searchParams])
 
   const columns = [
     { title: '时间', dataIndex: 'created_at', key: 'time', width: 170,

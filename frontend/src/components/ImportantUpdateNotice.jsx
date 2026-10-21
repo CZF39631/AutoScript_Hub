@@ -48,7 +48,7 @@ export default function ImportantUpdateNotice() {
       cancelButtonProps={{ style: { display: 'none' } }}
       onOk={close}
       onCancel={close}
-      destroyOnClose
+      destroyOnHidden
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <div>

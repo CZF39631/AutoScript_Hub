@@ -17,6 +17,8 @@ import {
   isManagedClientMode,
   isThumbnailStale,
   MANAGED_FIRST_CONNECTION_GUIDE,
+  managedBatchLimit,
+  managedBatchLimitError,
   managedListSearchParams,
   managedPageSelectionState,
   managedClientPath,
@@ -44,6 +46,7 @@ test('managed scale filters round-trip through the URL with safe defaults', () =
 
 test('page and all-filtered selection keep their semantics explicit', () => {
   assert.deepEqual(managedPageSelectionState([1, 2, 3], [1, 3]), { checked: false, indeterminate: true })
+  assert.deepEqual(managedPageSelectionState([1, 2, 3], [], true), { checked: true, indeterminate: false })
   assert.deepEqual(createManagedBatchSelection({ selectedIds: [3, 3, 5] }), {
     mode: 'explicit', agent_ids: [3, 5],
   })
@@ -56,6 +59,10 @@ test('page and all-filtered selection keep their semantics explicit', () => {
     filters: { query: '华东', status: 'online', run_status: 'idle', group_id: 2, sort: 'name' },
   })
   assert.equal(batchResultSummary({ success: 8, failed: 2, skipped: 1 }), '8 成功 · 2 失败 · 1 跳过')
+  assert.equal(managedBatchLimit('dispatch_run'), 50)
+  assert.equal(managedBatchLimit('pause_agents'), 200)
+  assert.equal(managedBatchLimitError('dispatch_run', 51), '当前选择 51 台，超过此操作单批上限 50 台，请缩小筛选范围或分批处理。')
+  assert.equal(managedBatchLimitError('pause_agents', 200), '')
 })
 
 test('managed mode and its route whitelist are explicit', () => {

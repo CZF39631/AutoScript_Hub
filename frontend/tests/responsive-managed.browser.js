@@ -4,11 +4,16 @@ async page => {
   const origin = 'http://127.0.0.1:5183'
   const errors = []
   let showAgent = false
-  let optionsAttempts = 0
+  let failNextOptions = true
   let detailAttempts = 0
+  let thumbnailRequests = 0
+  let batchExecuteAttempts = 0
+  const batchExecuteKeys = []
+  let groups = []
   const agent = {
     id: 7, machine_name: '验收设备', machine_ip: '127.0.0.7', agent_version: 'test',
     enabled: true, status: 'online', pending_count: 0, current_run: null, latest_run: null,
+    groups: [], thumbnail_updated_at: '2026-10-21T08:00:00Z', thumbnail_size: 128,
   }
   page.on('pageerror', error => errors.push(error.message))
   await page.context().route('**/*', async route => {
@@ -31,13 +36,55 @@ async page => {
     if (path === '/api/settings') return route.fulfill({ json: { update_manifest_urls: [] } })
     if (path === '/api/admin/managed-agents') return route.fulfill({ json: showAgent ? [agent] : [] })
     if (path === '/api/admin/managed-agents/paged') return route.fulfill({ json: {
-      items: showAgent ? [agent] : [], total: showAgent ? 1 : 0, page: 1, page_size: 24, pages: 1,
+      items: showAgent ? [agent] : [], total: showAgent ? 2 : 0, page: 1, page_size: 24, pages: 1,
     } })
-    if (path === '/api/admin/managed-agent-groups') return route.fulfill({ json: [] })
+    if (path === '/api/admin/managed-agent-groups') {
+      if (route.request().method() === 'POST') {
+        const body = route.request().postDataJSON()
+        const group = { id: 31, name: body.name, description: null, member_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+        groups = [group]
+        return route.fulfill({ json: group })
+      }
+      return route.fulfill({ json: groups })
+    }
+    if (path === '/api/admin/managed-agents/7/groups') {
+      const body = route.request().postDataJSON()
+      agent.groups = groups.filter(group => body.group_ids.includes(group.id)).map(({ id, name }) => ({ id, name }))
+      return route.fulfill({ json: agent.groups })
+    }
     if (path === '/api/admin/managed-schedules') return route.fulfill({ json: [] })
+    if (path === '/api/admin/managed-agents/7/thumbnail') {
+      thumbnailRequests += 1
+      return route.fulfill({ status: 200, contentType: 'image/jpeg', body: 'synthetic-jpeg' })
+    }
+    if (path === '/api/admin/managed-agents/7/impact') return route.fulfill({ json: {
+      action: raw.includes('action=delete') ? 'delete' : 'disable', agent_id: 7, machine_name: '验收设备', version: 'impact-v1',
+      pending_count: 1, running_count: 1, enabled_schedule_count: 1, paused_schedule_count: 0,
+      thumbnail_exists: true, history_policy: { message: '运行历史和计划记录均保留。' },
+      identity_recovery: { message: '删除后需要重新授权。' },
+    } })
+    if (path === '/api/admin/managed-agent-batches/preview') {
+      const body = route.request().postDataJSON()
+      return route.fulfill({ json: {
+        operation: body.operation, total: 1, success: 1, failed: 0, skipped: 0,
+        items: [{ agent_id: 7, machine_name: '验收设备', result: 'success', reason: '验证通过' }], replayed: false,
+      } })
+    }
+    if (path === '/api/admin/managed-agent-batches') {
+      batchExecuteAttempts += 1
+      batchExecuteKeys.push(route.request().headers()['idempotency-key'])
+      if (batchExecuteAttempts === 1) return route.fulfill({ status: 503, json: { detail: '合成网络不确定故障' } })
+      const body = route.request().postDataJSON()
+      return route.fulfill({ json: {
+        batch_id: 91, operation: body.operation, total: 1, success: 1, failed: 0, skipped: 0,
+        items: [{ agent_id: 7, machine_name: '验收设备', result: 'success', reason: '操作成功' }], replayed: true,
+      } })
+    }
     if (path === '/api/admin/managed-agents/7/options') {
-      optionsAttempts += 1
-      if (optionsAttempts === 1) return route.fulfill({ status: 503, json: { detail: '合成选项故障' } })
+      if (failNextOptions) {
+        failNextOptions = false
+        return route.fulfill({ status: 503, json: { detail: '合成选项故障' } })
+      }
       return route.fulfill({ json: { scripts: [{ id: 11, name: '安全测试脚本', status: 'active' }], environments: [] } })
     }
     if (path === '/api/scripts/11') {
@@ -105,7 +152,23 @@ async page => {
 
   showAgent = true
   await login(390)
-  await page.getByLabel('选择设备 验收设备').check()
+  await page.getByText('画面已遮罩，查看操作会记录审计').waitFor()
+  if (thumbnailRequests !== 0) throw new Error(`first viewport requested ${thumbnailRequests} thumbnails before user action`)
+  const deviceCheckbox = page.getByLabel('选择设备 验收设备')
+  const touchBox = await deviceCheckbox.evaluate(node => {
+    const box = node.closest('label')?.getBoundingClientRect()
+    return box ? { width: box.width, height: box.height } : null
+  })
+  if (!touchBox || touchBox.width < 44 || touchBox.height < 44) throw new Error(`390px device checkbox target below 44x44: ${JSON.stringify(touchBox)}`)
+
+  await page.getByRole('button', { name: '选中全部筛选结果（2 台）' }).click()
+  if (!await deviceCheckbox.isChecked()) throw new Error('all-filtered mode did not visually check the page device')
+  if (!await page.getByRole('checkbox', { name: '选中本页（1 台）' }).isChecked()) throw new Error('all-filtered mode did not visually check the page checkbox')
+  const search = page.getByPlaceholder('搜索设备名、IP、版本或设备 ID')
+  await search.fill('验收')
+  if (await deviceCheckbox.isChecked()) throw new Error('filter change did not clear explicit/all selection')
+  await search.clear()
+  await deviceCheckbox.check()
   await page.getByRole('button', { name: '发布临时任务' }).waitFor()
   const selectionBar = page.locator('.managed-selection-bar')
   const selectionBox = await selectionBar.boundingBox()
@@ -113,7 +176,6 @@ async page => {
   await assertNoDocumentOverflow('390px batch bar')
 
   await login(1280)
-  await page.locator('.managed-section-heading').getByRole('button').click()
   await page.getByRole('button', { name: '发布任务' }).click()
   const dispatchDrawer = page.getByRole('dialog', { name: /向 验收设备 发布任务/ })
   await dispatchDrawer.getByText('可用选项读取失败').waitFor()
@@ -130,7 +192,58 @@ async page => {
   await dispatchDrawer.getByText('此脚本无需额外参数').waitFor()
   await assertNoDocumentOverflow('desktop drawer')
   await assertNoHiddenFocusable('desktop drawer')
+  await dispatchDrawer.getByRole('button', { name: '关闭' }).click()
+  await dispatchDrawer.waitFor({ state: 'hidden' })
+
+  await page.getByRole('button', { name: '管理分组' }).click()
+  const groupManager = page.getByRole('dialog', { name: '设备分组管理' })
+  await groupManager.getByPlaceholder('新分组名称').fill('浏览器验收组')
+  await groupManager.getByRole('button', { name: '创建分组' }).click()
+  await groupManager.getByText('浏览器验收组', { exact: true }).waitFor()
+  await groupManager.getByRole('button', { name: /关\s*闭/ }).click()
+  await page.locator('.managed-agent-card__groups').getByRole('button').click()
+  const assignGroup = page.getByRole('dialog', { name: /调整“验收设备”的分组/ })
+  await assignGroup.locator('.ant-select').first().click()
+  await page.getByText('浏览器验收组', { exact: true }).last().click()
+  await assignGroup.getByRole('button', { name: '保存设备分组' }).click()
+  await page.locator('.managed-agent-card__groups').getByText('浏览器验收组', { exact: true }).waitFor()
+
+  await page.getByLabel('选择设备 验收设备').check()
+  await page.locator('.managed-selection-bar').getByRole('button', { name: '暂停接单' }).click()
+  const dangerBatch = page.getByRole('dialog', { name: '批量暂停接单' })
+  await dangerBatch.getByRole('button', { name: '预览影响' }).click()
+  const confirmBatch = dangerBatch.getByRole('button', { name: '确认执行' })
+  await confirmBatch.waitFor()
+  if (!await confirmBatch.evaluate(node => node.classList.contains('ant-btn-dangerous'))) throw new Error('dangerous batch confirmation is not visually dangerous')
+  await confirmBatch.click()
+  await page.waitForTimeout(120)
+  await confirmBatch.click()
+  await dangerBatch.getByText('批次 #91 已完成').waitFor()
+  if (batchExecuteKeys.length !== 2 || !batchExecuteKeys[0] || batchExecuteKeys[0] !== batchExecuteKeys[1]) {
+    throw new Error(`batch retry did not reuse Idempotency-Key: ${JSON.stringify(batchExecuteKeys)}`)
+  }
+  await dangerBatch.getByRole('button', { name: /完\s*成/ }).click()
+
+  await page.getByLabel('删除设备验收设备').click()
+  const deleteModal = page.getByRole('dialog', { name: '删除设备前确认影响' })
+  const deleteConfirm = deleteModal.getByRole('button', { name: '永久删除设备' })
+  if (!await deleteConfirm.isDisabled()) throw new Error('delete confirmation was enabled before exact device name')
+  await deleteModal.getByLabel(/输入设备名/).fill('验收设备')
+  if (await deleteConfirm.isDisabled()) throw new Error('delete confirmation stayed disabled after exact device name')
+  await deleteModal.getByRole('button', { name: /取\s*消/ }).click()
+
+  failNextOptions = true
+  await page.getByLabel('选择设备 验收设备').check()
+  await page.getByRole('button', { name: '发布临时任务' }).click()
+  const batchDispatch = page.getByRole('dialog', { name: '批量发布临时任务' })
+  await batchDispatch.getByText('批量任务选项加载失败').waitFor()
+  const batchParams = batchDispatch.locator('textarea')
+  await batchParams.fill('{"keep":"value"}')
+  await batchDispatch.getByRole('button', { name: '重试加载' }).click()
+  await batchDispatch.getByText('批量任务选项加载失败').waitFor({ state: 'hidden' })
+  if (await batchParams.inputValue() !== '{"keep":"value"}') throw new Error('batch options retry cleared configuration')
+  await batchDispatch.getByRole('button', { name: /取\s*消/ }).click()
 
   if (errors.length) throw new Error('page errors: ' + errors.join('; '))
-  console.log('PASS: 390/640 mobile drawer, 900 collapsible sidebar, first-device onboarding, option/detail recovery, focus and overflow')
+  console.log('PASS: responsive layout, zero first-load thumbnails, groups, selection, dangerous/delete modals, idempotent retry and option recovery')
 }

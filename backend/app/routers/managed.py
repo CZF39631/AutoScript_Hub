@@ -283,6 +283,8 @@ class ManagedScheduleItem(BaseModel):
     enabled: bool
     next_run_at: datetime
     last_run_at: Optional[datetime] = None
+    last_missed_at: Optional[datetime] = None
+    last_missed_reason: Optional[str] = None
     created_by: int
     updated_by: int
     created_at: datetime
@@ -394,6 +396,8 @@ def _schedule_item(
         enabled=schedule.enabled,
         next_run_at=schedule.next_run_at,
         last_run_at=schedule.last_run_at,
+        last_missed_at=schedule.last_missed_at,
+        last_missed_reason=schedule.last_missed_reason,
         created_by=schedule.created_by,
         updated_by=schedule.updated_by,
         created_at=schedule.created_at,
@@ -1235,13 +1239,26 @@ def retry_managed_run(
 @router.get("/managed-schedules", response_model=List[ManagedScheduleItem])
 def list_managed_schedules(
     agent_id: Optional[int] = Query(default=None),
+    agent_ids: Optional[str] = Query(default=None, max_length=2000),
     enabled: Optional[bool] = Query(default=None),
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
     query = db.query(ManagedSchedule).filter(ManagedSchedule.is_deleted == False)
+    if agent_id is not None and agent_ids is not None:
+        raise HTTPException(status_code=422, detail="agent_id 与 agent_ids 不可同时使用")
     if agent_id is not None:
         query = query.filter(ManagedSchedule.agent_id == agent_id)
+    if agent_ids is not None:
+        try:
+            parsed_agent_ids = list(dict.fromkeys(
+                int(value.strip()) for value in agent_ids.split(",") if value.strip()
+            ))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="agent_ids 必须是逗号分隔的设备 ID")
+        if not parsed_agent_ids or len(parsed_agent_ids) > 100 or any(value <= 0 for value in parsed_agent_ids):
+            raise HTTPException(status_code=422, detail="agent_ids 必须包含 1 到 100 个有效设备 ID")
+        query = query.filter(ManagedSchedule.agent_id.in_(parsed_agent_ids))
     if enabled is not None:
         query = query.filter(ManagedSchedule.enabled == enabled)
     schedules = query.order_by(ManagedSchedule.created_at.desc()).all()
@@ -1255,7 +1272,7 @@ def create_managed_schedule(
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
-    agent = _managed_agent_or_404(db, req.agent_id)
+    agent = _managed_agent_or_404(db, req.agent_id, require_enabled=True)
     owner = db.query(User).filter(User.id == agent.user_id, User.is_deleted == False).first()
     if not owner:
         raise HTTPException(status_code=409, detail="Agent 所属用户不可用")
@@ -1322,6 +1339,8 @@ def update_managed_schedule(
     params = values.get("params", json.loads(schedule.params or "{}"))
     environment_id = values.get("environment_id", schedule.environment_id)
     agent = _managed_agent_or_404(db, agent_id)
+    if not agent.enabled and values.get("enabled", schedule.enabled):
+        raise HTTPException(status_code=409, detail="设备已停用，只能维护暂停状态的已有计划")
     owner = db.query(User).filter(User.id == agent.user_id, User.is_deleted == False).first()
     if not owner:
         raise HTTPException(status_code=409, detail="Agent 所属用户不可用")
@@ -1426,6 +1445,7 @@ def enable_managed_schedule(
     db: Session = Depends(get_db),
 ):
     schedule = _schedule_or_404(db, schedule_id)
+    _managed_agent_or_404(db, schedule.agent_id, require_enabled=True)
     schedule.enabled = True
     schedule.next_run_at = utc_naive(next_schedule_time(
         schedule_type=schedule.schedule_type, after=datetime.now(timezone.utc),

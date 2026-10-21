@@ -123,6 +123,128 @@ def test_device_group_crud_membership_and_filter(client, admin_token, dev_token)
     assert recreated.json()["id"] != group_id
 
 
+def test_scale_read_endpoints_group_assignment_batch_lookup_run_filter_and_permissions(
+    client, admin_token, dev_token
+):
+    script_id = _upload(client, admin_token)
+    failed_agent = _register(client, dev_token, "scale-api-failed", "失败设备")
+    idle_agent = _register(client, dev_token, "scale-api-idle", "空闲设备")
+    first_group = client.post(
+        "/api/admin/managed-agent-groups", json={"name": "接口组甲"},
+        headers=_headers(admin_token),
+    ).json()
+    second_group = client.post(
+        "/api/admin/managed-agent-groups", json={"name": "接口组乙"},
+        headers=_headers(admin_token),
+    ).json()
+
+    group_list = client.get(
+        "/api/admin/managed-agent-groups", headers=_headers(admin_token),
+    )
+    assigned = client.put(
+        "/api/admin/managed-agents/{}/groups".format(failed_agent["id"]),
+        json={"group_ids": [second_group["id"], first_group["id"]]},
+        headers=_headers(admin_token),
+    )
+    assert group_list.status_code == assigned.status_code == 200
+    assert {item["id"] for item in group_list.json()} == {first_group["id"], second_group["id"]}
+    assert {item["id"] for item in assigned.json()} == {first_group["id"], second_group["id"]}
+
+    run = client.post(
+        "/api/admin/managed-agents/{}/runs".format(failed_agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/scale-api.txt"}}, headers=_headers(admin_token),
+    ).json()
+    assert client.post(
+        "/api/runs/{}/claim".format(run["id"]),
+        json={"agent_id": failed_agent["id"]},
+        headers={
+            "Authorization": "Bearer {}".format(dev_token),
+            "X-Agent-Token": failed_agent["agent_token"],
+        },
+    ).status_code == 200
+    assert client.patch(
+        "/api/runs/{}/status".format(run["id"]),
+        json={"status": "failed", "agent_id": failed_agent["id"]},
+        headers={
+            "Authorization": "Bearer {}".format(dev_token),
+            "X-Agent-Token": failed_agent["agent_token"],
+        },
+    ).status_code == 200
+    failed = client.get(
+        "/api/admin/managed-agents/paged?run_status=failed", headers=_headers(admin_token),
+    )
+    idle = client.get(
+        "/api/admin/managed-agents/paged?run_status=idle", headers=_headers(admin_token),
+    )
+    assert {item["id"] for item in failed.json()["items"]} == {failed_agent["id"]}
+    assert {item["id"] for item in idle.json()["items"]} == {failed_agent["id"], idle_agent["id"]}
+
+    batch = client.post(
+        "/api/admin/managed-agent-batches",
+        json={
+            "operation": "set_groups",
+            "selection": {"mode": "explicit", "agent_ids": [idle_agent["id"]]},
+            "group_ids": [first_group["id"]],
+        },
+        headers=_headers(admin_token, "scale-api-batch-0001"),
+    )
+    assert batch.status_code == 200
+    batch_lookup = client.get(
+        "/api/admin/managed-agent-batches/{}".format(batch.json()["batch_id"]),
+        headers=_headers(admin_token),
+    )
+    assert batch_lookup.status_code == 200
+    assert batch_lookup.json()["items"][0]["agent_id"] == idle_agent["id"]
+
+    denied_requests = [
+        client.get("/api/admin/managed-agent-groups", headers=_headers(dev_token)),
+        client.put(
+            "/api/admin/managed-agents/{}/groups".format(idle_agent["id"]),
+            json={"group_ids": []}, headers=_headers(dev_token),
+        ),
+        client.get(
+            "/api/admin/managed-agent-batches/{}".format(batch.json()["batch_id"]),
+            headers=_headers(dev_token),
+        ),
+        client.get(
+            "/api/admin/managed-agents/paged?run_status=failed",
+            headers=_headers(dev_token),
+        ),
+    ]
+    assert all(response.status_code == 403 for response in denied_requests)
+
+
+def test_schedule_agent_ids_filter_is_bounded_to_requested_page_devices(
+    client, admin_token, dev_token
+):
+    script_id = _upload(client, admin_token)
+    first = _register(client, dev_token, "schedule-filter-a", "计划筛选甲")
+    second = _register(client, dev_token, "schedule-filter-b", "计划筛选乙")
+    for agent in (first, second):
+        response = client.post(
+            "/api/admin/managed-schedules",
+            json={
+                "name": "{}的计划".format(agent["machine_name"]),
+                "agent_id": agent["id"], "script_id": script_id,
+                "params": {"url_file": "C:/{}.txt".format(agent["id"])}, "interval_seconds": 3600,
+            },
+            headers=_headers(admin_token),
+        )
+        assert response.status_code == 200
+
+    filtered = client.get(
+        "/api/admin/managed-schedules?agent_ids={}".format(first["id"]),
+        headers=_headers(admin_token),
+    )
+    invalid = client.get(
+        "/api/admin/managed-schedules?agent_ids=bad-id",
+        headers=_headers(admin_token),
+    )
+    assert filtered.status_code == 200
+    assert [item["agent_id"] for item in filtered.json()] == [first["id"]]
+    assert invalid.status_code == 422
+
+
 def test_batch_preview_partial_success_idempotency_and_audit(
     client, admin_token, dev_token, fresh_db
 ):

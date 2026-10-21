@@ -33,6 +33,7 @@ export function dispatchResourceState({ loading = false, error = '', value = nul
 
 export const THUMBNAIL_STALE_AFTER_MS = 2 * 60 * 1000
 export const MANAGED_PAGE_SIZE = 24
+export const MANAGED_BATCH_LIMITS = Object.freeze({ dispatch_run: 50, default: 200 })
 
 const MANAGED_SORTS = new Set(['name', '-name', 'status', '-status', 'last_heartbeat', '-last_heartbeat', 'created_at', '-created_at'])
 const MANAGED_STATUSES = new Set(['online', 'offline', 'disabled'])
@@ -84,10 +85,22 @@ export function createManagedBatchSelection({ allMatching = false, selectedIds =
   }
 }
 
-export function managedPageSelectionState(pageIds = [], selectedIds = []) {
+export function managedPageSelectionState(pageIds = [], selectedIds = [], allMatching = false) {
+  if (allMatching) return { checked: pageIds.length > 0, indeterminate: false }
   const selected = new Set(selectedIds)
   const count = pageIds.filter(id => selected.has(id)).length
   return { checked: pageIds.length > 0 && count === pageIds.length, indeterminate: count > 0 && count < pageIds.length }
+}
+
+export function managedBatchLimit(operation) {
+  return MANAGED_BATCH_LIMITS[operation] || MANAGED_BATCH_LIMITS.default
+}
+
+export function managedBatchLimitError(operation, selectedCount) {
+  const limit = managedBatchLimit(operation)
+  return Number(selectedCount) > limit
+    ? `当前选择 ${selectedCount} 台，超过此操作单批上限 ${limit} 台，请缩小筛选范围或分批处理。`
+    : ''
 }
 
 export function batchResultSummary(result = {}) {

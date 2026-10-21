@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Button, Drawer } from 'antd'
+import { App as AntdApp, Layout, Menu, Button, Drawer } from 'antd'
 import {
   DashboardOutlined, CodeOutlined, HistoryOutlined,
   UserOutlined, LogoutOutlined, AuditOutlined, BugOutlined, GlobalOutlined,
@@ -211,7 +211,7 @@ function AppLayout() {
             rootClassName="app-mobile-navigation"
             title="主导航"
             placement="left"
-            width="min(86vw, 320px)"
+            size="min(86vw, 320px)"
             open
             onClose={closeMobileNavigation}
             destroyOnHidden
@@ -275,21 +275,23 @@ export default function App() {
   const managedMode = isManagedClientMode()
   return (
     <ConfigProvider locale={zhCN} theme={appleTheme}>
-      <ConnectionProvider>
-        {managedMode ? (
-          <Routes>
-            <Route path="/managed" element={<ManagedClientPanel />} />
-            <Route path="*" element={<Navigate to="/managed" replace />} />
-          </Routes>
-        ) : (
-          <AuthProvider>
+      <AntdApp>
+        <ConnectionProvider>
+          {managedMode ? (
             <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route path="/*" element={<PrivateRoute><AppLayout /></PrivateRoute>} />
+              <Route path="/managed" element={<ManagedClientPanel />} />
+              <Route path="*" element={<Navigate to="/managed" replace />} />
             </Routes>
-          </AuthProvider>
-        )}
-      </ConnectionProvider>
+          ) : (
+            <AuthProvider>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route path="/*" element={<PrivateRoute><AppLayout /></PrivateRoute>} />
+              </Routes>
+            </AuthProvider>
+          )}
+        </ConnectionProvider>
+      </AntdApp>
     </ConfigProvider>
   )
 }

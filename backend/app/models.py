@@ -316,6 +316,8 @@ class ManagedSchedule(Base):
     enabled = Column(Boolean, nullable=False, default=True)
     next_run_at = Column(DateTime, nullable=False)
     last_run_at = Column(DateTime, nullable=True)
+    last_missed_at = Column(DateTime, nullable=True)
+    last_missed_reason = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=_utcnow)

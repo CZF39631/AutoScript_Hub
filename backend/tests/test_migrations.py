@@ -305,6 +305,29 @@ def test_managed_scale_migration_upgrades_0010_and_downgrades_cleanly(tmp_path):
     assert "managed_agent_batches" not in tables
 
 
+def test_managed_schedule_missed_migration_has_clean_upgrade_and_downgrade(tmp_path):
+    database_url = _sqlite_url(tmp_path / "managed-schedule-missed.db")
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    columns = {column["name"] for column in inspect(engine).get_columns("managed_schedules")}
+    assert {"last_missed_at", "last_missed_reason"}.issubset(columns)
+    engine.dispose()
+
+    command.downgrade(config, "0011_managed_agent_scale")
+    engine = create_engine(database_url)
+    columns = {column["name"] for column in inspect(engine).get_columns("managed_schedules")}
+    assert "last_missed_at" not in columns
+    assert "last_missed_reason" not in columns
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    columns = {column["name"] for column in inspect(engine).get_columns("managed_schedules")}
+    assert {"last_missed_at", "last_missed_reason"}.issubset(columns)
+    engine.dispose()
+
+
 def test_managed_downgrade_terminates_directed_work_before_dropping_target(tmp_path):
     database_url = _sqlite_url(tmp_path / "managed-downgrade.db")
     config = alembic_config(database_url)
