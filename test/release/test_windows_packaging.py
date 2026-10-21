@@ -80,7 +80,9 @@ def test_inno_installs_per_user_private_runtime_and_preserves_data():
     assert "ChineseSimplified.isl" in installer
     assert "LanguageDetectionMethod=none" in installer
     assert "PrivilegesRequired=lowest" in installer
-    assert "{localappdata}\\Programs\\AutoScript Hub" in installer
+    assert "{localappdata}\\Programs\\{#MyInstallName}" in installer
+    assert "AutoScript Hub Manager Preview" in installer
+    assert "AutoScript Hub Managed Preview" in installer
     assert "windows-runtime\\python\\*" in installer
     assert "python-3.11.9-amd64.exe" not in installer
     assert "Exec(PrivatePython" in installer
@@ -88,7 +90,8 @@ def test_inno_installs_per_user_private_runtime_and_preserves_data():
     assert "IsWebView2RuntimeInstalled" in installer
     assert "if not IsWebView2RuntimeInstalled then" in installer
     assert "Exec(WebViewInstaller" in installer
-    assert "{localappdata}\\AutoScriptHub" in installer
+    assert "{localappdata}\\{#MyDataName}" in installer
+    assert "client-data-dir-name.txt" in installer
     assert "AutoScriptHub.exe" in installer
     assert "AutoScriptAgent.exe" in installer
     assert "AutoScriptUpdater.exe" in installer
