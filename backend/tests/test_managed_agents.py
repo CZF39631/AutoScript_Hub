@@ -191,6 +191,7 @@ def test_manual_dispatch_is_blocked_while_device_is_running(
     )
 
     assert busy_agent["running_run_id"] == first.json()["id"]
+    assert busy_agent["running_dispatch_type"] == "managed_manual"
     assert blocked.status_code == 409
     assert "正在执行任务" in blocked.json()["detail"]
 

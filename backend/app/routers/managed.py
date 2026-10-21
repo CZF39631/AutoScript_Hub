@@ -28,6 +28,7 @@ class ManagedAgentItem(AgentItem):
     thumbnail_updated_at: Optional[datetime] = None
     thumbnail_size: Optional[int] = None
     running_run_id: Optional[int] = None
+    running_dispatch_type: Optional[str] = None
 
 
 class ManagedRunCreate(BaseModel):
@@ -214,10 +215,15 @@ def list_managed_agents(
         for run in running:
             device_id = run.agent_id or run.target_agent_id
             if device_id in agent_ids and device_id not in running_by_agent:
-                running_by_agent[device_id] = run.id
+                running_by_agent[device_id] = run
     return [
         ManagedAgentItem.model_validate(agent).model_copy(
-            update={"running_run_id": running_by_agent.get(agent.id)}
+            update={
+                "running_run_id": running_by_agent.get(agent.id).id
+                if running_by_agent.get(agent.id) else None,
+                "running_dispatch_type": running_by_agent.get(agent.id).dispatch_type
+                if running_by_agent.get(agent.id) else None,
+            }
         )
         for agent in agents
     ]

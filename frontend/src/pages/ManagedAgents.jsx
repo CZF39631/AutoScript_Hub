@@ -11,7 +11,7 @@ import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
-  apiErrorMessage, intervalToSeconds, isThumbnailStale, statusPresentation,
+  apiErrorMessage, formatInterval, intervalToSeconds, isThumbnailStale, statusPresentation,
   thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
@@ -100,8 +100,10 @@ function ThumbnailScreen({ agent }) {
   )
 }
 
-function AgentCard({ agent, updating, deleting, onToggle, onDispatch, onDelete }) {
-  const status = statusPresentation(agent.status, agent.enabled)
+function AgentCard({ agent, updating, deleting, scheduleCount, onToggle, onDispatch, onDelete }) {
+  const status = agent.running_run_id
+    ? { color: 'processing', text: agent.running_dispatch_type === 'managed_schedule' ? '运行中（定时）' : '运行中（临时）' }
+    : statusPresentation(agent.status, agent.enabled)
   const updatedAt = thumbnailTimestamp(agent)
 
   return (
@@ -123,6 +125,7 @@ function AgentCard({ agent, updating, deleting, onToggle, onDispatch, onDelete }
         <div><dt>Agent 版本</dt><dd>{agent.agent_version || '-'}</dd></div>
         <div><dt>最近心跳</dt><dd>{agent.last_heartbeat ? formatServerTime(agent.last_heartbeat) : '从未连接'}</dd></div>
         <div><dt>画面更新时间</dt><dd>{updatedAt ? formatServerTime(updatedAt) : '暂无画面'}</dd></div>
+        <div><dt>定时任务</dt><dd>{scheduleCount ? `${scheduleCount} 个已安排` : '暂无'}</dd></div>
       </dl>
 
       <div className="managed-agent-card__actions">
@@ -136,14 +139,9 @@ function AgentCard({ agent, updating, deleting, onToggle, onDispatch, onDelete }
           />
         </div>
         <div className="managed-agent-card__primary-actions">
-          <Tooltip title={agent.running_run_id ? `正在执行任务 #${agent.running_run_id}，完成后才能下发` : ''}>
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              disabled={!agent.enabled || Boolean(agent.running_run_id)}
-              onClick={() => onDispatch(agent)}
-            >
-              {agent.running_run_id ? '任务执行中' : '临时任务'}
+          <Tooltip title={!agent.enabled ? '设备已停用，仍可查看已安排的定时任务' : ''}>
+            <Button type="primary" icon={<SendOutlined />} onClick={() => onDispatch(agent)}>
+              发布任务
             </Button>
           </Tooltip>
           <Popconfirm
@@ -166,6 +164,7 @@ function AgentCard({ agent, updating, deleting, onToggle, onDispatch, onDelete }
 
 export default function ManagedAgents({ embedded = false }) {
   const [agents, setAgents] = useState([])
+  const [schedules, setSchedules] = useState([])
   const [scripts, setScripts] = useState([])
   const [environments, setEnvironments] = useState([])
   const [loading, setLoading] = useState(true)
@@ -191,8 +190,18 @@ export default function ManagedAgents({ embedded = false }) {
     if (!quiet) setLoading(true)
     setLoadError('')
     try {
-      const response = await api.get('/api/admin/managed-agents', { signal: controller.signal })
-      if (!controller.signal.aborted) setAgents(Array.isArray(response.data) ? response.data : [])
+      const [agentResult, scheduleResult] = await Promise.allSettled([
+        api.get('/api/admin/managed-agents', { signal: controller.signal }),
+        api.get('/api/admin/managed-schedules', { signal: controller.signal }),
+      ])
+      if (!controller.signal.aborted && agentResult.status === 'fulfilled') {
+        setAgents(Array.isArray(agentResult.value.data) ? agentResult.value.data : [])
+      } else if (!controller.signal.aborted && agentResult.status === 'rejected') {
+        throw agentResult.reason
+      }
+      if (!controller.signal.aborted && scheduleResult.status === 'fulfilled') {
+        setSchedules(Array.isArray(scheduleResult.value.data) ? scheduleResult.value.data : [])
+      }
     } catch (error) {
       if (!controller.signal.aborted && error?.code !== 'ERR_CANCELED') {
         setLoadError(apiErrorMessage(error, '被控设备加载失败'))
@@ -255,11 +264,17 @@ export default function ManagedAgents({ embedded = false }) {
     if (page > lastPage) setPage(lastPage)
   }, [filteredAgents.length, page])
 
+  const schedulesByAgent = useMemo(() => {
+    const result = new Map()
+    schedules.forEach(schedule => {
+      const items = result.get(schedule.agent_id) || []
+      items.push(schedule)
+      result.set(schedule.agent_id, items)
+    })
+    return result
+  }, [schedules])
+
   const openDispatch = async agent => {
-    if (agent.running_run_id) {
-      message.warning(`设备正在执行任务 #${agent.running_run_id}，完成后才能下发临时任务`)
-      return
-    }
     setDispatchAgent(agent)
     setScripts([])
     setEnvironments([])
@@ -389,6 +404,7 @@ export default function ManagedAgents({ embedded = false }) {
                 agent={agent}
                 updating={Boolean(updating[agent.id])}
                 deleting={Boolean(deleting[agent.id])}
+                scheduleCount={(schedulesByAgent.get(agent.id) || []).length}
                 onToggle={toggleAgent}
                 onDispatch={openDispatch}
                 onDelete={deleteAgent}
@@ -422,13 +438,54 @@ export default function ManagedAgents({ embedded = false }) {
         open={Boolean(dispatchAgent)}
         onClose={() => !submitting && setDispatchAgent(null)}
         width={520}
-        extra={<Button type="primary" icon={<SendOutlined />} loading={submitting} onClick={() => form.submit()}>下发任务</Button>}
+        extra={(
+          <Button
+            type="primary"
+            icon={<SendOutlined />}
+            loading={submitting}
+            disabled={!dispatchAgent?.enabled || Boolean(dispatchAgent?.running_run_id)}
+            onClick={() => form.submit()}
+          >
+            发布临时任务
+          </Button>
+        )}
         destroyOnHidden
       >
-        {dispatchAgent?.status !== 'online' && (
-          <Alert className="managed-drawer-alert" type="warning" showIcon title="设备当前离线" description="任务会保留到有效期结束；设备恢复连接后才能领取。" />
-        )}
-        <Form form={form} layout="vertical" onFinish={dispatch} requiredMark="optional">
+        {dispatchAgent?.running_run_id ? (
+          <Alert
+            className="managed-drawer-alert"
+            type="warning"
+            showIcon
+            title={`设备正在执行${dispatchAgent.running_dispatch_type === 'managed_schedule' ? '定时' : '临时'}任务 #${dispatchAgent.running_run_id}`}
+            description="当前任务结束前不能再发布临时任务，但可以查看和维护下方定时任务。"
+          />
+        ) : dispatchAgent?.status !== 'online' ? (
+          <Alert className="managed-drawer-alert" type="warning" showIcon title="设备当前离线" description="临时任务会保留到有效期结束；设备恢复连接后才能领取。" />
+        ) : null}
+
+        <section className="managed-dispatch-schedules">
+          <div className="managed-dispatch-schedules__heading">
+            <div>
+              <h3>已安排的定时任务</h3>
+              <span>{(schedulesByAgent.get(dispatchAgent?.id) || []).length} 个</span>
+            </div>
+            <Button type="link" href="#schedules" onClick={() => setDispatchAgent(null)}>管理定时任务</Button>
+          </div>
+          {(schedulesByAgent.get(dispatchAgent?.id) || []).length ? (
+            <div className="managed-dispatch-schedules__list">
+              {(schedulesByAgent.get(dispatchAgent?.id) || []).map(schedule => (
+                <div key={schedule.id}>
+                  <div><strong>{schedule.name}</strong><span>{formatInterval(schedule.interval_seconds)}</span></div>
+                  <small>{schedule.enabled ? `下次 ${formatServerTime(schedule.next_run_at)}` : '已暂停'}</small>
+                </div>
+              ))}
+            </div>
+          ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该设备暂无定时任务" />}
+        </section>
+
+        <div className="managed-dispatch-divider"><span>发布临时任务</span></div>
+
+        <Form form={form} layout="vertical" onFinish={dispatch} requiredMark="optional" disabled={!dispatchAgent?.enabled || Boolean(dispatchAgent?.running_run_id)}>
           <Form.Item name="script_id" label="脚本" rules={[{ required: true, message: '请选择脚本' }]}>
             <Select
               showSearch

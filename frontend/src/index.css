@@ -187,14 +187,27 @@ button, input, select, textarea { font: inherit; }
 
 /* Managed Agent administration */
 .managed-control-page, .managed-admin-page { min-width: 0; }
-.managed-control-heading { margin-bottom: 4px; }
-.managed-control-tabs > .ant-tabs-nav { margin-bottom: 18px; }
-.managed-control-tabs .ant-tabs-tab { padding-block: 11px; }
+.managed-control-heading { margin-bottom: 20px; }
+.managed-control-schedules { margin-top: 30px; padding-top: 24px; border-top: 1px solid rgba(0,0,0,.08); scroll-margin-top: 20px; }
 .managed-section-heading { margin-bottom: 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .managed-section-heading h3 { margin: 0; color: var(--apple-text); font-size: 16px; }
 .managed-section-heading p { margin: 4px 0 0; color: var(--apple-secondary); font-size: 12px; }
 .managed-page-alert { margin-bottom: 16px; }
 .managed-drawer-alert { margin-bottom: 20px; }
+.managed-dispatch-schedules { margin-bottom: 22px; padding: 14px; border: 1px solid var(--apple-border); border-radius: 14px; background: rgba(245,245,247,.72); }
+.managed-dispatch-schedules__heading { margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.managed-dispatch-schedules__heading > div { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.managed-dispatch-schedules__heading h3 { margin: 0; font-size: 14px; }
+.managed-dispatch-schedules__heading span { color: var(--apple-secondary); font-size: 11px; }
+.managed-dispatch-schedules__heading .ant-btn { padding-inline: 0; }
+.managed-dispatch-schedules__list { max-height: 180px; overflow: auto; }
+.managed-dispatch-schedules__list > div { padding: 8px 0; border-top: 1px solid rgba(0,0,0,.055); }
+.managed-dispatch-schedules__list > div > div { display: flex; justify-content: space-between; gap: 12px; }
+.managed-dispatch-schedules__list strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-dispatch-schedules__list span, .managed-dispatch-schedules__list small { color: var(--apple-secondary); font-size: 11px; white-space: nowrap; }
+.managed-dispatch-schedules .ant-empty { margin-block: 12px 4px; }
+.managed-dispatch-divider { margin: 0 0 18px; display: flex; align-items: center; gap: 10px; color: var(--apple-secondary); font-size: 12px; }
+.managed-dispatch-divider::before, .managed-dispatch-divider::after { content: ""; height: 1px; flex: 1; background: rgba(0,0,0,.08); }
 .managed-agent-toolbar { margin-bottom: 14px; display: grid; grid-template-columns: minmax(220px, 340px) 132px 1fr; align-items: center; gap: 10px; }
 .managed-agent-toolbar .ant-input-affix-wrapper, .managed-agent-toolbar .ant-select-selector { min-height: 36px; }
 .managed-agent-count { justify-self: end; color: var(--apple-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
