@@ -18,6 +18,20 @@ def test_client_paths_live_below_local_app_data(monkeypatch, tmp_path):
         assert directory.is_dir()
 
 
+def test_installer_marker_selects_an_isolated_preview_data_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("AUTOSCRIPT_CLIENT_DATA_DIR", raising=False)
+    install = tmp_path / "managed-install"
+    install.mkdir()
+    (install / "client-data-dir-name.txt").write_text(
+        "AutoScriptHubManagedPreview\n", encoding="utf-8"
+    )
+
+    paths = ClientPaths.from_environment(install_dir=install)
+
+    assert paths.data_dir == (tmp_path / "AutoScriptHubManagedPreview").resolve()
+
+
 def test_explicit_data_root_is_supported_for_portable_testing(monkeypatch, tmp_path):
     custom = tmp_path / "custom-data"
     monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(custom))

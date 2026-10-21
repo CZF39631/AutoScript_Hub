@@ -40,7 +40,15 @@ class ClientPaths:
         else:
             local_app_data = os.environ.get("LOCALAPPDATA")
             base = Path(local_app_data) if local_app_data else Path.home() / ".local" / "share"
-            root = (base / "AutoScriptHub").resolve()
+            data_name = "AutoScriptHub"
+            marker = install / "client-data-dir-name.txt"
+            try:
+                candidate = marker.read_text(encoding="utf-8").strip()
+                if candidate and all(char.isalnum() or char in "-_" for char in candidate):
+                    data_name = candidate
+            except OSError:
+                pass
+            root = (base / data_name).resolve()
 
         return cls(
             install_dir=install,
