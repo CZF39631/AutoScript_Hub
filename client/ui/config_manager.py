@@ -3,6 +3,7 @@ import json
 import logging
 import os
 
+from client.runtime.client_identity import apply_installed_client_mode
 from client.runtime.credentials import (
     CredentialStorageError,
     delete_credentials,
@@ -71,6 +72,7 @@ def load_config():
     saved, source = _read_saved_config()
     saved = ensure_client_identity(saved, CONFIG_PATH)
     config.update(saved)
+    config = apply_installed_client_mode(config, _PATHS.install_dir)
     if not str(config.get("pip_index_url", "")).strip():
         config["pip_index_url"] = DEFAULT_CONFIG["pip_index_url"]
 

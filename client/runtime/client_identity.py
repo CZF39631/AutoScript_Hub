@@ -6,6 +6,26 @@ import uuid
 
 VALID_CLIENT_MODES = {"standard", "managed"}
 DEFAULT_CLIENT_MODE = "standard"
+INSTALL_MODE_FILE = "client-mode.txt"
+
+
+def installed_client_mode(install_dir):
+    """Read the installer-selected edition without trusting mutable UI state."""
+    marker = os.path.join(str(install_dir), INSTALL_MODE_FILE)
+    try:
+        with open(marker, "r", encoding="utf-8") as stream:
+            value = stream.read().strip().lower()
+    except OSError:
+        return None
+    return value if value in VALID_CLIENT_MODES else None
+
+
+def apply_installed_client_mode(config, install_dir):
+    normalized = dict(config or {})
+    mode = installed_client_mode(install_dir)
+    if mode:
+        normalized["client_mode"] = mode
+    return normalized
 
 
 def normalize_client_identity(config):

@@ -18,7 +18,7 @@ from client.runtime.local_auth import get_or_create_agent_token
 from client.agent.script_parser import parse_script_config
 from shared.script_contract import extract_script_archive, validate_params
 from shared.version import get_version
-from client.runtime.client_identity import ensure_client_identity
+from client.runtime.client_identity import apply_installed_client_mode, ensure_client_identity
 from client.runtime.environment_manager import EnvironmentUnavailable, ensure_environment
 from client.runtime.paths import ClientPaths
 from client.runtime.python_runtime import PrivatePythonUnavailable, private_python, python_runtime_info
@@ -39,6 +39,7 @@ if os.path.isfile(_config_source):
             _client_config = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("加载客户端配置失败: %s", e)
+_client_config = apply_installed_client_mode(_client_config, _CLIENT_PATHS.install_dir)
 _client_config = ensure_client_identity(_client_config, _CLIENT_CONFIG_PATH)
 
 BACKEND_URL = os.environ.get(

@@ -1,7 +1,18 @@
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
-#define MyAppName "AutoScript Hub"
+#ifndef MyEdition
+  #define MyEdition "standard"
+#endif
+#if MyEdition == "managed"
+  #define MyAppName "AutoScript Hub 被控端"
+  #define MyOutputName "AutoScript-Hub-Managed-Preview"
+  #define MyModeFile "client-mode-managed.txt"
+#else
+  #define MyAppName "AutoScript Hub 管理端"
+  #define MyOutputName "AutoScript-Hub-Manager-Preview"
+  #define MyModeFile "client-mode-standard.txt"
+#endif
 #define MyAppPublisher "AutoScript Hub"
 
 [Setup]
@@ -10,11 +21,11 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\AutoScript Hub
-DefaultGroupName=AutoScript Hub
+DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\..\release-output
-OutputBaseFilename=AutoScript-Hub-Setup-{#MyAppVersion}
+OutputBaseFilename={#MyOutputName}-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -46,16 +57,17 @@ Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\release-output\windows\AutoScriptHub\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\release-output\windows-runtime\python\*"; DestDir: "{app}\runtime\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "cache\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "{#MyModeFile}"; DestDir: "{app}"; DestName: "client-mode.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\AutoScript Hub"; Filename: "{app}\AutoScriptHub.exe"
-Name: "{userdesktop}\AutoScript Hub"; Filename: "{app}\AutoScriptHub.exe"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\AutoScriptHub.exe"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\AutoScriptHub.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式:"
 
 [Run]
-Filename: "{app}\AutoScriptHub.exe"; Description: "启动 AutoScript Hub"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\AutoScriptHub.exe"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 #include "installer_processes.iss"

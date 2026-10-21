@@ -1,6 +1,7 @@
 import importlib
 import json
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -38,6 +39,19 @@ def test_legacy_config_gets_standard_mode_and_stable_device_uid(monkeypatch, tmp
     assert persisted["client_mode"] == "standard"
     assert str(uuid.UUID(first["device_uid"])) == first["device_uid"]
     assert not Path(str(path) + ".tmp").exists()
+
+
+def test_installer_edition_overrides_saved_client_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
+    from client.ui import config_manager
+    config_manager = importlib.reload(config_manager)
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "client-mode.txt").write_text("managed\n", encoding="utf-8")
+    monkeypatch.setattr(config_manager, "_PATHS", replace(config_manager._PATHS, install_dir=install_dir))
+    config_manager.save_config({"client_mode": "standard"})
+
+    assert config_manager.load_config()["client_mode"] == "managed"
 
 
 def test_blank_saved_pip_source_uses_the_default_mirror(monkeypatch, tmp_path):
