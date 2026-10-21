@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Checkbox, Drawer, Empty, Form, Input, InputNumber, Pagination, Popconfirm, Segmented,
-  Select, Skeleton, Space, Switch, Tag, Tooltip, message,
+  Alert, Button, Checkbox, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm,
+  Segmented, Select, Skeleton, Space, Switch, Tag, Tooltip, message,
 } from 'antd'
 import {
   DeleteOutlined, DesktopOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined,
-  SearchOutlined, SendOutlined, WarningOutlined,
+  SearchOutlined, SendOutlined, WarningOutlined, ZoomInOutlined,
 } from '@ant-design/icons'
 import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
@@ -34,6 +34,7 @@ function parameterDefaults(params) {
 function ThumbnailScreen({ agent }) {
   const timestamp = thumbnailTimestamp(agent)
   const [attempt, setAttempt] = useState(0)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const [image, setImage] = useState({ status: timestamp ? 'loading' : 'empty', url: '' })
   const stale = isThumbnailStale(timestamp)
 
@@ -65,12 +66,32 @@ function ThumbnailScreen({ agent }) {
     }
   }, [agent.id, attempt, timestamp])
 
+  const openPreview = () => {
+    if (image.status === 'ready') setPreviewOpen(true)
+  }
+
+  const screenImage = image.status === 'ready' && (
+    <img src={image.url} alt={`${agent.machine_name} 最近上传的屏幕缩略图`} />
+  )
+
   return (
-    <div className="managed-monitor" aria-busy={image.status === 'loading'}>
-      <div className="managed-monitor__screen">
-        {image.status === 'ready' && (
-          <img src={image.url} alt={`${agent.machine_name} 最近上传的屏幕缩略图`} />
-        )}
+    <>
+      <div
+        className={`managed-monitor${image.status === 'ready' ? ' is-zoomable' : ''}`}
+        aria-busy={image.status === 'loading'}
+        role={image.status === 'ready' ? 'button' : undefined}
+        tabIndex={image.status === 'ready' ? 0 : undefined}
+        aria-label={image.status === 'ready' ? `放大查看 ${agent.machine_name} 的屏幕画面` : undefined}
+        onClick={openPreview}
+        onKeyDown={event => {
+          if (image.status === 'ready' && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault()
+            openPreview()
+          }
+        }}
+      >
+        <div className="managed-monitor__screen">
+        {screenImage}
         {image.status === 'loading' && (
           <div className="managed-thumbnail-state">
             <LoadingOutlined spin />
@@ -90,13 +111,40 @@ function ThumbnailScreen({ agent }) {
             <Button size="small" icon={<ReloadOutlined />} onClick={() => setAttempt(value => value + 1)}>重试</Button>
           </div>
         )}
-        {image.status === 'ready' && stale && (
-          <span className="managed-thumbnail-age"><WarningOutlined /> 画面较旧</span>
-        )}
+          {image.status === 'ready' && stale && (
+            <span className="managed-thumbnail-age"><WarningOutlined /> 画面较旧</span>
+          )}
+          {image.status === 'ready' && (
+            <span className="managed-thumbnail-zoom"><ZoomInOutlined /> 点击放大</span>
+          )}
+        </div>
+        <div className="managed-monitor__chin"><span /></div>
+        <div className="managed-monitor__stand" aria-hidden="true" />
       </div>
-      <div className="managed-monitor__chin"><span /></div>
-      <div className="managed-monitor__stand" aria-hidden="true" />
-    </div>
+
+      <Modal
+        className="managed-thumbnail-modal"
+        title={`${agent.machine_name} · 最新画面`}
+        open={previewOpen}
+        onCancel={() => setPreviewOpen(false)}
+        footer={null}
+        width={960}
+        centered
+        destroyOnHidden
+      >
+        <div className="managed-monitor managed-monitor--preview">
+          <div className="managed-monitor__screen">
+            {screenImage}
+            {stale && <span className="managed-thumbnail-age"><WarningOutlined /> 画面较旧</span>}
+          </div>
+          <div className="managed-monitor__chin"><span /></div>
+          <div className="managed-monitor__stand" aria-hidden="true" />
+        </div>
+        <p className="managed-thumbnail-modal__meta">
+          画面更新时间：{timestamp ? formatServerTime(timestamp) : '暂无'}
+        </p>
+      </Modal>
+    </>
   )
 }
 

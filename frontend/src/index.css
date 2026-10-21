@@ -252,12 +252,24 @@ button, input, select, textarea { font: inherit; }
 .managed-agent-card__identity span { display: block; margin-top: 2px; overflow: hidden; color: var(--apple-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .managed-agent-card__header .ant-tag { flex: 0 0 auto; margin-inline-end: 0; }
 .managed-monitor { position: relative; margin: 0 0 23px; padding: 5px 5px 0; border-radius: 9px; background: #303034; }
+.managed-monitor.is-zoomable { cursor: zoom-in; }
+.managed-monitor.is-zoomable:focus-visible { outline: 3px solid rgba(0,122,255,.38); outline-offset: 3px; }
 .managed-monitor__screen { position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; overflow: hidden; border-radius: 5px; background: #18181b; }
 .managed-monitor__screen img { width: 100%; height: 100%; display: block; object-fit: contain; }
+.managed-thumbnail-zoom { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 6px; color: #fff; background: rgba(0,0,0,.36); font-size: 12px; font-weight: 600; opacity: 0; transition: opacity .18s ease; }
+.managed-monitor.is-zoomable:hover .managed-thumbnail-zoom, .managed-monitor.is-zoomable:focus-visible .managed-thumbnail-zoom { opacity: 1; }
 .managed-monitor__chin { height: 12px; display: grid; place-items: center; }
 .managed-monitor__chin span { width: 4px; height: 4px; border-radius: 50%; background: #85858a; }
 .managed-monitor__stand { position: absolute; inset-inline-start: 50%; bottom: -12px; width: 58px; height: 4px; background: #69696f; transform: translateX(-50%); }
 .managed-monitor__stand::before { content: ""; position: absolute; inset-inline-start: 22px; top: 0; width: 14px; height: 10px; background: #5a5a5f; clip-path: polygon(25% 0, 75% 0, 100% 100%, 0 100%); }
+.managed-thumbnail-modal .ant-modal-content { padding: 18px 20px 16px; overflow: visible; }
+.managed-thumbnail-modal .ant-modal-body { padding: 10px 18px 16px; }
+.managed-monitor--preview { width: 100%; margin: 0 0 38px; padding: 10px 10px 0; border-radius: 16px; box-shadow: 0 18px 44px rgba(0,0,0,.22); }
+.managed-monitor--preview .managed-monitor__screen { border-radius: 9px; }
+.managed-monitor--preview .managed-monitor__chin { height: 24px; }
+.managed-monitor--preview .managed-monitor__stand { bottom: -22px; width: 110px; height: 7px; }
+.managed-monitor--preview .managed-monitor__stand::before { inset-inline-start: 40px; width: 30px; height: 19px; }
+.managed-thumbnail-modal__meta { margin: 0; color: var(--apple-secondary); font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
 .managed-thumbnail-state { position: absolute; inset: 0; padding: 16px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: #c7c7cc; font-size: 12px; text-align: center; }
 .managed-thumbnail-state > .anticon { color: #8e8e93; font-size: 24px; }
 .managed-thumbnail-state--error > .anticon { color: #ff9f0a; }
@@ -340,6 +352,12 @@ button, input, select, textarea { font: inherit; }
   .managed-agent-toggle { min-height: 32px; }
   .managed-agent-card__actions > .ant-btn { width: 100%; }
   .managed-agent-card__primary-actions { justify-content: flex-end; }
+  .managed-thumbnail-modal { max-width: calc(100vw - 20px); }
+  .managed-thumbnail-modal .ant-modal-body { padding-inline: 0; }
+  .managed-monitor--preview { padding: 6px 6px 0; border-radius: 10px; }
+  .managed-monitor--preview .managed-monitor__chin { height: 16px; }
+  .managed-monitor--preview .managed-monitor__stand { bottom: -15px; width: 72px; height: 5px; }
+  .managed-monitor--preview .managed-monitor__stand::before { inset-inline-start: 26px; width: 20px; height: 13px; }
   .managed-client-header { height: auto; padding: 16px 18px; align-items: flex-start; }
   .managed-client-refresh { align-items: flex-end; flex-direction: column-reverse; gap: 6px; }
   .managed-client-content { width: calc(100% - 28px); padding-top: 18px; }
