@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(tmp_path):
     )
     assert {
         "target_agent_id", "requested_by", "dispatch_type", "schedule_id",
-        "scheduled_for", "expires_at", "claimed_at",
+        "retry_of_run_id", "scheduled_for", "expires_at", "claimed_at",
     }.issubset({column["name"] for column in inspector.get_columns("runs")})
 
 
@@ -197,6 +197,35 @@ def test_thumbnail_migration_upgrades_0006_and_downgrades_cleanly(tmp_path):
     downgraded = {column["name"] for column in inspect(engine).get_columns("agents")}
     assert "thumbnail_updated_at" not in downgraded
     assert "thumbnail_size" not in downgraded
+    engine.dispose()
+
+
+def test_retry_lineage_migration_upgrades_0008_and_downgrades_cleanly(tmp_path):
+    database_url = _sqlite_url(tmp_path / "run-retry-lineage.db")
+    config = alembic_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0008_managed_schedule_cron")
+    engine = create_engine(database_url)
+    assert "retry_of_run_id" not in {
+        column["name"] for column in inspect(engine).get_columns("runs")
+    }
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    assert "retry_of_run_id" in {
+        column["name"] for column in inspect(engine).get_columns("runs")
+    }
+    assert "ix_runs_retry_of_run_id" in {
+        index["name"] for index in inspect(engine).get_indexes("runs")
+    }
+    engine.dispose()
+
+    command.downgrade(config, "0008_managed_schedule_cron")
+    engine = create_engine(database_url)
+    assert "retry_of_run_id" not in {
+        column["name"] for column in inspect(engine).get_columns("runs")
+    }
     engine.dispose()
 
 

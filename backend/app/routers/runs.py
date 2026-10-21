@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import or_, tuple_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -79,19 +79,73 @@ def _can_view_run(db, current_user, run):
     ).first() is not None
 
 
+def _has_result_files(value) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, json.JSONDecodeError):
+        return bool(str(value).strip())
+    if isinstance(parsed, (list, tuple, dict, str)):
+        return bool(parsed)
+    return parsed is not None
+
+
+def _enrich_runs(runs, db, detail=False):
+    """Batch-enrich Runs without leaking managed-device result paths."""
+    if not runs:
+        return []
+    user_ids = {run.user_id for run in runs}
+    script_ids = {run.script_id for run in runs}
+    version_keys = {(run.script_id, run.script_version) for run in runs}
+    agent_ids = {
+        agent_id for run in runs for agent_id in (run.agent_id, run.target_agent_id)
+        if agent_id is not None
+    }
+    users = {
+        item.id: item for item in db.query(User).filter(User.id.in_(user_ids)).all()
+    }
+    scripts = {
+        item.id: item for item in db.query(Script).filter(Script.id.in_(script_ids)).all()
+    }
+    versions = {
+        (item.script_id, item.version): item
+        for item in db.query(ScriptVersion).filter(
+            tuple_(ScriptVersion.script_id, ScriptVersion.version).in_(version_keys)
+        ).all()
+    }
+    agents = {}
+    if agent_ids:
+        agents = {
+            item.id: item for item in db.query(Agent).filter(Agent.id.in_(agent_ids)).all()
+        }
+
+    result = []
+    schema = RunDetail if detail else RunBrief
+    for run in runs:
+        item = schema.model_validate(run)
+        user = users.get(run.user_id)
+        script = scripts.get(run.script_id)
+        version = versions.get((run.script_id, run.script_version))
+        agent = agents.get(run.agent_id)
+        target_agent = agents.get(run.target_agent_id)
+        item.username = user.display_name if user else None
+        item.script_name = script.name if script else None
+        item.script_semantic_version = version.semantic_version if version else None
+        item.agent_name = agent.machine_name if agent else None
+        item.target_agent_name = target_agent.machine_name if target_agent else None
+        item.has_result_files = _has_result_files(run.result_files)
+        # Managed results live on the controlled device. Admin/browser responses
+        # expose only availability, never the device's absolute local path.
+        if run.dispatch_type in ("managed_manual", "managed_schedule"):
+            item.result_files = None
+        result.append(item)
+    return result
+
+
 def _enrich_run(run, db, detail=False):
-    """Keep numeric revisions for storage while exposing script contract SemVer to clients."""
-    item = RunDetail.model_validate(run) if detail else RunBrief.model_validate(run)
-    user = db.query(User).filter(User.id == run.user_id).first()
-    script = db.query(Script).filter(Script.id == run.script_id).first()
-    version = db.query(ScriptVersion).filter(
-        ScriptVersion.script_id == run.script_id,
-        ScriptVersion.version == run.script_version,
-    ).first()
-    item.username = user.display_name if user else None
-    item.script_name = script.name if script else None
-    item.script_semantic_version = version.semantic_version if version else None
-    return item
+    """Backward-compatible single-run wrapper around the batched enricher."""
+    return _enrich_runs([run], db, detail=detail)[0]
 
 
 class RunStatusUpdate(BaseModel):
@@ -164,6 +218,9 @@ def list_runs(
     script_id: Optional[int] = None,
     status: Optional[str] = None,
     user_id: Optional[int] = None,
+    agent_id: Optional[int] = None,
+    schedule_id: Optional[int] = None,
+    dispatch_type: Optional[Literal["standard", "managed_manual", "managed_schedule"]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     limit: int = Query(default=50, le=200),
@@ -186,6 +243,12 @@ def list_runs(
         q = q.filter(Run.status == status)
     if user_id:
         q = q.filter(Run.user_id == user_id)
+    if agent_id is not None:
+        q = q.filter(or_(Run.target_agent_id == agent_id, Run.agent_id == agent_id))
+    if schedule_id is not None:
+        q = q.filter(Run.schedule_id == schedule_id)
+    if dispatch_type is not None:
+        q = q.filter(Run.dispatch_type == dispatch_type)
     if date_from:
         from datetime import datetime as dt
         try:
@@ -201,7 +264,7 @@ def list_runs(
 
     runs = q.order_by(Run.created_at.desc()).offset(offset).limit(limit).all()
 
-    return [_enrich_run(run, db) for run in runs]
+    return _enrich_runs(runs, db)
 
 
 @router.get("/filter-options/users")

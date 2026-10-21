@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from app import scheduler
 from app.models import Agent, AuditLog, ManagedSchedule, Run, User
+from sqlalchemy import event
 
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -194,6 +195,193 @@ def test_manual_dispatch_is_blocked_while_device_is_running(
     assert busy_agent["running_dispatch_type"] == "managed_manual"
     assert blocked.status_code == 409
     assert "正在执行任务" in blocked.json()["detail"]
+
+
+def test_managed_agent_list_aggregates_device_work_without_n_plus_one_or_result_paths(
+    client, admin_token, dev_token, fresh_db
+):
+    TestSession, engine = fresh_db
+    script_id = _upload(client, admin_token)
+    agent = _register_managed(client, dev_token, "aggregate-device", "aggregate-device")
+    headers = _headers(admin_token)
+
+    pending = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/pending.txt"}},
+        headers=headers,
+    ).json()
+    expired = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/expired.txt"}},
+        headers=headers,
+    ).json()
+    failed = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/failed.txt"}},
+        headers=headers,
+    ).json()
+    current = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/current.txt"}},
+        headers=headers,
+    ).json()
+
+    db = TestSession()
+    expired_row = db.query(Run).filter(Run.id == expired["id"]).one()
+    expired_row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+    db.close()
+
+    claimed_failed = client.post(
+        "/api/runs/{}/claim".format(failed["id"]),
+        json={"agent_id": agent["id"]},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert claimed_failed.status_code == 200
+    completed = client.patch(
+        "/api/runs/{}/status".format(failed["id"]),
+        json={
+            "status": "failed",
+            "agent_id": agent["id"],
+            "error_msg": "输出文件生成失败\n请检查磁盘",
+            "result_files": '[{"path":"C:/private/results/report.xlsx"}]',
+        },
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert completed.status_code == 200
+    claimed_current = client.post(
+        "/api/runs/{}/claim".format(current["id"]),
+        json={"agent_id": agent["id"]},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert claimed_current.status_code == 200
+
+    statements = []
+
+    def record_statement(_connection, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        response = client.get("/api/admin/managed-agents", headers=headers)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert response.status_code == 200
+    item = next(row for row in response.json() if row["id"] == agent["id"])
+    assert item["pending_count"] == 1
+    assert item["earliest_pending"]["id"] == pending["id"]
+    assert item["current_run"]["id"] == current["id"]
+    assert item["latest_run"]["id"] == failed["id"]
+    assert item["latest_run"]["error_summary"] == "输出文件生成失败 请检查磁盘"
+    assert item["latest_run"]["has_result_files"] is True
+    assert "C:/private" not in response.text
+    detail = client.get(
+        "/api/runs/{}".format(failed["id"]), headers=headers
+    )
+    assert detail.json()["result_files"] is None
+    assert detail.json()["has_result_files"] is True
+    assert detail.json()["target_agent_name"] == "aggregate-device"
+    assert "C:/private" not in detail.text
+    run_selects = [sql for sql in statements if " runs" in sql.lower()]
+    assert len(run_selects) == 3
+
+
+def test_failed_expired_and_cancelled_managed_runs_can_retry_without_mutation(
+    client, admin_token, dev_token, fresh_db
+):
+    TestSession, _ = fresh_db
+    script_id = _upload(client, admin_token)
+    agent = _register_managed(client, dev_token, "retry-device", "retry-device")
+    originals = []
+    for status in ("failed", "expired", "cancelled"):
+        run = client.post(
+            "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+            json={"script_id": script_id, "params": {"url_file": "C:/{}.txt".format(status)}},
+            headers=_headers(admin_token),
+        ).json()
+        originals.append((run, status))
+
+    finished_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db = TestSession()
+    for run, status in originals:
+        row = db.query(Run).filter(Run.id == run["id"]).one()
+        row.status = status
+        row.finished_at = finished_at
+        row.error_msg = "original {}".format(status)
+    db.commit()
+    db.close()
+
+    retry_ids = []
+    for original, status in originals:
+        retried = client.post(
+            "/api/admin/managed-runs/{}/retry".format(original["id"]),
+            headers=_headers(admin_token),
+        )
+        assert retried.status_code == 200
+        payload = retried.json()
+        retry_ids.append(payload["id"])
+        assert payload["retry_of_run_id"] == original["id"]
+        assert payload["status"] == "pending"
+        assert payload["target_agent_id"] == agent["id"]
+        assert payload["dispatch_type"] == "managed_manual"
+
+    db = TestSession()
+    for original, status in originals:
+        saved = db.query(Run).filter(Run.id == original["id"]).one()
+        assert saved.status == status
+        assert saved.error_msg == "original {}".format(status)
+        assert saved.retry_of_run_id is None
+    assert db.query(Run).filter(Run.id.in_(retry_ids), Run.retry_of_run_id.is_not(None)).count() == 3
+    db.close()
+
+    not_terminal = client.post(
+        "/api/admin/managed-runs/{}/retry".format(retry_ids[0]),
+        headers=_headers(admin_token),
+    )
+    denied = client.post(
+        "/api/admin/managed-runs/{}/retry".format(originals[0][0]["id"]),
+        headers=_headers(dev_token),
+    )
+    assert not_terminal.status_code == 409
+    assert denied.status_code == 403
+
+
+def test_failed_schedule_run_retry_preserves_schedule_lineage(
+    client, admin_token, dev_token, fresh_db
+):
+    TestSession, _ = fresh_db
+    script_id = _upload(client, admin_token)
+    agent = _register_managed(client, dev_token, "schedule-retry-agent", "schedule-retry-agent")
+    schedule = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "可重试计划", "agent_id": agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/schedule-retry.txt"}, "interval_seconds": 3600,
+        },
+        headers=_headers(admin_token),
+    ).json()
+    original = client.post(
+        "/api/admin/managed-schedules/{}/run-now".format(schedule["id"]),
+        headers=_headers(admin_token),
+    ).json()
+    db = TestSession()
+    row = db.query(Run).filter(Run.id == original["id"]).one()
+    row.status = "failed"
+    row.finished_at = datetime.now(timezone.utc)
+    db.commit()
+    db.close()
+
+    retried = client.post(
+        "/api/admin/managed-runs/{}/retry".format(original["id"]),
+        headers=_headers(admin_token),
+    )
+
+    assert retried.status_code == 200
+    assert retried.json()["dispatch_type"] == "managed_schedule"
+    assert retried.json()["schedule_id"] == schedule["id"]
+    assert retried.json()["retry_of_run_id"] == original["id"]
 
 
 def test_schedule_crud_toggle_and_run_now(client, admin_token, dev_token):

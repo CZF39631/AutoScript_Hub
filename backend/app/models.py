@@ -168,6 +168,7 @@ class Run(Base):
         ),
         Index("ix_runs_target_pending", "target_agent_id", "status", "scheduled_for"),
         Index("ix_runs_schedule_status", "schedule_id", "status"),
+        Index("ix_runs_retry_of_run_id", "retry_of_run_id"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -184,6 +185,7 @@ class Run(Base):
     requested_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     dispatch_type = Column(String(30), nullable=False, default="standard")
     schedule_id = Column(Integer, ForeignKey("managed_schedules.id"), nullable=True)
+    retry_of_run_id = Column(Integer, ForeignKey("runs.id"), nullable=True)
     scheduled_for = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     claimed_at = Column(DateTime, nullable=True)

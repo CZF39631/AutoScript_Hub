@@ -18,6 +18,8 @@ import {
   scheduleStatusCounts, shortMonthSkipDay, statusPresentation, thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
+import usePageFocused from '../hooks/usePageFocused'
+import { refreshDelay } from '../utils/runHistory'
 
 const AGENTS_PER_PAGE = 24
 
@@ -160,9 +162,12 @@ function ThumbnailScreen({ agent }) {
   )
 }
 
-function AgentCard({ agent, updating, deleting, scheduleSummary, onToggle, onDispatch, onDelete }) {
-  const status = agent.running_run_id
-    ? { color: 'processing', text: agent.running_dispatch_type === 'managed_schedule' ? '运行中（定时）' : '运行中（临时）' }
+function AgentCard({ agent, updating, deleting, scheduleSummary, onToggle, onDispatch, onDelete, onOpenRun, onOpenHistory }) {
+  const currentRun = agent.current_run
+  const latestRun = agent.latest_run
+  const earliestPending = agent.earliest_pending
+  const status = currentRun || agent.running_run_id
+    ? { color: 'processing', text: (currentRun?.dispatch_type || agent.running_dispatch_type) === 'managed_schedule' ? '运行中（定时）' : '运行中（临时）' }
     : statusPresentation(agent.status, agent.enabled)
   const updatedAt = thumbnailTimestamp(agent)
 
@@ -193,6 +198,50 @@ function AgentCard({ agent, updating, deleting, scheduleSummary, onToggle, onDis
         </div>
       </dl>
 
+      <section className="managed-agent-card__runs" aria-label="任务状态摘要">
+        <div className="managed-agent-card__run-row">
+          <span>待领取</span>
+          <div>
+            <strong>{agent.pending_count || 0} 项</strong>
+            {earliestPending && (
+              <Button type="link" size="small" onClick={() => onOpenRun(earliestPending.id)}>
+                最早 #{earliestPending.id}
+              </Button>
+            )}
+          </div>
+          <small>{earliestPending?.expires_at ? `截止 ${formatServerTime(earliestPending.expires_at)}` : '当前无待领取任务'}</small>
+        </div>
+        <div className="managed-agent-card__run-row">
+          <span>当前运行</span>
+          {currentRun ? (
+            <>
+              <Button type="link" size="small" onClick={() => onOpenRun(currentRun.id)}>
+                #{currentRun.id} · {currentRun.script_name || `脚本 ${currentRun.script_id}`}
+              </Button>
+              <small>{currentRun.started_at ? `开始于 ${formatServerTime(currentRun.started_at)}` : '正在准备执行'}</small>
+            </>
+          ) : <small>当前未运行</small>}
+        </div>
+        <div className="managed-agent-card__run-row">
+          <span>最近结果</span>
+          {latestRun ? (
+            <>
+              <div>
+                <Tag color={latestRun.status === 'success' ? 'green' : latestRun.status === 'failed' ? 'red' : 'default'}>
+                  {runStatusLabels[latestRun.status] || latestRun.status}
+                </Tag>
+                <Button type="link" size="small" onClick={() => onOpenRun(latestRun.id)}>#{latestRun.id}</Button>
+                {latestRun.has_result_files && <Tag>有结果文件</Tag>}
+              </div>
+              <small>{latestRun.finished_at ? formatServerTime(latestRun.finished_at) : '结束时间未知'}</small>
+              {latestRun.error_summary && (
+                <p className="managed-agent-card__error" title={latestRun.error_summary}>{latestRun.error_summary}</p>
+              )}
+            </>
+          ) : <small>暂无已结束任务</small>}
+        </div>
+      </section>
+
       <div className="managed-agent-card__actions">
         <div className="managed-agent-toggle">
           <span>允许接收任务</span>
@@ -204,6 +253,7 @@ function AgentCard({ agent, updating, deleting, scheduleSummary, onToggle, onDis
           />
         </div>
         <div className="managed-agent-card__primary-actions">
+          <Button type="text" icon={<EyeOutlined />} onClick={() => onOpenHistory(agent.id)}>历史</Button>
           <Tooltip title={!agent.enabled ? '设备已停用，仍可查看已安排的定时任务' : ''}>
             <Button type="primary" icon={<SendOutlined />} onClick={() => onDispatch(agent)}>
               发布任务
@@ -229,6 +279,7 @@ function AgentCard({ agent, updating, deleting, scheduleSummary, onToggle, onDis
 
 export default function ManagedAgents({ embedded = false }) {
   const navigate = useNavigate()
+  const pageFocused = usePageFocused()
   const [agents, setAgents] = useState([])
   const [schedules, setSchedules] = useState([])
   const [scripts, setScripts] = useState([])
@@ -297,12 +348,21 @@ export default function ManagedAgents({ embedded = false }) {
 
   useEffect(() => {
     load()
-    const timer = setInterval(() => load({ quiet: true }), 60_000)
-    return () => {
-      clearInterval(timer)
-      listRequest.current?.abort()
-    }
+    return () => listRequest.current?.abort()
   }, [load])
+
+  const hasActiveWork = useMemo(
+    () => agents.some(agent => (agent.pending_count || 0) > 0 || agent.current_run || agent.running_run_id),
+    [agents],
+  )
+
+  useEffect(() => {
+    const timer = setInterval(
+      () => load({ quiet: true }),
+      refreshDelay({ hasActive: hasActiveWork, isFocused: pageFocused }),
+    )
+    return () => clearInterval(timer)
+  }, [hasActiveWork, load, pageFocused])
 
   const loadScriptDetail = useCallback(async (scriptId, applyDefaults = true) => {
     if (!scriptId) return
@@ -536,7 +596,7 @@ export default function ManagedAgents({ embedded = false }) {
   const dispatchSchedules = schedulesByAgent.get(dispatchAgent?.id) || []
   const dispatchScheduleCounts = scheduleStatusCounts(dispatchSchedules)
   const taskFieldsDisabled = selectedTaskType === 'manual'
-    ? !dispatchAgent?.enabled || Boolean(dispatchAgent?.running_run_id)
+    ? !dispatchAgent?.enabled || Boolean(dispatchAgent?.current_run || dispatchAgent?.running_run_id)
     : !dispatchAgent?.enabled && !editingSchedule
 
   return (
@@ -605,6 +665,8 @@ export default function ManagedAgents({ embedded = false }) {
                 onToggle={toggleAgent}
                 onDispatch={openDispatch}
                 onDelete={deleteAgent}
+                onOpenRun={runId => navigate(`/runs/${runId}`)}
+                onOpenHistory={agentId => navigate(`/runs?agent_id=${agentId}`)}
               />
             ))}
           </div>
@@ -651,12 +713,12 @@ export default function ManagedAgents({ embedded = false }) {
         )}
         destroyOnHidden
       >
-        {dispatchAgent?.running_run_id ? (
+        {dispatchAgent?.current_run || dispatchAgent?.running_run_id ? (
           <Alert
             className="managed-drawer-alert"
             type="warning"
             showIcon
-            title={`设备正在执行${dispatchAgent.running_dispatch_type === 'managed_schedule' ? '定时' : '临时'}任务 #${dispatchAgent.running_run_id}`}
+            title={`设备正在执行${(dispatchAgent.current_run?.dispatch_type || dispatchAgent.running_dispatch_type) === 'managed_schedule' ? '定时' : '临时'}任务 #${dispatchAgent.current_run?.id || dispatchAgent.running_run_id}`}
             description="当前任务结束前不能再发布临时任务，但仍可切换到定时任务进行查看或创建。"
           />
         ) : dispatchAgent?.status !== 'online' ? (

@@ -14,7 +14,7 @@ from app.auth import require_role
 from app.database import get_db
 from app.models import Agent, Environment, ManagedSchedule, Run, Script, User
 from app.routers.agents import AgentItem
-from app.routers.runs import _enrich_run
+from app.routers.runs import _enrich_run, _has_result_files
 from app.schemas import RunBrief
 from app.services.agent_thumbnails import thumbnail_path
 from app.services.audit import write_audit
@@ -27,9 +27,29 @@ from app.services.schedule_time import (
 router = APIRouter(prefix="/api/admin", tags=["managed-agents"])
 
 
+class ManagedRunSummary(BaseModel):
+    id: int
+    status: str
+    dispatch_type: str
+    script_id: int
+    script_name: Optional[str] = None
+    schedule_id: Optional[int] = None
+    scheduled_for: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    error_summary: Optional[str] = None
+    has_result_files: bool = False
+
+
 class ManagedAgentItem(AgentItem):
     thumbnail_updated_at: Optional[datetime] = None
     thumbnail_size: Optional[int] = None
+    pending_count: int = 0
+    earliest_pending: Optional[ManagedRunSummary] = None
+    current_run: Optional[ManagedRunSummary] = None
+    latest_run: Optional[ManagedRunSummary] = None
+    # Retained for older admin clients.
     running_run_id: Optional[int] = None
     running_dispatch_type: Optional[str] = None
 
@@ -155,6 +175,40 @@ def _schedule_or_404(db: Session, schedule_id: int) -> ManagedSchedule:
     return schedule
 
 
+def _error_summary(value: Optional[str], limit: int = 240) -> Optional[str]:
+    if not value:
+        return None
+    compact = " ".join(value.split())
+    return compact if len(compact) <= limit else "{}…".format(compact[:limit - 1])
+
+
+def _managed_run_summaries(db: Session, runs: List[Run]) -> Dict[int, ManagedRunSummary]:
+    if not runs:
+        return {}
+    script_ids = {run.script_id for run in runs}
+    scripts = {
+        item.id: item.name
+        for item in db.query(Script.id, Script.name).filter(Script.id.in_(script_ids)).all()
+    }
+    return {
+        run.id: ManagedRunSummary(
+            id=run.id,
+            status=run.status,
+            dispatch_type=run.dispatch_type,
+            script_id=run.script_id,
+            script_name=scripts.get(run.script_id),
+            schedule_id=run.schedule_id,
+            scheduled_for=run.scheduled_for,
+            expires_at=run.expires_at,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            error_summary=_error_summary(run.error_msg),
+            has_result_files=_has_result_files(run.result_files),
+        )
+        for run in runs
+    }
+
+
 def _latest_runs_by_schedule(
     db: Session, schedule_ids: List[int]
 ) -> Dict[int, Run]:
@@ -254,20 +308,73 @@ def list_managed_agents(
         query = query.filter(Agent.enabled == enabled)
     agents = query.order_by(Agent.enabled.desc(), Agent.last_heartbeat.desc()).all()
     agent_ids = [agent.id for agent in agents]
-    running_by_agent = {}
+    pending_count = {agent_id: 0 for agent_id in agent_ids}
+    pending_by_agent: Dict[int, Run] = {}
+    running_by_agent: Dict[int, Run] = {}
+    latest_by_agent: Dict[int, Run] = {}
+    selected_runs: List[Run] = []
     if agent_ids:
-        running = db.query(Run).filter(
+        now = datetime.now(timezone.utc)
+        pending_runs = db.query(Run).filter(
+            Run.target_agent_id.in_(agent_ids),
+            Run.status == "pending",
+            Run.is_deleted == False,
+            or_(Run.expires_at.is_(None), Run.expires_at > now),
+        ).order_by(
+            Run.target_agent_id.asc(), Run.scheduled_for.asc(), Run.created_at.asc(), Run.id.asc()
+        ).all()
+        for run in pending_runs:
+            pending_count[run.target_agent_id] += 1
+            pending_by_agent.setdefault(run.target_agent_id, run)
+
+        running_runs = db.query(Run).filter(
             Run.status == "running",
             Run.is_deleted == False,
             or_(Run.target_agent_id.in_(agent_ids), Run.agent_id.in_(agent_ids)),
-        ).order_by(Run.created_at.asc()).all()
-        for run in running:
-            device_id = run.agent_id or run.target_agent_id
-            if device_id in agent_ids and device_id not in running_by_agent:
-                running_by_agent[device_id] = run
+        ).order_by(Run.started_at.asc(), Run.id.asc()).all()
+        for run in running_runs:
+            device_id = run.target_agent_id or run.agent_id
+            if device_id in pending_count:
+                running_by_agent.setdefault(device_id, run)
+
+        device_id_expr = func.coalesce(Run.target_agent_id, Run.agent_id)
+        ranked_terminal = db.query(
+            Run.id.label("run_id"),
+            device_id_expr.label("device_id"),
+            func.row_number().over(
+                partition_by=device_id_expr,
+                order_by=(Run.finished_at.desc(), Run.id.desc()),
+            ).label("position"),
+        ).filter(
+            device_id_expr.in_(agent_ids),
+            Run.status.in_(["success", "failed", "cancelled", "expired"]),
+            Run.dispatch_type.in_(["managed_manual", "managed_schedule"]),
+            Run.is_deleted == False,
+        ).subquery()
+        terminal_rows = db.query(Run, ranked_terminal.c.device_id).join(
+            ranked_terminal, Run.id == ranked_terminal.c.run_id
+        ).filter(ranked_terminal.c.position == 1).all()
+        for run, device_id in terminal_rows:
+            latest_by_agent[device_id] = run
+
+        selected_runs = list({
+            run.id: run for run in (
+                list(pending_by_agent.values())
+                + list(running_by_agent.values())
+                + list(latest_by_agent.values())
+            )
+        }.values())
+    summaries = _managed_run_summaries(db, selected_runs)
     return [
         ManagedAgentItem.model_validate(agent).model_copy(
             update={
+                "pending_count": pending_count.get(agent.id, 0),
+                "earliest_pending": summaries.get(pending_by_agent.get(agent.id).id)
+                if pending_by_agent.get(agent.id) else None,
+                "current_run": summaries.get(running_by_agent.get(agent.id).id)
+                if running_by_agent.get(agent.id) else None,
+                "latest_run": summaries.get(latest_by_agent.get(agent.id).id)
+                if latest_by_agent.get(agent.id) else None,
                 "running_run_id": running_by_agent.get(agent.id).id
                 if running_by_agent.get(agent.id) else None,
                 "running_dispatch_type": running_by_agent.get(agent.id).dispatch_type
@@ -426,6 +533,82 @@ def dispatch_managed_run(
         detail="agent={} script={}".format(agent.id, req.script_id),
     )
     return _enrich_run(run, db)
+
+
+@router.post("/managed-runs/{run_id}/retry", response_model=RunBrief)
+def retry_managed_run(
+    run_id: int,
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    original = db.query(Run).filter(
+        Run.id == run_id,
+        Run.dispatch_type.in_(["managed_manual", "managed_schedule"]),
+        Run.is_deleted == False,
+    ).first()
+    if not original:
+        raise HTTPException(status_code=404, detail="托管运行记录不存在")
+    if original.status not in ("failed", "expired", "cancelled"):
+        raise HTTPException(status_code=409, detail="仅失败、过期或已取消的托管任务可重试")
+    if original.target_agent_id is None:
+        raise HTTPException(status_code=409, detail="原任务没有目标设备，无法重试")
+
+    agent = _managed_agent_or_404(db, original.target_agent_id, require_enabled=True)
+    owner = db.query(User).filter(
+        User.id == agent.user_id,
+        User.status == "active",
+        User.is_deleted == False,
+    ).first()
+    if not owner:
+        raise HTTPException(status_code=409, detail="Agent 所属用户不可用")
+    running = db.query(Run).filter(
+        Run.status == "running",
+        Run.is_deleted == False,
+        or_(Run.target_agent_id == agent.id, Run.agent_id == agent.id),
+    ).first()
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail="设备正在执行任务 #{}，暂时不能重试".format(running.id),
+        )
+    try:
+        params = json.loads(original.params or "{}")
+    except (TypeError, json.JSONDecodeError):
+        raise HTTPException(status_code=409, detail="原任务参数已损坏，无法重试")
+    if not isinstance(params, dict):
+        raise HTTPException(status_code=409, detail="原任务参数格式无效，无法重试")
+
+    lifetime_seconds = 3600
+    if original.scheduled_for is not None and original.expires_at is not None:
+        lifetime_seconds = int((original.expires_at - original.scheduled_for).total_seconds())
+    lifetime_seconds = max(60, min(604800, lifetime_seconds))
+    now = datetime.now(timezone.utc)
+    retry = create_validated_run(
+        db,
+        run_user=owner,
+        script_id=original.script_id,
+        params=params,
+        environment_id=original.environment_id,
+        requested_by=current_user.id,
+        dispatch_type=original.dispatch_type,
+        target_agent_id=agent.id,
+        schedule_id=original.schedule_id,
+        scheduled_for=now,
+        expires_at=now + timedelta(seconds=lifetime_seconds),
+        commit=False,
+    )
+    retry.retry_of_run_id = original.id
+    db.commit()
+    db.refresh(retry)
+    write_audit(
+        current_user.id,
+        current_user.username,
+        "managed_run.retry",
+        target_type="run",
+        target_id=retry.id,
+        detail="retry_of={} agent={}".format(original.id, agent.id),
+    )
+    return _enrich_run(retry, db)
 
 
 @router.get("/managed-schedules", response_model=List[ManagedScheduleItem])

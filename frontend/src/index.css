@@ -286,9 +286,19 @@ button, input, select, textarea { font: inherit; }
 .managed-agent-card__details > div { min-width: 0; padding: 5px 0; display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; border-bottom: 1px solid rgba(0,0,0,.055); font-size: 11px; }
 .managed-agent-card__details dt { color: var(--apple-secondary); }
 .managed-agent-card__details dd { margin: 0; overflow: hidden; color: #363638; font-variant-numeric: tabular-nums; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
-.managed-agent-card__actions { margin-top: 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.managed-agent-card__runs { margin-top: 10px; border-top: 1px solid rgba(0,0,0,.075); }
+.managed-agent-card__run-row { min-width: 0; padding: 8px 0; display: grid; grid-template-columns: 62px minmax(0, 1fr); align-items: baseline; gap: 3px 8px; border-bottom: 1px solid rgba(0,0,0,.055); }
+.managed-agent-card__run-row > span { color: var(--apple-secondary); font-size: 11px; }
+.managed-agent-card__run-row > div { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.managed-agent-card__run-row strong { color: #363638; font-size: 12px; font-variant-numeric: tabular-nums; }
+.managed-agent-card__run-row .ant-btn-link { min-width: 0; height: auto; padding: 0; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-card__run-row > .ant-btn-link { justify-self: end; max-width: 100%; }
+.managed-agent-card__run-row .ant-tag { margin-inline-end: 0; font-size: 10px; line-height: 18px; }
+.managed-agent-card__run-row > small { grid-column: 2; overflow: hidden; color: var(--apple-secondary); font-size: 10px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-card__error { grid-column: 1 / -1; margin: 2px 0 0; display: -webkit-box; overflow: hidden; color: #b42318; font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.managed-agent-card__actions { margin-top: 10px; display: grid; grid-template-columns: 1fr; align-items: center; gap: 8px; }
 .managed-agent-card__actions .ant-btn { height: 30px; padding-inline: 10px; font-size: 12px; }
-.managed-agent-card__primary-actions { display: flex; align-items: center; gap: 2px; }
+.managed-agent-card__primary-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
 .managed-agent-card__primary-actions > .ant-btn:last-child { width: 30px; padding-inline: 0; }
 .managed-agent-toggle { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #48484a; font-size: 12px; }
 .managed-agent-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
