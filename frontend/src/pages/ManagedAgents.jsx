@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Drawer, Empty, Form, Input, InputNumber, Pagination, Popconfirm, Segmented,
+  Alert, Button, Checkbox, Drawer, Empty, Form, Input, InputNumber, Pagination, Popconfirm, Segmented,
   Select, Skeleton, Space, Switch, Tag, Tooltip, message,
 } from 'antd'
 import {
@@ -11,8 +11,8 @@ import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
-  apiErrorMessage, formatInterval, intervalToSeconds, isThumbnailStale, statusPresentation,
-  thumbnailTimestamp,
+  apiErrorMessage, buildSchedulePayload, buildVisualCron, describeCron, formatSchedule,
+  intervalToSeconds, isThumbnailStale, isValidCronExpression, statusPresentation, thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
 
@@ -182,6 +182,13 @@ export default function ManagedAgents({ embedded = false }) {
   const [form] = Form.useForm()
   const selectedScriptId = Form.useWatch('script_id', form)
   const selectedTaskType = Form.useWatch('task_type', form) || 'manual'
+  const selectedScheduleType = Form.useWatch('schedule_type', form) || 'interval'
+  const selectedCronMode = Form.useWatch('cron_mode', form) || 'visual'
+  const selectedCronPreset = Form.useWatch('cron_preset', form) || 'daily'
+  const cronValues = Form.useWatch([], form) || {}
+  const cronExpression = selectedCronMode === 'advanced'
+    ? cronValues.cron_expression
+    : buildVisualCron(cronValues)
 
   const load = useCallback(async ({ quiet = false } = {}) => {
     if (quiet && listRequest.current) return
@@ -283,8 +290,17 @@ export default function ManagedAgents({ embedded = false }) {
     form.setFieldsValue({
       task_type: 'manual',
       schedule_name: '',
+      schedule_type: 'interval',
       interval_value: 1,
       interval_unit: 'hour',
+      cron_mode: 'visual',
+      cron_preset: 'daily',
+      cron_hour: 9,
+      cron_minute: 0,
+      cron_weekdays: [1],
+      cron_monthday: 1,
+      cron_expression: '0 9 * * *',
+      timezone: 'Asia/Shanghai',
       expires_value: 1,
       expires_unit: 'hour',
       schedule_enabled: true,
@@ -336,26 +352,26 @@ export default function ManagedAgents({ embedded = false }) {
       return
     }
     const isSchedule = values.task_type === 'schedule'
-    const interval = isSchedule
-      ? intervalToSeconds(values.interval_value, values.interval_unit)
-      : null
-    if (isSchedule && (!interval || interval < 60 || interval > 31536000)) {
+    const isIntervalSchedule = isSchedule && values.schedule_type !== 'cron'
+    const interval = isIntervalSchedule ? intervalToSeconds(values.interval_value, values.interval_unit) : null
+    if (isIntervalSchedule && (!interval || interval < 60 || interval > 31536000)) {
       message.error('执行间隔须在 1 分钟到 365 天之间')
+      return
+    }
+    const expression = values.cron_mode === 'advanced' ? values.cron_expression : buildVisualCron(values)
+    if (isSchedule && values.schedule_type === 'cron' && !isValidCronExpression(expression)) {
+      message.error('请输入有效的五段 Cron 表达式')
       return
     }
     setSubmitting(true)
     try {
       if (isSchedule) {
-        await api.post('/api/admin/managed-schedules', {
-          name: values.schedule_name.trim(),
+        await api.post('/api/admin/managed-schedules', buildSchedulePayload({
+          ...values,
+          name: values.schedule_name,
           agent_id: dispatchAgent.id,
-          script_id: values.script_id,
-          params: values.params || {},
-          environment_id: values.environment_id ?? null,
-          interval_seconds: interval,
-          expires_after_seconds: expires,
           enabled: values.schedule_enabled,
-        })
+        }))
         message.success('定时任务已创建')
       } else {
         const response = await api.post(`/api/admin/managed-agents/${dispatchAgent.id}/runs`, {
@@ -369,7 +385,12 @@ export default function ManagedAgents({ embedded = false }) {
       setDispatchAgent(null)
       load({ quiet: true })
     } catch (error) {
-      message.error(apiErrorMessage(error, isSchedule ? '定时任务创建失败' : '临时任务发布失败'))
+      const cronUnsupported = isSchedule && values.schedule_type === 'cron' && [400, 404, 422].includes(error?.response?.status)
+      const fallback = cronUnsupported
+        ? '当前服务端可能尚未支持 Cron 定时，请升级服务端或改用固定间隔'
+        : isSchedule ? '定时任务创建失败' : '临时任务发布失败'
+      const errorText = apiErrorMessage(error, fallback)
+      message.error(cronUnsupported && errorText !== fallback ? `${errorText}；如服务端版本较旧，请升级或改用固定间隔` : errorText)
     } finally {
       setSubmitting(false)
     }
@@ -470,7 +491,8 @@ export default function ManagedAgents({ embedded = false }) {
         title={`向 ${dispatchAgent?.machine_name || ''} 发布任务`}
         open={Boolean(dispatchAgent)}
         onClose={() => !submitting && setDispatchAgent(null)}
-        width={520}
+        width={620}
+        rootClassName="managed-dispatch-drawer"
         extra={(
           <Button
             type="primary"
@@ -520,7 +542,7 @@ export default function ManagedAgents({ embedded = false }) {
                   <div className="managed-dispatch-schedules__list">
                     {(schedulesByAgent.get(dispatchAgent?.id) || []).map(schedule => (
                       <div key={schedule.id}>
-                        <div><strong>{schedule.name}</strong><span>{formatInterval(schedule.interval_seconds)}</span></div>
+                        <div><strong>{schedule.name}</strong><span>{formatSchedule(schedule)}</span></div>
                         <small>{schedule.enabled ? `下次 ${formatServerTime(schedule.next_run_at)}` : '已暂停'}</small>
                       </div>
                     ))}
@@ -531,16 +553,49 @@ export default function ManagedAgents({ embedded = false }) {
               <Form.Item name="schedule_name" label="任务名称" rules={selectedTaskType === 'schedule' ? [{ required: true, whitespace: true, message: '请输入任务名称' }] : []}>
                 <Input maxLength={200} placeholder="例如：每小时同步库存" />
               </Form.Item>
-              <Form.Item label="执行间隔" required>
-                <Space.Compact block>
-                  <Form.Item name="interval_value" noStyle>
-                    <InputNumber min={1} style={{ width: '70%' }} />
-                  </Form.Item>
-                  <Form.Item name="interval_unit" noStyle>
-                    <Select style={{ width: '30%' }} options={durationUnits} />
-                  </Form.Item>
-                </Space.Compact>
+              <Form.Item name="schedule_type" label="执行方式">
+                <Segmented block options={[{ label: '固定间隔', value: 'interval' }, { label: 'Cron', value: 'cron' }]} />
               </Form.Item>
+
+              {selectedScheduleType === 'interval' ? (
+                <Form.Item label="执行间隔" required>
+                  <Space.Compact block>
+                    <Form.Item name="interval_value" noStyle><InputNumber min={1} style={{ width: '70%' }} /></Form.Item>
+                    <Form.Item name="interval_unit" noStyle><Select style={{ width: '30%' }} options={durationUnits} /></Form.Item>
+                  </Space.Compact>
+                </Form.Item>
+              ) : (
+                <div className="managed-cron-config">
+                  <Form.Item name="cron_mode" label="Cron 配置方式">
+                    <Segmented block options={[{ label: '可视化点选', value: 'visual' }, { label: '高级表达式', value: 'advanced' }]} />
+                  </Form.Item>
+                  {selectedCronMode === 'visual' ? (
+                    <>
+                      <Form.Item name="cron_preset" label="执行周期">
+                        <Segmented block options={[{ label: '每小时', value: 'hourly' }, { label: '每天', value: 'daily' }, { label: '每周', value: 'weekly' }, { label: '每月', value: 'monthly' }]} />
+                      </Form.Item>
+                      <div className="managed-cron-grid">
+                        {selectedCronPreset !== 'hourly' && <Form.Item name="cron_hour" label="小时"><Select options={Array.from({ length: 24 }, (_, value) => ({ value, label: `${String(value).padStart(2, '0')} 时` }))} /></Form.Item>}
+                        <Form.Item name="cron_minute" label="分钟"><Select options={Array.from({ length: 60 }, (_, value) => ({ value, label: `${String(value).padStart(2, '0')} 分` }))} /></Form.Item>
+                        {selectedCronPreset === 'monthly' && <Form.Item name="cron_monthday" label="日期"><Select options={Array.from({ length: 31 }, (_, index) => ({ value: index + 1, label: `${index + 1} 日` }))} /></Form.Item>}
+                      </div>
+                      {selectedCronPreset === 'weekly' && (
+                        <Form.Item name="cron_weekdays" label="星期" rules={[{ required: true, message: '请至少选择一天' }]}>
+                          <Checkbox.Group className="managed-weekday-grid" options={['日', '一', '二', '三', '四', '五', '六'].map((label, value) => ({ label: `周${label}`, value }))} />
+                        </Form.Item>
+                      )}
+                    </>
+                  ) : (
+                    <Form.Item name="cron_expression" label="Cron 表达式" extra="分　时　日　月　星期" rules={[{ validator: (_, value) => isValidCronExpression(value) ? Promise.resolve() : Promise.reject(new Error('请输入有效的五段表达式')) }]}>
+                      <Input className="managed-cron-input" placeholder="0 9 * * 1-5" spellCheck={false} />
+                    </Form.Item>
+                  )}
+                  <Form.Item name="timezone" label="时区"><Select showSearch options={[{ value: 'Asia/Shanghai', label: 'Asia/Shanghai（北京时间）' }, { value: 'UTC', label: 'UTC' }]} /></Form.Item>
+                  <div className={`managed-cron-summary${isValidCronExpression(cronExpression) ? '' : ' is-invalid'}`} aria-live="polite">
+                    <span>执行摘要</span><strong>{describeCron(cronExpression)}</strong>
+                  </div>
+                </div>
+              )}
               <Form.Item name="schedule_enabled" label="创建后立即启用" valuePropName="checked">
                 <Switch />
               </Form.Item>

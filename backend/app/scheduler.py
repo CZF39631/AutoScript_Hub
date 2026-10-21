@@ -21,6 +21,7 @@ from fastapi import HTTPException
 
 from app.models import Agent, AuditLog, ManagedSchedule, Run, User
 from app.services.run_dispatch import create_validated_run
+from app.services.schedule_time import next_schedule_time
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,16 @@ def _advance_next_run(due_at: datetime, interval_seconds: int, now: datetime) ->
     return due_at + timedelta(seconds=steps * interval_seconds)
 
 
+def _next_schedule_run(schedule: ManagedSchedule, due_at: datetime, now: datetime) -> datetime:
+    if schedule.schedule_type == "cron":
+        # Cron plans never replay occurrences missed while the service was unavailable.
+        return next_schedule_time(
+            schedule_type="cron", after=now,
+            cron_expression=schedule.cron_expression, timezone_name=schedule.timezone,
+        )
+    return _advance_next_run(due_at, schedule.interval_seconds, now)
+
+
 def _utc_naive(value: datetime) -> datetime:
     aware = _ensure_aware(value)
     assert aware is not None
@@ -145,11 +156,12 @@ def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
     now = _ensure_aware(now or datetime.now(timezone.utc))
     assert now is not None
     db = SessionLocal()
+    db_now = _utc_naive(now)
     try:
         expired = db.query(Run).filter(
             Run.status == "pending",
             Run.expires_at.isnot(None),
-            Run.expires_at <= now,
+            Run.expires_at <= db_now,
             Run.is_deleted == False,
         ).all()
         for run in expired:
@@ -169,14 +181,14 @@ def _managed_schedule_scan(now: Optional[datetime] = None) -> None:
         due_schedules = db.query(ManagedSchedule).filter(
             ManagedSchedule.enabled == True,
             ManagedSchedule.is_deleted == False,
-            ManagedSchedule.next_run_at <= now,
+            ManagedSchedule.next_run_at <= db_now,
         ).order_by(ManagedSchedule.next_run_at.asc()).all()
 
         for schedule in due_schedules:
             due_at = _ensure_aware(schedule.next_run_at)
             assert due_at is not None
             schedule.next_run_at = _utc_naive(
-                _advance_next_run(due_at, schedule.interval_seconds, now)
+                _next_schedule_run(schedule, due_at, now)
             )
 
             original_expires_at = due_at + timedelta(seconds=schedule.expires_after_seconds)

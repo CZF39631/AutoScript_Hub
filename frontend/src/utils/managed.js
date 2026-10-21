@@ -57,6 +57,55 @@ export function formatInterval(seconds) {
   return `每 ${interval.value} ${item?.label || '分钟'}`
 }
 
+const WEEKDAY_LABELS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+const CRON_FIELD_PATTERN = /^(?:\*|\d+(?:-\d+)?(?:\/\d+)?)(?:,(?:\*|\d+(?:-\d+)?(?:\/\d+)?))*$/
+
+export function isValidCronExpression(expression) {
+  const fields = String(expression || '').trim().split(/\s+/)
+  return fields.length === 5 && fields.every(field => CRON_FIELD_PATTERN.test(field))
+}
+
+export function buildVisualCron(values = {}) {
+  const minute = Number(values.cron_minute ?? 0)
+  const hour = Number(values.cron_hour ?? 9)
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null
+  if (values.cron_preset === 'hourly') return `${minute} * * * *`
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null
+  if (values.cron_preset === 'weekly') {
+    const weekdays = [...new Set(values.cron_weekdays || [])].map(Number).sort((a, b) => a - b)
+    if (!weekdays.length || weekdays.some(day => !Number.isInteger(day) || day < 0 || day > 6)) return null
+    return `${minute} ${hour} * * ${weekdays.join(',')}`
+  }
+  if (values.cron_preset === 'monthly') {
+    const day = Number(values.cron_monthday ?? 1)
+    if (!Number.isInteger(day) || day < 1 || day > 31) return null
+    return `${minute} ${hour} ${day} * *`
+  }
+  return `${minute} ${hour} * * *`
+}
+
+export function describeCron(expression) {
+  if (!isValidCronExpression(expression)) return '请输入有效的五段 Cron 表达式'
+  const [minute, hour, day, month, weekday] = expression.trim().split(/\s+/)
+  const time = hour !== '*' && minute !== '*' ? `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}` : null
+  if (hour === '*' && day === '*' && month === '*' && weekday === '*' && /^\d+$/.test(minute)) return `每小时的 ${minute} 分执行`
+  if (day === '*' && month === '*' && weekday === '*' && time) return `每天 ${time} 执行`
+  if (day === '*' && month === '*' && time && /^(?:[0-6],?)+$/.test(weekday)) {
+    const days = weekday.split(',').map(value => WEEKDAY_LABELS[Number(value)]).join('、')
+    return `每周${days} ${time} 执行`
+  }
+  if (/^\d+$/.test(day) && month === '*' && weekday === '*' && time) return `每月 ${day} 日 ${time} 执行`
+  return `按 Cron “${expression.trim()}”执行`
+}
+
+export function formatSchedule(schedule) {
+  const scheduleType = schedule?.schedule_type || (schedule?.cron_expression ? 'cron' : 'interval')
+  if (scheduleType === 'cron' && schedule?.cron_expression) {
+    return `${describeCron(schedule.cron_expression)} · ${schedule.timezone || 'Asia/Shanghai'}`
+  }
+  return formatInterval(schedule?.interval_seconds)
+}
+
 export function parseParams(value) {
   if (!value) return {}
   if (typeof value === 'object' && !Array.isArray(value)) return value
@@ -78,14 +127,24 @@ export function statusPresentation(status, enabled = true) {
 export function scheduleFormValues(schedule) {
   const interval = secondsToInterval(schedule?.interval_seconds)
   const expires = secondsToInterval(schedule?.expires_after_seconds || 3600)
+  const scheduleType = schedule?.schedule_type || (schedule?.cron_expression ? 'cron' : 'interval')
   return {
     name: schedule?.name || '',
     agent_id: schedule?.agent_id,
     script_id: schedule?.script_id,
     params: parseParams(schedule?.params),
     environment_id: schedule?.environment_id ?? undefined,
+    schedule_type: scheduleType,
     interval_value: interval.value,
     interval_unit: interval.unit,
+    cron_mode: schedule?.cron_expression ? 'advanced' : 'visual',
+    cron_preset: 'daily',
+    cron_hour: 9,
+    cron_minute: 0,
+    cron_weekdays: [1],
+    cron_monthday: 1,
+    cron_expression: schedule?.cron_expression || '0 9 * * *',
+    timezone: schedule?.timezone || 'Asia/Shanghai',
     expires_value: expires.value,
     expires_unit: expires.unit,
     enabled: schedule?.enabled ?? true,
@@ -93,16 +152,26 @@ export function scheduleFormValues(schedule) {
 }
 
 export function buildSchedulePayload(values) {
-  return {
+  const scheduleType = values.schedule_type === 'cron' ? 'cron' : 'interval'
+  const payload = {
     name: values.name?.trim(),
     agent_id: values.agent_id,
     script_id: values.script_id,
     params: values.params || {},
     environment_id: values.environment_id ?? null,
-    interval_seconds: intervalToSeconds(values.interval_value, values.interval_unit),
+    schedule_type: scheduleType,
     expires_after_seconds: intervalToSeconds(values.expires_value, values.expires_unit),
     enabled: values.enabled !== false,
   }
+  if (scheduleType === 'cron') {
+    payload.cron_expression = values.cron_mode === 'advanced'
+      ? String(values.cron_expression || '').trim()
+      : buildVisualCron(values)
+    payload.timezone = values.timezone || 'Asia/Shanghai'
+  } else {
+    payload.interval_seconds = intervalToSeconds(values.interval_value, values.interval_unit)
+  }
+  return payload
 }
 
 export function apiErrorMessage(error, fallback) {

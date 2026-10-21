@@ -3,8 +3,12 @@ import assert from 'node:assert/strict'
 
 import {
   buildSchedulePayload,
+  buildVisualCron,
+  describeCron,
   formatInterval,
+  formatSchedule,
   intervalToSeconds,
+  isValidCronExpression,
   isManagedClientMode,
   isThumbnailStale,
   managedClientPath,
@@ -60,6 +64,33 @@ test('schedule form values and API payload preserve params and nullable environm
 
   assert.deepEqual(buildSchedulePayload(values), {
     name: '日报', agent_id: 3, script_id: 8, params: { scope: 'today' },
-    environment_id: null, interval_seconds: 7200, expires_after_seconds: 1800, enabled: false,
+    environment_id: null, schedule_type: 'interval', interval_seconds: 7200,
+    expires_after_seconds: 1800, enabled: false,
   })
+})
+
+test('visual Cron presets create valid five-field expressions and readable summaries', () => {
+  assert.equal(buildVisualCron({ cron_preset: 'hourly', cron_minute: 15 }), '15 * * * *')
+  assert.equal(buildVisualCron({ cron_preset: 'daily', cron_hour: 9, cron_minute: 5 }), '5 9 * * *')
+  assert.equal(buildVisualCron({ cron_preset: 'weekly', cron_hour: 8, cron_minute: 0, cron_weekdays: [5, 1] }), '0 8 * * 1,5')
+  assert.equal(buildVisualCron({ cron_preset: 'monthly', cron_hour: 20, cron_minute: 30, cron_monthday: 12 }), '30 20 12 * *')
+  assert.equal(describeCron('0 8 * * 1,5'), '每周星期一、星期五 08:00 执行')
+  assert.equal(describeCron('30 20 12 * *'), '每月 12 日 20:30 执行')
+  assert.equal(isValidCronExpression('0 9 * * 1-5'), true)
+  assert.equal(isValidCronExpression('0 9 * *'), false)
+})
+
+test('Cron schedule payload excludes interval and legacy schedules still format as intervals', () => {
+  const payload = buildSchedulePayload({
+    name: '工作日报', agent_id: 2, script_id: 4, schedule_type: 'cron', cron_mode: 'visual',
+    cron_preset: 'daily', cron_hour: 9, cron_minute: 0, timezone: 'Asia/Shanghai',
+    expires_value: 1, expires_unit: 'hour', enabled: true,
+  })
+  assert.deepEqual(payload, {
+    name: '工作日报', agent_id: 2, script_id: 4, params: {}, environment_id: null,
+    schedule_type: 'cron', cron_expression: '0 9 * * *', timezone: 'Asia/Shanghai',
+    expires_after_seconds: 3600, enabled: true,
+  })
+  assert.equal(formatSchedule({ interval_seconds: 3600 }), '每 1 小时')
+  assert.equal(formatSchedule({ schedule_type: 'cron', cron_expression: '0 9 * * *', timezone: 'Asia/Shanghai' }), '每天 09:00 执行 · Asia/Shanghai')
 })

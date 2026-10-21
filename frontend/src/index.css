@@ -211,6 +211,26 @@ button, input, select, textarea { font: inherit; }
 .managed-dispatch-schedules__list strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .managed-dispatch-schedules__list span, .managed-dispatch-schedules__list small { color: var(--apple-secondary); font-size: 11px; white-space: nowrap; }
 .managed-dispatch-schedules .ant-empty { margin-block: 12px 4px; }
+.managed-cron-config { margin-bottom: 20px; padding: 16px; border-radius: 14px; background: rgba(245,245,247,.82); }
+.managed-cron-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.managed-cron-grid .ant-form-item { margin-bottom: 18px; }
+.managed-weekday-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.managed-weekday-grid .ant-checkbox-wrapper { min-height: 34px; margin-inline-start: 0; padding: 6px 8px; align-items: center; border: 1px solid var(--apple-border); border-radius: 8px; background: #fff; }
+.managed-cron-input { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.managed-cron-summary { margin-top: -4px; padding: 12px 14px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 12px; border-radius: 10px; color: #214d32; background: #edf8f1; }
+.managed-cron-summary span { color: #50705b; font-size: 11px; }
+.managed-cron-summary strong { font-size: 13px; font-weight: 600; }
+.managed-cron-summary.is-invalid { color: #8a341f; background: #fff3ed; }
+@media (max-width: 640px) {
+  .managed-dispatch-drawer .ant-drawer-content-wrapper { width: 100% !important; }
+  .managed-dispatch-drawer .ant-drawer-header { padding-inline: 16px; }
+  .managed-dispatch-drawer .ant-drawer-body { padding: 16px; }
+  .managed-dispatch-drawer .ant-drawer-header-title { min-width: 0; }
+  .managed-dispatch-drawer .ant-drawer-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .managed-cron-grid { grid-template-columns: 1fr; gap: 0; }
+  .managed-weekday-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .managed-dispatch-schedules__list > div > div { align-items: flex-start; flex-direction: column; gap: 3px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .managed-schedule-reveal { transition: none; }
   .managed-schedule-reveal.is-open .managed-schedule-reveal__inner { animation: none; }

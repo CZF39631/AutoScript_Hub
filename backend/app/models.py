@@ -200,11 +200,16 @@ class Run(Base):
 
 
 class ManagedSchedule(Base):
-    """Admin-defined fixed-interval dispatch plan for one managed Agent."""
+    """Admin-defined interval or cron dispatch plan for one managed Agent."""
 
     __tablename__ = "managed_schedules"
     __table_args__ = (
-        CheckConstraint("interval_seconds >= 60", name="ck_managed_schedules_interval"),
+        CheckConstraint("schedule_type IN ('interval', 'cron')", name="ck_managed_schedules_type"),
+        CheckConstraint(
+            "(schedule_type = 'interval' AND interval_seconds >= 60 AND cron_expression IS NULL) "
+            "OR (schedule_type = 'cron' AND interval_seconds IS NULL AND cron_expression IS NOT NULL)",
+            name="ck_managed_schedules_rule",
+        ),
         CheckConstraint(
             "expires_after_seconds >= 60",
             name="ck_managed_schedules_expiry",
@@ -218,7 +223,10 @@ class ManagedSchedule(Base):
     script_id = Column(Integer, ForeignKey("scripts.id"), nullable=False)
     params = Column(Text, nullable=False, default="{}")
     environment_id = Column(Integer, ForeignKey("environments.id"), nullable=True)
-    interval_seconds = Column(Integer, nullable=False)
+    schedule_type = Column(String(20), nullable=False, default="interval")
+    interval_seconds = Column(Integer, nullable=True)
+    cron_expression = Column(String(100), nullable=True)
+    timezone = Column(String(100), nullable=False, default="UTC")
     expires_after_seconds = Column(Integer, nullable=False, default=3600)
     enabled = Column(Boolean, nullable=False, default=True)
     next_run_at = Column(DateTime, nullable=False)

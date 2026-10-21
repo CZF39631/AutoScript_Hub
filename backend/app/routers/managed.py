@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -20,6 +20,9 @@ from app.services.agent_thumbnails import thumbnail_path
 from app.services.audit import write_audit
 from app.services.run_dispatch import create_validated_run, validate_run_request
 from app.services.script_access import restrict_script_query
+from app.services.schedule_time import (
+    next_schedule_time, utc_naive, validate_cron_expression, validate_timezone,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["managed-agents"])
 
@@ -48,10 +51,25 @@ class ManagedScheduleCreate(BaseModel):
     script_id: int
     params: Dict[str, Any] = Field(default_factory=dict)
     environment_id: Optional[int] = None
-    interval_seconds: int = Field(ge=60, le=31536000)
+    schedule_type: Literal["interval", "cron"] = "interval"
+    interval_seconds: Optional[int] = Field(default=None, ge=60, le=31536000)
+    cron_expression: Optional[str] = Field(default=None, max_length=100)
+    timezone: str = Field(default="UTC", max_length=100)
     expires_after_seconds: int = Field(default=3600, ge=60, le=604800)
     enabled: bool = True
     next_run_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validate_rule(self):
+        if self.schedule_type == "interval":
+            if self.interval_seconds is None or self.cron_expression is not None:
+                raise ValueError("interval 调度仅需提供 interval_seconds")
+        else:
+            if self.interval_seconds is not None:
+                raise ValueError("cron 调度不可提供 interval_seconds")
+            self.cron_expression = validate_cron_expression(self.cron_expression or "")
+        self.timezone = validate_timezone(self.timezone)
+        return self
 
 
 class ManagedScheduleUpdate(BaseModel):
@@ -60,7 +78,10 @@ class ManagedScheduleUpdate(BaseModel):
     script_id: Optional[int] = None
     params: Optional[Dict[str, Any]] = None
     environment_id: Optional[int] = None
+    schedule_type: Optional[Literal["interval", "cron"]] = None
     interval_seconds: Optional[int] = Field(default=None, ge=60, le=31536000)
+    cron_expression: Optional[str] = Field(default=None, max_length=100)
+    timezone: Optional[str] = Field(default=None, max_length=100)
     expires_after_seconds: Optional[int] = Field(default=None, ge=60, le=604800)
     enabled: Optional[bool] = None
     next_run_at: Optional[datetime] = None
@@ -68,8 +89,8 @@ class ManagedScheduleUpdate(BaseModel):
     @model_validator(mode="after")
     def reject_null_for_non_nullable_fields(self):
         non_nullable = {
-            "name", "agent_id", "script_id", "params", "interval_seconds",
-            "expires_after_seconds", "enabled", "next_run_at",
+            "name", "agent_id", "script_id", "params", "schedule_type",
+            "expires_after_seconds", "enabled", "next_run_at", "timezone",
         }
         invalid = sorted(
             field for field in self.model_fields_set
@@ -89,7 +110,10 @@ class ManagedScheduleItem(BaseModel):
     script_id: int
     params: Dict[str, Any]
     environment_id: Optional[int] = None
-    interval_seconds: int
+    schedule_type: Literal["interval", "cron"]
+    interval_seconds: Optional[int] = None
+    cron_expression: Optional[str] = None
+    timezone: str
     expires_after_seconds: int
     enabled: bool
     next_run_at: datetime
@@ -101,10 +125,8 @@ class ManagedScheduleItem(BaseModel):
 
 
 def _utc_naive(value: datetime) -> datetime:
-    """Normalize API datetimes for timezone-neutral database storage."""
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    """Backward-compatible alias for UTC-naive database storage."""
+    return utc_naive(value)
 
 
 def _managed_agent_or_404(db: Session, agent_id: int, *, require_enabled: bool = False) -> Agent:
@@ -143,7 +165,10 @@ def _schedule_item(schedule: ManagedSchedule) -> ManagedScheduleItem:
         script_id=schedule.script_id,
         params=params,
         environment_id=schedule.environment_id,
+        schedule_type=schedule.schedule_type,
         interval_seconds=schedule.interval_seconds,
+        cron_expression=schedule.cron_expression,
+        timezone=schedule.timezone,
         expires_after_seconds=schedule.expires_after_seconds,
         enabled=schedule.enabled,
         next_run_at=schedule.next_run_at,
@@ -402,14 +427,22 @@ def create_managed_schedule(
         raise HTTPException(status_code=409, detail="Agent 所属用户不可用")
     validate_run_request(db, owner, req.script_id, req.params, req.environment_id)
     now = datetime.now(timezone.utc)
-    next_run_at = req.next_run_at or now + timedelta(seconds=req.interval_seconds)
+    next_run_at = req.next_run_at if req.schedule_type == "interval" else None
+    next_run_at = next_run_at or next_schedule_time(
+        schedule_type=req.schedule_type, after=now,
+        interval_seconds=req.interval_seconds, cron_expression=req.cron_expression,
+        timezone_name=req.timezone,
+    )
     schedule = ManagedSchedule(
         name=req.name.strip(),
         agent_id=agent.id,
         script_id=req.script_id,
         params=json.dumps(req.params, ensure_ascii=False),
         environment_id=req.environment_id,
+        schedule_type=req.schedule_type,
         interval_seconds=req.interval_seconds,
+        cron_expression=req.cron_expression,
+        timezone=req.timezone,
         expires_after_seconds=req.expires_after_seconds,
         enabled=req.enabled,
         next_run_at=_utc_naive(next_run_at),
@@ -425,7 +458,7 @@ def create_managed_schedule(
         "managed_schedule.create",
         target_type="managed_schedule",
         target_id=schedule.id,
-        detail="agent={} script={} interval={}".format(agent.id, req.script_id, req.interval_seconds),
+        detail="agent={} script={} type={}".format(agent.id, req.script_id, req.schedule_type),
     )
     return _schedule_item(schedule)
 
@@ -458,8 +491,28 @@ def update_managed_schedule(
         raise HTTPException(status_code=409, detail="Agent 所属用户不可用")
     validate_run_request(db, owner, script_id, params, environment_id)
 
+    rule_type = values.get("schedule_type", schedule.schedule_type)
+    interval_seconds = values.get("interval_seconds", schedule.interval_seconds)
+    cron_expression = values.get("cron_expression", schedule.cron_expression)
+    timezone_name = values.get("timezone", schedule.timezone)
+    if rule_type == "interval":
+        if interval_seconds is None:
+            raise HTTPException(status_code=422, detail="interval 调度必须提供 interval_seconds")
+        cron_expression = None
+    else:
+        interval_seconds = None
+        try:
+            cron_expression = validate_cron_expression(cron_expression or "")
+            timezone_name = validate_timezone(timezone_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    rule_changed = any(key in values for key in (
+        "schedule_type", "interval_seconds", "cron_expression", "timezone"
+    ))
+    was_enabled = schedule.enabled
+
     for field in (
-        "name", "agent_id", "script_id", "environment_id", "interval_seconds",
+        "name", "agent_id", "script_id", "environment_id",
         "expires_after_seconds", "enabled", "next_run_at",
     ):
         if field in values:
@@ -469,6 +522,17 @@ def update_managed_schedule(
             elif field == "next_run_at":
                 value = _utc_naive(value)
             setattr(schedule, field, value)
+    schedule.schedule_type = rule_type
+    schedule.interval_seconds = interval_seconds
+    schedule.cron_expression = cron_expression
+    schedule.timezone = timezone_name
+    if (rule_changed or (values.get("enabled") is True and not was_enabled)
+            or (rule_type == "cron" and "next_run_at" in values)):
+        schedule.next_run_at = utc_naive(next_schedule_time(
+            schedule_type=rule_type, after=datetime.now(timezone.utc),
+            interval_seconds=interval_seconds, cron_expression=cron_expression,
+            timezone_name=timezone_name,
+        ))
     if "params" in values:
         schedule.params = json.dumps(params, ensure_ascii=False)
     schedule.updated_by = current_user.id
@@ -514,6 +578,11 @@ def enable_managed_schedule(
 ):
     schedule = _schedule_or_404(db, schedule_id)
     schedule.enabled = True
+    schedule.next_run_at = utc_naive(next_schedule_time(
+        schedule_type=schedule.schedule_type, after=datetime.now(timezone.utc),
+        interval_seconds=schedule.interval_seconds, cron_expression=schedule.cron_expression,
+        timezone_name=schedule.timezone,
+    ))
     schedule.updated_by = current_user.id
     db.commit()
     db.refresh(schedule)

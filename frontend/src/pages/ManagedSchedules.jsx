@@ -11,7 +11,7 @@ import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
-  INTERVAL_UNITS, apiErrorMessage, buildSchedulePayload, formatInterval,
+  INTERVAL_UNITS, apiErrorMessage, buildSchedulePayload, formatSchedule,
   scheduleFormValues, statusPresentation,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
@@ -198,7 +198,7 @@ export default function ManagedSchedules({ embedded = false }) {
       },
     },
     { title: '脚本', dataIndex: 'script_id', key: 'script', minWidth: 140, render: id => scriptsById.get(id)?.name || `脚本 #${id}` },
-    { title: '频率', dataIndex: 'interval_seconds', key: 'interval', width: 110, render: formatInterval },
+    { title: '频率', key: 'interval', width: 210, render: (_, schedule) => formatSchedule(schedule) },
     { title: '下次运行', dataIndex: 'next_run_at', key: 'next', width: 170, render: value => value ? formatServerTime(value) : '-' },
     { title: '上次运行', dataIndex: 'last_run_at', key: 'last', width: 170, render: value => value ? formatServerTime(value) : '尚未运行' },
     { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 80, render: enabled => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '已启用' : '已暂停'}</Tag> },
