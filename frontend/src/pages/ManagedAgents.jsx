@@ -15,11 +15,12 @@ import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
   agentImpactCounts, apiErrorMessage, batchResultSummary, buildSchedulePayload, buildVisualCron,
-  canConfirmAgentImpact, createManagedBatchSelection, describeCron, dispatchResourceState,
-  formatSchedule, intervalToSeconds, isThumbnailStale, isValidCronExpression,
-  managedBatchLimit, managedBatchLimitError, managedListSearchParams, managedPageSelectionState, MANAGED_FIRST_CONNECTION_GUIDE,
-  parseManagedListSearch, scheduleFormValues, scheduleStatusCounts, shortMonthSkipDay,
-  statusPresentation, thumbnailTimestamp,
+  canConfirmAgentImpact, clearManagedBatchRecovery, createManagedBatchSelection, describeCron, dispatchResourceState,
+  formatSchedule, intervalToSeconds, isManagedBatchTerminal, isThumbnailStale, isValidCronExpression,
+  loadManagedBatchRecovery, managedBatchLimit, managedBatchLimitError, managedBatchProgress, managedListSearchParams,
+  managedPageSelectionState, MANAGED_BATCH_POLL_INTERVAL_MS, MANAGED_BATCH_POLL_LIMIT, MANAGED_FIRST_CONNECTION_GUIDE,
+  parseManagedListSearch, saveManagedBatchRecovery, scheduleFormValues, scheduleStatusCounts,
+  shortMonthSkipDay, shouldResumeManagedBatch, statusPresentation, thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
 import usePageFocused from '../hooks/usePageFocused'
@@ -183,7 +184,7 @@ function ThumbnailScreen({ agent }) {
   )
 }
 
-function AgentCard({ agent, checked, updating, scheduleSummary, onSelect, onPause, onRestore, onDispatch, onDelete, onGroups, onOpenRun, onOpenHistory, onOpenThumbnailAudit }) {
+function AgentCard({ agent, checked, selectionLocked, updating, scheduleSummary, onSelect, onPause, onRestore, onDispatch, onDelete, onGroups, onOpenRun, onOpenHistory, onOpenThumbnailAudit }) {
   const currentRun = agent.current_run
   const latestRun = agent.latest_run
   const earliestPending = agent.earliest_pending
@@ -198,6 +199,7 @@ function AgentCard({ agent, checked, updating, scheduleSummary, onSelect, onPaus
         <Checkbox
           className="managed-agent-card__selector"
           checked={checked}
+          disabled={selectionLocked}
           onChange={event => onSelect(agent.id, event.target.checked)}
           aria-label={`选择设备 ${agent.machine_name}`}
         />
@@ -340,7 +342,10 @@ export default function ManagedAgents({ embedded = false }) {
   const [batchValues, setBatchValues] = useState({ script_id: null, environment_id: null, params_text: '{}', expires_in_seconds: 3600, group_ids: [] })
   const [batchOptions, setBatchOptions] = useState({ scripts: [], environments: [] })
   const [batchOptionsResource, setBatchOptionsResource] = useState({ status: 'empty', error: '' })
+  const [batchRecovery, setBatchRecovery] = useState(() => loadManagedBatchRecovery())
   const batchKey = useRef({ fingerprint: '', key: '' })
+  const batchRecoveryRef = useRef(batchRecovery)
+  const batchMonitor = useRef({ generation: 0, timer: null, controller: null, busy: false })
   const listRequest = useRef(null)
   const impactRequest = useRef(null)
   const optionsRequest = useRef(0)
@@ -420,7 +425,7 @@ export default function ManagedAgents({ embedded = false }) {
     const next = { ...listFilters, ...changes }
     if (!Object.prototype.hasOwnProperty.call(changes, 'page')) next.page = 1
     setSearchParams(managedListSearchParams(next), { replace: true })
-    if (Object.keys(changes).some(key => key !== 'page')) {
+    if (Object.keys(changes).some(key => key !== 'page') && !batchRecoveryRef.current) {
       setSelectedAgentIds([])
       setAllMatchingSelected(false)
     }
@@ -494,8 +499,9 @@ export default function ManagedAgents({ embedded = false }) {
   }), [allMatchingSelected, listFilters, selectedAgentIds])
 
   useEffect(() => {
+    if (loading || batchRecoveryRef.current) return
     setSelectedAgentIds(current => current.filter(id => totalAgents > 0 || agents.some(agent => agent.id === id)))
-  }, [agents, totalAgents])
+  }, [agents, loading, totalAgents])
 
   const schedulesByAgent = useMemo(() => {
     const result = new Map()
@@ -756,6 +762,7 @@ export default function ManagedAgents({ embedded = false }) {
   }
 
   const toggleAgentSelection = (agentId, checked) => {
+    if (batchRecoveryRef.current) return
     setAllMatchingSelected(false)
     setSelectedAgentIds(current => checked
       ? [...new Set([...current, agentId])]
@@ -763,6 +770,7 @@ export default function ManagedAgents({ embedded = false }) {
   }
 
   const togglePageSelection = checked => {
+    if (batchRecoveryRef.current) return
     setAllMatchingSelected(false)
     const pageIds = pageAgents.map(agent => agent.id)
     setSelectedAgentIds(current => checked
@@ -861,6 +869,10 @@ export default function ManagedAgents({ embedded = false }) {
   }
 
   const openBatch = operation => {
+    if (batchRecoveryRef.current) {
+      showBatchProgress()
+      return
+    }
     setBatchValues({ script_id: null, environment_id: null, params_text: '{}', expires_in_seconds: 3600, group_ids: [] })
     setBatchOptions({ scripts: [], environments: [] })
     setBatchOptionsResource({ status: operation === 'dispatch_run' ? 'loading' : 'empty', error: '' })
@@ -891,6 +903,156 @@ export default function ManagedAgents({ embedded = false }) {
     return batchKey.current.key
   }
 
+  const rememberBatchRecovery = useCallback(value => {
+    const saved = saveManagedBatchRecovery(value)
+    batchRecoveryRef.current = saved
+    setBatchRecovery(saved)
+    return saved
+  }, [])
+
+  const stopBatchMonitor = useCallback(() => {
+    batchMonitor.current.generation += 1
+    if (batchMonitor.current.timer) clearTimeout(batchMonitor.current.timer)
+    batchMonitor.current.controller?.abort()
+    batchMonitor.current.timer = null
+    batchMonitor.current.controller = null
+    batchMonitor.current.busy = false
+  }, [])
+
+  const finishBatch = useCallback((record, result) => {
+    stopBatchMonitor()
+    clearManagedBatchRecovery()
+    batchRecoveryRef.current = null
+    setBatchRecovery(null)
+    batchKey.current = { fingerprint: '', key: '' }
+    setBatchDialog(current => ({
+      ...current,
+      operation: result.operation || record.payload.operation,
+      loading: false,
+      step: 'result',
+      result,
+    }))
+    setSelectedAgentIds([])
+    setAllMatchingSelected(false)
+    if (result.status === 'failed') {
+      message.error(`批量操作失败：${batchResultSummary(result)}`)
+    } else {
+      message.success(`批量操作完成：${batchResultSummary(result)}`)
+    }
+    void load({ quiet: true })
+  }, [load, message, stopBatchMonitor])
+
+  const startBatchMonitor = useCallback((sourceRecord, initialMethod = 'get', { restored = false } = {}) => {
+    stopBatchMonitor()
+    const generation = batchMonitor.current.generation
+    let recoveryAttempted = false
+
+    const runRequest = async (method, record) => {
+      if (batchMonitor.current.generation !== generation || batchMonitor.current.busy) return
+      const requestRecord = batchRecoveryRef.current || record
+      if (!requestRecord) return
+      if (method === 'get' && !requestRecord.batchId) {
+        const paused = rememberBatchRecovery({
+          ...requestRecord,
+          monitorState: 'paused',
+          notice: '未取得批次编号，请使用原请求标识继续处理。',
+        })
+        setBatchDialog(current => ({ ...current, loading: false, step: 'monitor', result: paused?.result }))
+        return
+      }
+
+      batchMonitor.current.busy = true
+      const controller = new AbortController()
+      batchMonitor.current.controller = controller
+      const postedAt = method === 'post' ? Date.now() : requestRecord.lastPostAt
+      let nextRecord = method === 'post'
+        ? rememberBatchRecovery({ ...requestRecord, lastPostAt: postedAt, pollCount: 0, monitorState: 'monitoring', notice: '正在继续处理批次…' })
+        : requestRecord
+      setBatchDialog(current => ({ ...current, loading: method === 'post', step: 'monitor' }))
+
+      try {
+        const response = method === 'post'
+          ? await api.post('/api/admin/managed-agent-batches', nextRecord.payload, {
+            headers: { 'Idempotency-Key': nextRecord.key },
+            signal: controller.signal,
+          })
+          : await api.get(`/api/admin/managed-agent-batches/${nextRecord.batchId}`, { signal: controller.signal })
+        if (batchMonitor.current.generation !== generation) return
+
+        const result = response.data
+        nextRecord = rememberBatchRecovery({
+          ...nextRecord,
+          batchId: result.batch_id || nextRecord.batchId,
+          result,
+          pollCount: method === 'get' ? nextRecord.pollCount + 1 : 0,
+          monitorState: 'monitoring',
+          notice: restored ? '页面刷新后已恢复批次监控。' : '',
+        })
+        setBatchDialog(current => ({
+          ...current,
+          operation: result.operation || nextRecord.payload.operation,
+          loading: false,
+          step: 'monitor',
+          result,
+        }))
+
+        if (isManagedBatchTerminal(result)) {
+          finishBatch(nextRecord, result)
+          return
+        }
+
+        const shouldResume = shouldResumeManagedBatch(result, {
+          elapsedSincePost: Date.now() - nextRecord.lastPostAt,
+          recoveryAttempted,
+        })
+        if (shouldResume) {
+          recoveryAttempted = true
+          batchMonitor.current.busy = false
+          nextRecord = rememberBatchRecovery({
+            ...nextRecord,
+            notice: result.status === 'stale'
+              ? '检测到批次中断，正在使用原请求标识安全续跑。'
+              : '处理租约可能已过期，正在使用原请求标识恢复处理。',
+          })
+          await runRequest('post', nextRecord)
+          return
+        }
+
+        if (nextRecord.pollCount >= MANAGED_BATCH_POLL_LIMIT || result.status !== 'processing') {
+          rememberBatchRecovery({
+            ...nextRecord,
+            monitorState: 'paused',
+            notice: result.status === 'stale'
+              ? '自动恢复后批次仍处于可恢复状态，请手动继续。'
+              : '自动监控已暂停，批次记录仍保留，可手动继续处理。',
+          })
+          return
+        }
+
+        batchMonitor.current.timer = setTimeout(() => {
+          batchMonitor.current.timer = null
+          void runRequest('get', nextRecord)
+        }, MANAGED_BATCH_POLL_INTERVAL_MS)
+      } catch (error) {
+        if (controller.signal.aborted || error?.code === 'ERR_CANCELED') return
+        const paused = rememberBatchRecovery({
+          ...(batchRecoveryRef.current || nextRecord),
+          monitorState: 'paused',
+          notice: apiErrorMessage(error, '批次状态读取失败；恢复记录已保留，请手动继续。'),
+        })
+        setBatchDialog(current => ({ ...current, loading: false, step: 'monitor', result: paused?.result }))
+        message.error(paused?.notice || '批次监控失败，请手动继续')
+      } finally {
+        if (batchMonitor.current.generation === generation) {
+          batchMonitor.current.busy = false
+          batchMonitor.current.controller = null
+        }
+      }
+    }
+
+    void runRequest(initialMethod, sourceRecord)
+  }, [finishBatch, message, rememberBatchRecovery, stopBatchMonitor])
+
   const previewBatch = async () => {
     const limitError = managedBatchLimitError(batchDialog.operation, selectedCount)
     if (limitError) {
@@ -912,24 +1074,72 @@ export default function ManagedAgents({ embedded = false }) {
     }
   }
 
-  const executeBatch = async () => {
-    setBatchDialog(current => ({ ...current, loading: true }))
-    try {
-      const payload = batchPayload()
-      const response = await api.post('/api/admin/managed-agent-batches', payload, {
-        headers: { 'Idempotency-Key': requestKeyFor(payload) },
-      })
-      batchKey.current = { fingerprint: '', key: '' }
-      setBatchDialog(current => ({ ...current, loading: false, step: 'result', result: response.data }))
-      message.success(`批量操作完成：${batchResultSummary(response.data)}`)
-      setSelectedAgentIds([])
-      setAllMatchingSelected(false)
-      await load({ quiet: true })
-    } catch (error) {
-      message.error(apiErrorMessage(error, '批量操作执行失败；重试将复用同一个请求标识，不会重复执行'))
-      setBatchDialog(current => ({ ...current, loading: false }))
-    }
+  const executeBatch = () => {
+    const payload = batchPayload()
+    const key = requestKeyFor(payload)
+    const now = Date.now()
+    const record = rememberBatchRecovery({
+      batchId: null,
+      key,
+      payload,
+      result: null,
+      startedAt: now,
+      lastPostAt: now,
+      pollCount: 0,
+      monitorState: 'monitoring',
+      notice: '请求已安全保存，正在提交批量操作。',
+    })
+    setBatchDialog(current => ({ ...current, loading: true, step: 'monitor', result: null }))
+    startBatchMonitor(record, 'post')
   }
+
+  const continueBatch = () => {
+    const record = batchRecoveryRef.current
+    if (!record) return
+    startBatchMonitor(record, 'post')
+  }
+
+  const showBatchProgress = () => {
+    const record = batchRecoveryRef.current
+    if (!record) return
+    setBatchDialog(current => ({
+      ...current,
+      open: true,
+      operation: record.payload.operation,
+      step: 'monitor',
+      loading: false,
+      result: record.result,
+    }))
+  }
+
+  useEffect(() => {
+    const record = batchRecoveryRef.current
+    if (!record) return undefined
+    batchKey.current = { fingerprint: JSON.stringify(record.payload), key: record.key }
+    const selection = record.payload.selection
+    if (selection?.mode === 'explicit') {
+      setSelectedAgentIds(selection.agent_ids || [])
+      setAllMatchingSelected(false)
+    } else if (selection?.mode === 'all') {
+      setSelectedAgentIds([])
+      setAllMatchingSelected(true)
+    }
+    const restored = rememberBatchRecovery({
+      ...record,
+      monitorState: 'monitoring',
+      notice: '页面刷新后已恢复批次监控。',
+    })
+    setBatchDialog(current => ({
+      ...current,
+      open: true,
+      operation: restored.payload.operation,
+      step: 'monitor',
+      loading: false,
+      result: restored.result,
+    }))
+    startBatchMonitor(restored, restored.batchId ? 'get' : 'post', { restored: true })
+    return stopBatchMonitor
+  }, [rememberBatchRecovery, startBatchMonitor, stopBatchMonitor])
 
   const batchLimit = managedBatchLimit(batchDialog.operation)
   const batchLimitError = managedBatchLimitError(batchDialog.operation, selectedCount)
@@ -942,6 +1152,8 @@ export default function ManagedAgents({ embedded = false }) {
   const dispatchDataUnavailable = optionsResource.status !== 'ready'
     || (selectedScriptId && ['loading', 'error'].includes(selectedScriptResource))
   const impactMachineName = impactDialog.data?.machine_name || impactDialog.agent?.machine_name
+  const batchProgress = managedBatchProgress(batchRecovery?.result)
+  const batchSelectionLocked = Boolean(batchRecovery)
 
   return (
     <div className="managed-admin-page">
@@ -964,6 +1176,26 @@ export default function ManagedAgents({ embedded = false }) {
         />
       )}
 
+      {batchRecovery && (
+        <Alert
+          className="managed-page-alert"
+          type={batchRecovery.monitorState === 'paused' ? 'warning' : 'info'}
+          showIcon
+          title={batchRecovery.monitorState === 'paused'
+            ? `批次${batchRecovery.batchId ? ` #${batchRecovery.batchId}` : ''} 等待继续`
+            : `批次${batchRecovery.batchId ? ` #${batchRecovery.batchId}` : ''} 正在处理中`}
+          description={`${batchRecovery.notice || '恢复记录已保留。'} 当前 ${batchProgress.pending} 项待处理，${batchProgress.completed} 项已完成。`}
+          action={(
+            <Space wrap>
+              <Button size="small" onClick={showBatchProgress}>查看进度</Button>
+              {batchRecovery.monitorState === 'paused' && (
+                <Button size="small" type="primary" onClick={continueBatch}>继续处理</Button>
+              )}
+            </Space>
+          )}
+        />
+      )}
+
       {(agents.length > 0 || totalAgents > 0 || listFilters.query || listFilters.status || listFilters.groupId) && (
         <>
           <div className="managed-agent-toolbar">
@@ -972,11 +1204,13 @@ export default function ManagedAgents({ embedded = false }) {
               prefix={<SearchOutlined />}
               placeholder="搜索设备名、IP、版本或设备 ID"
               value={listFilters.query}
+              disabled={batchSelectionLocked}
               onChange={event => updateListFilters({ query: event.target.value })}
             />
             <Select
               aria-label="设备状态筛选"
               value={listFilters.status || 'all'}
+              disabled={batchSelectionLocked}
               onChange={value => updateListFilters({ status: value === 'all' ? '' : value })}
               options={[
                 { value: 'all', label: '全部状态' },
@@ -988,6 +1222,7 @@ export default function ManagedAgents({ embedded = false }) {
             <Select
               aria-label="任务状态筛选"
               value={listFilters.runStatus || 'all'}
+              disabled={batchSelectionLocked}
               onChange={value => updateListFilters({ runStatus: value === 'all' ? '' : value })}
               options={[
                 { value: 'all', label: '全部任务' }, { value: 'idle', label: '空闲' },
@@ -1000,12 +1235,14 @@ export default function ManagedAgents({ embedded = false }) {
               aria-label="设备分组筛选"
               placeholder="全部分组"
               value={listFilters.groupId || undefined}
+              disabled={batchSelectionLocked}
               onChange={value => updateListFilters({ groupId: value || null })}
               options={groups.map(group => ({ value: group.id, label: `${group.name} (${group.member_count})` }))}
             />
             <Select
               aria-label="设备排序"
               value={listFilters.sort}
+              disabled={batchSelectionLocked}
               onChange={sort => updateListFilters({ sort })}
               options={[
                 { value: '-last_heartbeat', label: '最近心跳优先' },
@@ -1021,22 +1258,23 @@ export default function ManagedAgents({ embedded = false }) {
               <Checkbox
                 checked={pageSelection.checked}
                 indeterminate={pageSelection.indeterminate}
+                disabled={batchSelectionLocked}
                 onChange={event => togglePageSelection(event.target.checked)}
               >选中本页（{pageAgents.length} 台）</Checkbox>
               {totalAgents > pageAgents.length && (
-                <Button type="link" onClick={() => { setAllMatchingSelected(true); setSelectedAgentIds([]) }}>
+                <Button type="link" disabled={batchSelectionLocked} onClick={() => { setAllMatchingSelected(true); setSelectedAgentIds([]) }}>
                   选中全部筛选结果（{totalAgents} 台）
                 </Button>
               )}
               {selectedCount > 0 && <strong>{allMatchingSelected ? '已选全部筛选结果' : '已明确选择'} {selectedCount} 台</strong>}
             </div>
             <div className="managed-selection-bar__actions">
-              <Button disabled={!selectedCount} icon={<SendOutlined />} onClick={() => openBatch('dispatch_run')}>发布临时任务</Button>
-              <Button disabled={!selectedCount} icon={<PauseCircleOutlined />} onClick={() => openBatch('pause_agents')}>暂停接单</Button>
-              <Button disabled={!selectedCount} icon={<PlayCircleOutlined />} onClick={() => openBatch('resume_agents')}>恢复接单</Button>
-              <Button disabled={!selectedCount} onClick={() => openBatch('pause_schedules')}>暂停计划</Button>
-              <Button disabled={!selectedCount} icon={<FolderOutlined />} onClick={() => openBatch('set_groups')}>调整分组</Button>
-              {selectedCount > 0 && <Button type="text" onClick={() => { setSelectedAgentIds([]); setAllMatchingSelected(false) }}>清除选择</Button>}
+              <Button disabled={!selectedCount || batchSelectionLocked} icon={<SendOutlined />} onClick={() => openBatch('dispatch_run')}>发布临时任务</Button>
+              <Button disabled={!selectedCount || batchSelectionLocked} icon={<PauseCircleOutlined />} onClick={() => openBatch('pause_agents')}>暂停接单</Button>
+              <Button disabled={!selectedCount || batchSelectionLocked} icon={<PlayCircleOutlined />} onClick={() => openBatch('resume_agents')}>恢复接单</Button>
+              <Button disabled={!selectedCount || batchSelectionLocked} onClick={() => openBatch('pause_schedules')}>暂停计划</Button>
+              <Button disabled={!selectedCount || batchSelectionLocked} icon={<FolderOutlined />} onClick={() => openBatch('set_groups')}>调整分组</Button>
+              {selectedCount > 0 && <Button type="text" disabled={batchSelectionLocked} onClick={() => { setSelectedAgentIds([]); setAllMatchingSelected(false) }}>清除选择</Button>}
             </div>
           </div>
         </>
@@ -1058,6 +1296,7 @@ export default function ManagedAgents({ embedded = false }) {
                 key={agent.id}
                 agent={agent}
                 checked={allMatchingSelected || selectedSet.has(agent.id)}
+                selectionLocked={batchSelectionLocked}
                 updating={Boolean(updating[agent.id])}
                 scheduleSummary={scheduleStatusCounts(schedulesByAgent.get(agent.id) || [])}
                 onSelect={toggleAgentSelection}
@@ -1197,11 +1436,20 @@ export default function ManagedAgents({ embedded = false }) {
           resume_agents: '批量恢复接单', pause_schedules: '批量暂停计划', set_groups: '批量调整分组',
         }[batchDialog.operation] || '批量操作'}
         open={batchDialog.open}
-        onCancel={() => !batchDialog.loading && setBatchDialog(current => ({ ...current, open: false }))}
+        onCancel={() => {
+          if (batchDialog.loading && !['monitor', 'result'].includes(batchDialog.step)) return
+          setBatchDialog(current => ({ ...current, open: false }))
+        }}
         width={720}
         destroyOnHidden
-        okText={batchDialog.step === 'configure' ? '预览影响' : batchDialog.step === 'preview' ? '确认执行' : '完成'}
-        cancelText={batchDialog.step === 'result' ? undefined : '取消'}
+        okText={batchDialog.step === 'configure'
+          ? '预览影响'
+          : batchDialog.step === 'preview'
+            ? '确认执行'
+            : batchDialog.step === 'monitor'
+              ? batchRecovery?.monitorState === 'paused' ? '继续处理' : '后台监控中'
+              : '完成'}
+        cancelText={batchDialog.step === 'monitor' ? '关闭' : batchDialog.step === 'result' ? undefined : '取消'}
         okButtonProps={{
           loading: batchDialog.loading,
           danger: ['pause_agents', 'pause_schedules'].includes(batchDialog.operation) && batchDialog.step === 'preview',
@@ -1209,22 +1457,26 @@ export default function ManagedAgents({ embedded = false }) {
             batchDialog.operation === 'dispatch_run'
             && batchDialog.step === 'configure'
             && (!batchValues.script_id || batchOptionsResource.status !== 'ready')
-          ),
+          ) || (batchDialog.step === 'monitor' && batchRecovery?.monitorState !== 'paused'),
         }}
         cancelButtonProps={batchDialog.step === 'result' ? { style: { display: 'none' } } : undefined}
         onOk={() => batchDialog.step === 'configure'
           ? previewBatch()
           : batchDialog.step === 'preview'
             ? executeBatch()
-            : setBatchDialog(current => ({ ...current, open: false }))}
+            : batchDialog.step === 'monitor'
+              ? continueBatch()
+              : setBatchDialog(current => ({ ...current, open: false }))}
       >
-        <Alert
-          className="managed-page-alert"
-          type="info"
-          showIcon
-          title={allMatchingSelected ? `将作用于全部筛选结果（${selectedCount} 台）` : `将作用于明确选择的 ${selectedCount} 台设备`}
-          description={`执行前会逐设备验证权限、状态和运行冲突；不符合条件的设备不会阻断其他设备。此操作单批最多 ${batchLimit} 台，删除设备不提供普通批量入口。`}
-        />
+        {['configure', 'preview'].includes(batchDialog.step) && (
+          <Alert
+            className="managed-page-alert"
+            type="info"
+            showIcon
+            title={allMatchingSelected ? `将作用于全部筛选结果（${selectedCount} 台）` : `将作用于明确选择的 ${selectedCount} 台设备`}
+            description={`执行前会逐设备验证权限、状态和运行冲突；不符合条件的设备不会阻断其他设备。此操作单批最多 ${batchLimit} 台，删除设备不提供普通批量入口。`}
+          />
+        )}
         {batchLimitError && (
           <Alert
             className="managed-page-alert"
@@ -1319,11 +1571,41 @@ export default function ManagedAgents({ embedded = false }) {
             </div>
           </div>
         )}
+        {batchDialog.step === 'monitor' && (
+          <div className="managed-batch-preview" aria-live="polite">
+            <Alert
+              type={batchRecovery?.monitorState === 'paused' ? 'warning' : 'info'}
+              showIcon
+              title={batchRecovery?.monitorState === 'paused'
+                ? `批次${batchRecovery.batchId ? ` #${batchRecovery.batchId}` : ''} 等待继续`
+                : `批次${batchRecovery?.batchId ? ` #${batchRecovery.batchId}` : ''} 正在处理中`}
+              description={`${batchRecovery?.notice || '正在查询服务端进度。'} 当前 ${batchProgress.pending} 项待处理，${batchProgress.completed} 项已完成，共 ${batchProgress.total} 项。关闭窗口不会丢失恢复记录。`}
+            />
+            {batchDialog.result?.items?.length ? (
+              <div className="managed-batch-results">
+                {batchDialog.result.items.map(item => (
+                  <div key={item.agent_id} className={`is-${item.result}`}>
+                    <span><strong>{item.machine_name}</strong><small>#{item.agent_id}</small></span>
+                    <Tag color={item.result === 'success' ? 'green' : item.result === 'failed' ? 'red' : item.result === 'pending' ? 'processing' : 'default'}>
+                      {item.result === 'pending' ? '待处理' : item.result === 'success' ? '已完成' : item.result === 'failed' ? '失败' : '跳过'}
+                    </Tag>
+                    <p>{item.reason}{item.run_id ? ` · 任务 #${item.run_id}` : ''}</p>
+                  </div>
+                ))}
+              </div>
+            ) : <Skeleton active paragraph={{ rows: 2 }} />}
+          </div>
+        )}
         {batchDialog.step === 'result' && batchDialog.result && (
           <div className="managed-batch-preview">
-            <Alert type={batchDialog.result.failed ? 'warning' : 'success'} showIcon title={`批次 #${batchDialog.result.batch_id} 已完成`} description={batchResultSummary(batchDialog.result)} />
+            <Alert
+              type={batchDialog.result.status === 'failed' ? 'error' : batchDialog.result.failed ? 'warning' : 'success'}
+              showIcon
+              title={`批次 #${batchDialog.result.batch_id} ${batchDialog.result.status === 'failed' ? '执行失败' : '已完成'}`}
+              description={`${batchResultSummary(batchDialog.result)} · ${managedBatchProgress(batchDialog.result).completed} 项已完成`}
+            />
             <div className="managed-batch-results">
-              {batchDialog.result.items.map(item => (
+              {(batchDialog.result.items || []).map(item => (
                 <div key={item.agent_id} className={`is-${item.result}`}>
                   <span><strong>{item.machine_name}</strong><small>#{item.agent_id}</small></span>
                   <Tag color={item.result === 'success' ? 'green' : item.result === 'failed' ? 'red' : 'default'}>{item.result}</Tag>

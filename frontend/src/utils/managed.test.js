@@ -14,18 +14,23 @@ import {
   formatSchedule,
   intervalToSeconds,
   isValidCronExpression,
+  isManagedBatchTerminal,
   isManagedClientMode,
+  loadManagedBatchRecovery,
   isThumbnailStale,
   MANAGED_FIRST_CONNECTION_GUIDE,
   managedBatchLimit,
   managedBatchLimitError,
+  managedBatchProgress,
   managedListSearchParams,
   managedPageSelectionState,
   managedClientPath,
   parseManagedListSearch,
   scheduleFormValues,
   scheduleStatusCounts,
+  saveManagedBatchRecovery,
   secondsToInterval,
+  shouldResumeManagedBatch,
   shortMonthSkipDay,
   shouldRefreshThumbnail,
   thumbnailTimestamp,
@@ -63,6 +68,40 @@ test('page and all-filtered selection keep their semantics explicit', () => {
   assert.equal(managedBatchLimit('pause_agents'), 200)
   assert.equal(managedBatchLimitError('dispatch_run', 51), '当前选择 51 台，超过此操作单批上限 50 台，请缩小筛选范围或分批处理。')
   assert.equal(managedBatchLimitError('pause_agents', 200), '')
+})
+
+test('batch recovery distinguishes progress, resumable and terminal states', () => {
+  assert.deepEqual(managedBatchProgress({ total: 5, pending: 2, success: 2, failed: 1, skipped: 0 }), {
+    pending: 2, completed: 3, total: 5,
+  })
+  assert.equal(isManagedBatchTerminal({ status: 'processing' }), false)
+  assert.equal(isManagedBatchTerminal({ status: 'stale' }), false)
+  assert.equal(isManagedBatchTerminal({ status: 'completed' }), true)
+  assert.equal(isManagedBatchTerminal({ status: 'failed' }), true)
+  assert.equal(shouldResumeManagedBatch({ status: 'stale' }), true)
+  assert.equal(shouldResumeManagedBatch({ status: 'processing', recoverable: true }), true)
+  assert.equal(shouldResumeManagedBatch({ status: 'retryable' }), true)
+  assert.equal(shouldResumeManagedBatch({ status: 'processing' }, { elapsedSincePost: 31999 }), false)
+  assert.equal(shouldResumeManagedBatch({ status: 'processing' }, { elapsedSincePost: 32000 }), true)
+  assert.equal(shouldResumeManagedBatch({ status: 'processing' }, { elapsedSincePost: 64000, recoveryAttempted: true }), false)
+})
+
+test('batch recovery storage preserves the original key and payload across refreshes', () => {
+  const values = new Map()
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  }
+  const payload = { operation: 'pause_agents', selection: { mode: 'explicit', agent_ids: [7] } }
+  const saved = saveManagedBatchRecovery({
+    batchId: 91, key: 'stable-key-0001', payload,
+    result: { batch_id: 91, status: 'processing', pending: 1 },
+    startedAt: 100, lastPostAt: 200, pollCount: 3, monitorState: 'monitoring', notice: '正在处理',
+  }, storage)
+  assert.equal(saved.key, 'stable-key-0001')
+  assert.deepEqual(loadManagedBatchRecovery(storage), saved)
+  assert.equal(loadManagedBatchRecovery({ getItem: () => '{bad json' }), null)
 })
 
 test('managed mode and its route whitelist are explicit', () => {

@@ -34,6 +34,10 @@ export function dispatchResourceState({ loading = false, error = '', value = nul
 export const THUMBNAIL_STALE_AFTER_MS = 2 * 60 * 1000
 export const MANAGED_PAGE_SIZE = 24
 export const MANAGED_BATCH_LIMITS = Object.freeze({ dispatch_run: 50, default: 200 })
+export const MANAGED_BATCH_RECOVERY_STORAGE_KEY = 'autoscript.managedBatchRecovery.v1'
+export const MANAGED_BATCH_POLL_INTERVAL_MS = 1500
+export const MANAGED_BATCH_POLL_LIMIT = 24
+export const MANAGED_BATCH_LEASE_RECOVERY_MS = 32000
 
 const MANAGED_SORTS = new Set(['name', '-name', 'status', '-status', 'last_heartbeat', '-last_heartbeat', 'created_at', '-created_at'])
 const MANAGED_STATUSES = new Set(['online', 'offline', 'disabled'])
@@ -105,6 +109,82 @@ export function managedBatchLimitError(operation, selectedCount) {
 
 export function batchResultSummary(result = {}) {
   return `${Number(result.success) || 0} 成功 · ${Number(result.failed) || 0} 失败 · ${Number(result.skipped) || 0} 跳过`
+}
+
+export function managedBatchProgress(result = {}) {
+  result ||= {}
+  const pending = Math.max(0, Number(result.pending) || 0)
+  const completed = Math.max(0,
+    (Number(result.success) || 0) + (Number(result.failed) || 0) + (Number(result.skipped) || 0),
+  )
+  return { pending, completed, total: Math.max(Number(result.total) || 0, pending + completed) }
+}
+
+export function isManagedBatchTerminal(value) {
+  const status = typeof value === 'string' ? value : value?.status
+  return status === 'completed' || status === 'failed'
+}
+
+export function shouldResumeManagedBatch(result, {
+  elapsedSincePost = 0,
+  recoveryAttempted = false,
+} = {}) {
+  if (recoveryAttempted || isManagedBatchTerminal(result)) return false
+  const explicitlyRecoverable = result?.recoverable === true
+    || result?.can_resume === true
+    || ['recoverable', 'retryable'].includes(result?.status)
+  return result?.status === 'stale'
+    || explicitlyRecoverable
+    || (result?.status === 'processing' && elapsedSincePost >= MANAGED_BATCH_LEASE_RECOVERY_MS)
+}
+
+export function normalizeManagedBatchRecovery(value) {
+  if (!value || typeof value !== 'object') return null
+  const key = typeof value.key === 'string' ? value.key.trim() : ''
+  const payload = value.payload
+  const batchId = Number(value.batchId)
+  if (key.length < 8 || !payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  if (value.batchId != null && (!Number.isInteger(batchId) || batchId <= 0)) return null
+  return {
+    version: 1,
+    batchId: value.batchId == null ? null : batchId,
+    key,
+    payload,
+    result: value.result && typeof value.result === 'object' ? value.result : null,
+    startedAt: Number(value.startedAt) || Date.now(),
+    lastPostAt: Number(value.lastPostAt) || Number(value.startedAt) || Date.now(),
+    pollCount: Math.max(0, Number(value.pollCount) || 0),
+    monitorState: ['monitoring', 'paused'].includes(value.monitorState) ? value.monitorState : 'monitoring',
+    notice: typeof value.notice === 'string' ? value.notice : '',
+  }
+}
+
+export function loadManagedBatchRecovery(storage = globalThis.sessionStorage) {
+  try {
+    const raw = storage?.getItem?.(MANAGED_BATCH_RECOVERY_STORAGE_KEY)
+    return raw ? normalizeManagedBatchRecovery(JSON.parse(raw)) : null
+  } catch {
+    return null
+  }
+}
+
+export function saveManagedBatchRecovery(value, storage = globalThis.sessionStorage) {
+  const normalized = normalizeManagedBatchRecovery(value)
+  if (!normalized) return null
+  try {
+    storage?.setItem?.(MANAGED_BATCH_RECOVERY_STORAGE_KEY, JSON.stringify(normalized))
+  } catch {
+    // sessionStorage may be unavailable under browser privacy policies; in-memory monitoring still works.
+  }
+  return normalized
+}
+
+export function clearManagedBatchRecovery(storage = globalThis.sessionStorage) {
+  try {
+    storage?.removeItem?.(MANAGED_BATCH_RECOVERY_STORAGE_KEY)
+  } catch {
+    // Keep terminal handling usable even when storage access is blocked.
+  }
 }
 
 export function thumbnailTimestamp(agent) {

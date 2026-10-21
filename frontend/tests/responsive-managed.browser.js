@@ -15,7 +15,9 @@ async page => {
   let detailAttempts = 0
   let thumbnailRequests = 0
   let batchExecuteAttempts = 0
+  let batchGetAttempts = 0
   const batchExecuteKeys = []
+  const batchExecutePayloads = []
   let groups = []
   const agent = {
     id: 7, machine_name: '验收设备', machine_ip: '127.0.0.7', agent_version: 'test',
@@ -99,13 +101,30 @@ async page => {
         items: [{ agent_id: 7, machine_name: '验收设备', result: 'success', reason: '验证通过' }], replayed: false,
       } })
     }
+    if (path === '/api/admin/managed-agent-batches/91') {
+      batchGetAttempts += 1
+      const status = batchGetAttempts === 1 ? 'processing' : 'stale'
+      return route.fulfill({ json: {
+        batch_id: 91, operation: 'pause_agents', status, total: 1,
+        pending: 1, success: 0, failed: 0, skipped: 0,
+        items: [{ agent_id: 7, machine_name: '验收设备', result: 'pending', reason: status === 'stale' ? '等待恢复' : '等待处理' }],
+        replayed: false,
+      } })
+    }
     if (path === '/api/admin/managed-agent-batches') {
       batchExecuteAttempts += 1
       batchExecuteKeys.push(route.request().headers()['idempotency-key'])
-      if (batchExecuteAttempts === 1) return route.fulfill({ status: 503, json: { detail: '合成网络不确定故障' } })
+      batchExecutePayloads.push(route.request().postDataJSON())
       const body = route.request().postDataJSON()
+      if (batchExecuteAttempts === 1) return route.fulfill({ json: {
+        batch_id: 91, operation: body.operation, status: 'processing', total: 1,
+        pending: 1, success: 0, failed: 0, skipped: 0,
+        items: [{ agent_id: 7, machine_name: '验收设备', result: 'pending', reason: '等待处理' }],
+        replayed: false,
+      } })
       return route.fulfill({ json: {
-        batch_id: 91, operation: body.operation, total: 1, success: 1, failed: 0, skipped: 0,
+        batch_id: 91, operation: body.operation, status: 'completed', total: 1,
+        pending: 0, success: 1, failed: 0, skipped: 0,
         items: [{ agent_id: 7, machine_name: '验收设备', result: 'success', reason: '操作成功' }], replayed: true,
       } })
     }
@@ -251,13 +270,30 @@ async page => {
   await confirmBatch.waitFor()
   if (!await confirmBatch.evaluate(node => node.classList.contains('ant-btn-dangerous'))) throw new Error('dangerous batch confirmation is not visually dangerous')
   await confirmBatch.click()
-  await page.waitForTimeout(120)
-  await confirmBatch.click()
-  await dangerBatch.getByText('批次 #91 已完成').waitFor()
+  await dangerBatch.getByText(/批次 #91 正在处理中/).waitFor()
+  await dangerBatch.getByText(/1 项待处理，0 项已完成/).waitFor()
+  while (batchGetAttempts < 1) await page.waitForTimeout(50)
+  if (!await page.getByLabel('选择设备 验收设备').isChecked()) throw new Error('processing batch cleared selection before terminal state')
+  if (!await page.evaluate(() => Boolean(sessionStorage.getItem('autoscript.managedBatchRecovery.v1')))) throw new Error('processing batch was not persisted to sessionStorage')
+  await dangerBatch.getByRole('button', { name: /关\s*闭/ }).click()
+  await dangerBatch.waitFor({ state: 'hidden' })
+  if (!await page.getByText(/批次 #91 正在处理中/).isVisible()) throw new Error('closing batch modal lost the visible recovery notice')
+
+  await page.reload()
+  const restoredBatch = page.getByRole('dialog', { name: '批量暂停接单' })
+  await restoredBatch.getByText('批次 #91 已完成').waitFor()
+  if (batchGetAttempts < 2) throw new Error(`refresh did not resume GET monitoring: ${batchGetAttempts}`)
   if (batchExecuteKeys.length !== 2 || !batchExecuteKeys[0] || batchExecuteKeys[0] !== batchExecuteKeys[1]) {
-    throw new Error(`batch retry did not reuse Idempotency-Key: ${JSON.stringify(batchExecuteKeys)}`)
+    throw new Error(`stale batch did not reuse Idempotency-Key: ${JSON.stringify(batchExecuteKeys)}`)
   }
-  await dangerBatch.getByRole('button', { name: /完\s*成/ }).click()
+  if (JSON.stringify(batchExecutePayloads[0]) !== JSON.stringify(batchExecutePayloads[1])) {
+    throw new Error(`stale batch did not reuse original payload: ${JSON.stringify(batchExecutePayloads)}`)
+  }
+  if (await page.evaluate(() => Boolean(sessionStorage.getItem('autoscript.managedBatchRecovery.v1')))) throw new Error('completed batch did not clear session recovery')
+  if (await page.getByLabel('选择设备 验收设备').isChecked()) throw new Error('completed batch did not clear selection')
+  await page.waitForTimeout(1800)
+  if (batchExecuteAttempts !== 2) throw new Error(`completed batch was submitted again: ${batchExecuteAttempts}`)
+  await restoredBatch.getByRole('button', { name: /完\s*成/ }).click()
 
   await page.getByLabel('删除设备验收设备').click()
   const deleteModal = page.getByRole('dialog', { name: '删除设备前确认影响' })
