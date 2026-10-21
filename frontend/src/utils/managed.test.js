@@ -13,7 +13,9 @@ import {
   isThumbnailStale,
   managedClientPath,
   scheduleFormValues,
+  scheduleStatusCounts,
   secondsToInterval,
+  shortMonthSkipDay,
   shouldRefreshThumbnail,
   thumbnailTimestamp,
 } from './managed.js'
@@ -80,6 +82,16 @@ test('visual Cron presets create valid five-field expressions and readable summa
   assert.equal(isValidCronExpression('0 9 * *'), false)
 })
 
+test('schedule maintenance helpers distinguish enabled state and warn about short months', () => {
+  assert.deepEqual(scheduleStatusCounts([
+    { id: 1, enabled: true }, { id: 2, enabled: false }, { id: 3, enabled: true },
+  ]), { enabled: 2, paused: 1 })
+  assert.equal(shortMonthSkipDay({ cron_mode: 'visual', cron_preset: 'monthly', cron_monthday: 29 }), 29)
+  assert.equal(shortMonthSkipDay({ cron_mode: 'advanced' }, '0 9 31 * *'), 31)
+  assert.equal(shortMonthSkipDay({ cron_mode: 'visual', cron_preset: 'daily', cron_monthday: 31 }), null)
+  assert.equal(shortMonthSkipDay({ cron_mode: 'advanced' }, '0 9 * * *'), null)
+})
+
 test('Cron schedule payload excludes interval and legacy schedules still format as intervals', () => {
   const payload = buildSchedulePayload({
     name: '工作日报', agent_id: 2, script_id: 4, schedule_type: 'cron', cron_mode: 'visual',
@@ -93,4 +105,12 @@ test('Cron schedule payload excludes interval and legacy schedules still format 
   })
   assert.equal(formatSchedule({ interval_seconds: 3600 }), '每 1 小时')
   assert.equal(formatSchedule({ schedule_type: 'cron', cron_expression: '0 9 * * *', timezone: 'Asia/Shanghai' }), '每天 09:00 执行 · Asia/Shanghai')
+
+  const editValues = scheduleFormValues({
+    name: '月底盘点', agent_id: 2, script_id: 4, params: '{}', schedule_type: 'cron',
+    cron_expression: '30 20 31 * *', timezone: 'Asia/Shanghai', expires_after_seconds: 3600,
+  })
+  assert.equal(editValues.schedule_type, 'cron')
+  assert.equal(editValues.cron_mode, 'advanced')
+  assert.equal(buildSchedulePayload(editValues).cron_expression, '30 20 31 * *')
 })

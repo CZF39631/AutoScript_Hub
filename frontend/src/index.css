@@ -205,13 +205,19 @@ button, input, select, textarea { font: inherit; }
 .managed-dispatch-schedules__heading h3 { margin: 0; font-size: 14px; }
 .managed-dispatch-schedules__heading span { color: var(--apple-secondary); font-size: 11px; }
 .managed-dispatch-schedules__heading .ant-btn { padding-inline: 0; }
-.managed-dispatch-schedules__list { max-height: 180px; overflow: auto; }
-.managed-dispatch-schedules__list > div { padding: 8px 0; border-top: 1px solid rgba(0,0,0,.055); }
-.managed-dispatch-schedules__list > div > div { display: flex; justify-content: space-between; gap: 12px; }
-.managed-dispatch-schedules__list strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.managed-dispatch-schedules__list span, .managed-dispatch-schedules__list small { color: var(--apple-secondary); font-size: 11px; white-space: nowrap; }
+.managed-dispatch-schedules__list { max-height: 360px; overflow: auto; }
+.managed-dispatch-schedule-row { padding: 10px 0; border-top: 1px solid rgba(0,0,0,.055); }
+.managed-dispatch-schedule-row.is-editing { margin-inline: -8px; padding-inline: 8px; border-radius: 10px; background: rgba(0,122,255,.07); }
+.managed-dispatch-schedule-row__summary { min-width: 0; display: grid; gap: 3px; }
+.managed-dispatch-schedule-row__summary > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.managed-dispatch-schedule-row__summary strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-dispatch-schedule-row__summary .ant-tag { margin: 0; flex: 0 0 auto; font-size: 10px; line-height: 18px; }
+.managed-dispatch-schedule-row__summary span, .managed-dispatch-schedule-row__summary small { overflow: hidden; color: var(--apple-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-dispatch-schedule-row__actions { margin-top: 5px; }
+.managed-dispatch-schedule-row__actions .ant-btn { padding-inline: 5px; font-size: 11px; }
 .managed-dispatch-schedules .ant-empty { margin-block: 12px 4px; }
 .managed-cron-config { margin-bottom: 20px; padding: 16px; border-radius: 14px; background: rgba(245,245,247,.82); }
+.managed-cron-month-warning { margin-bottom: 12px; }
 .managed-cron-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .managed-cron-grid .ant-form-item { margin-bottom: 18px; }
 .managed-weekday-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
@@ -229,7 +235,8 @@ button, input, select, textarea { font: inherit; }
   .managed-dispatch-drawer .ant-drawer-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .managed-cron-grid { grid-template-columns: 1fr; gap: 0; }
   .managed-weekday-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .managed-dispatch-schedules__list > div > div { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .managed-dispatch-schedule-row__actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .managed-dispatch-schedule-row__actions .ant-btn { width: 100%; justify-content: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) {
   .managed-schedule-reveal { transition: none; }

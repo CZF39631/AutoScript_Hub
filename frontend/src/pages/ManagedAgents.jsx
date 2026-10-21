@@ -4,15 +4,18 @@ import {
   Segmented, Select, Skeleton, Space, Switch, Tag, Tooltip, message,
 } from 'antd'
 import {
-  DeleteOutlined, DesktopOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined,
-  SearchOutlined, SendOutlined, WarningOutlined, ZoomInOutlined,
+  DeleteOutlined, DesktopOutlined, EditOutlined, EyeOutlined, LoadingOutlined,
+  PauseCircleOutlined, PictureOutlined, PlayCircleOutlined, ReloadOutlined, SearchOutlined,
+  SendOutlined, ThunderboltOutlined, WarningOutlined, ZoomInOutlined,
 } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
   apiErrorMessage, buildSchedulePayload, buildVisualCron, describeCron, formatSchedule,
-  intervalToSeconds, isThumbnailStale, isValidCronExpression, statusPresentation, thumbnailTimestamp,
+  intervalToSeconds, isThumbnailStale, isValidCronExpression, scheduleFormValues,
+  scheduleStatusCounts, shortMonthSkipDay, statusPresentation, thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
 
@@ -23,6 +26,15 @@ const durationUnits = [
   { value: 'hour', label: '小时' },
   { value: 'day', label: '天' },
 ]
+
+const runStatusLabels = {
+  pending: '等待中',
+  running: '执行中',
+  success: '成功',
+  failed: '失败',
+  cancelled: '已取消',
+  expired: '已过期',
+}
 
 function parameterDefaults(params) {
   return params.reduce((result, param) => {
@@ -148,7 +160,7 @@ function ThumbnailScreen({ agent }) {
   )
 }
 
-function AgentCard({ agent, updating, deleting, scheduleCount, onToggle, onDispatch, onDelete }) {
+function AgentCard({ agent, updating, deleting, scheduleSummary, onToggle, onDispatch, onDelete }) {
   const status = agent.running_run_id
     ? { color: 'processing', text: agent.running_dispatch_type === 'managed_schedule' ? '运行中（定时）' : '运行中（临时）' }
     : statusPresentation(agent.status, agent.enabled)
@@ -173,7 +185,12 @@ function AgentCard({ agent, updating, deleting, scheduleCount, onToggle, onDispa
         <div><dt>Agent 版本</dt><dd>{agent.agent_version || '-'}</dd></div>
         <div><dt>最近心跳</dt><dd>{agent.last_heartbeat ? formatServerTime(agent.last_heartbeat) : '从未连接'}</dd></div>
         <div><dt>画面更新时间</dt><dd>{updatedAt ? formatServerTime(updatedAt) : '暂无画面'}</dd></div>
-        <div><dt>定时任务</dt><dd>{scheduleCount ? `${scheduleCount} 个已安排` : '暂无'}</dd></div>
+        <div>
+          <dt>定时任务</dt>
+          <dd>{scheduleSummary.enabled || scheduleSummary.paused
+            ? `${scheduleSummary.enabled} 个启用 · ${scheduleSummary.paused} 个暂停`
+            : '暂无'}</dd>
+        </div>
       </dl>
 
       <div className="managed-agent-card__actions">
@@ -211,6 +228,7 @@ function AgentCard({ agent, updating, deleting, scheduleCount, onToggle, onDispa
 }
 
 export default function ManagedAgents({ embedded = false }) {
+  const navigate = useNavigate()
   const [agents, setAgents] = useState([])
   const [schedules, setSchedules] = useState([])
   const [scripts, setScripts] = useState([])
@@ -219,7 +237,9 @@ export default function ManagedAgents({ embedded = false }) {
   const [loadError, setLoadError] = useState('')
   const [updating, setUpdating] = useState({})
   const [deleting, setDeleting] = useState({})
+  const [scheduleActionLoading, setScheduleActionLoading] = useState({})
   const [dispatchAgent, setDispatchAgent] = useState(null)
+  const [editingSchedule, setEditingSchedule] = useState(null)
   const [scriptDetails, setScriptDetails] = useState({})
   const [scriptLoading, setScriptLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -237,6 +257,9 @@ export default function ManagedAgents({ embedded = false }) {
   const cronExpression = selectedCronMode === 'advanced'
     ? cronValues.cron_expression
     : buildVisualCron(cronValues)
+  const shortMonthDay = selectedScheduleType === 'cron'
+    ? shortMonthSkipDay(cronValues, cronExpression)
+    : null
 
   const load = useCallback(async ({ quiet = false } = {}) => {
     if (quiet && listRequest.current) return
@@ -257,6 +280,8 @@ export default function ManagedAgents({ embedded = false }) {
       }
       if (!controller.signal.aborted && scheduleResult.status === 'fulfilled') {
         setSchedules(Array.isArray(scheduleResult.value.data) ? scheduleResult.value.data : [])
+      } else if (!controller.signal.aborted && scheduleResult.status === 'rejected') {
+        throw scheduleResult.reason
       }
     } catch (error) {
       if (!controller.signal.aborted && error?.code !== 'ERR_CANCELED') {
@@ -279,20 +304,31 @@ export default function ManagedAgents({ embedded = false }) {
     }
   }, [load])
 
-  const loadScriptDetail = useCallback(async (scriptId) => {
-    if (!scriptId || scriptDetails[scriptId]) return
+  const loadScriptDetail = useCallback(async (scriptId, applyDefaults = true) => {
+    if (!scriptId) return
+    if (scriptDetails[scriptId]) {
+      if (applyDefaults) {
+        const params = parseScriptConfig(scriptDetails[scriptId].config_json).params || []
+        form.setFieldValue('params', parameterDefaults(params))
+      }
+      return
+    }
     setScriptLoading(true)
     try {
       const response = await api.get(`/api/scripts/${scriptId}`)
       setScriptDetails(current => ({ ...current, [scriptId]: response.data }))
-      const params = parseScriptConfig(response.data?.config_json).params || []
-      form.setFieldValue('params', parameterDefaults(params))
+      if (applyDefaults) {
+        const params = parseScriptConfig(response.data?.config_json).params || []
+        form.setFieldValue('params', parameterDefaults(params))
+      }
     } catch (error) {
       message.error(apiErrorMessage(error, '脚本参数加载失败'))
     } finally {
       setScriptLoading(false)
     }
   }, [form, scriptDetails])
+
+  const scriptsById = useMemo(() => new Map(scripts.map(script => [script.id, script])), [scripts])
 
   const scriptParams = useMemo(() => {
     const detail = scriptDetails[selectedScriptId]
@@ -330,29 +366,20 @@ export default function ManagedAgents({ embedded = false }) {
     return result
   }, [schedules])
 
+  const closeDispatch = () => {
+    setDispatchAgent(null)
+    setEditingSchedule(null)
+  }
+
   const openDispatch = async agent => {
     setDispatchAgent(agent)
+    setEditingSchedule(null)
     setScripts([])
     setEnvironments([])
     form.resetFields()
     form.setFieldsValue({
+      ...scheduleFormValues(null),
       task_type: 'manual',
-      schedule_name: '',
-      schedule_type: 'interval',
-      interval_value: 1,
-      interval_unit: 'hour',
-      cron_mode: 'visual',
-      cron_preset: 'daily',
-      cron_hour: 9,
-      cron_minute: 0,
-      cron_weekdays: [1],
-      cron_monthday: 1,
-      cron_expression: '0 9 * * *',
-      timezone: 'Asia/Shanghai',
-      expires_value: 1,
-      expires_unit: 'hour',
-      schedule_enabled: true,
-      params: {},
     })
     setScriptLoading(true)
     try {
@@ -363,6 +390,67 @@ export default function ManagedAgents({ embedded = false }) {
       message.error(apiErrorMessage(error, '无法读取该设备可用的脚本和环境'))
     } finally {
       setScriptLoading(false)
+    }
+  }
+
+  const openEditSchedule = schedule => {
+    setEditingSchedule(schedule)
+    form.resetFields()
+    form.setFieldsValue({
+      ...scheduleFormValues(schedule),
+      task_type: 'schedule',
+    })
+    loadScriptDetail(schedule.script_id, false)
+  }
+
+  const runScheduleAction = async (schedule, action) => {
+    const actionKey = `${schedule.id}:${action}`
+    setScheduleActionLoading(current => ({ ...current, [actionKey]: true }))
+    try {
+      const response = await api.post(`/api/admin/managed-schedules/${schedule.id}/${action}`)
+      const successText = {
+        enable: `定时任务“${schedule.name}”已恢复`,
+        disable: `定时任务“${schedule.name}”已暂停`,
+        'run-now': `定时任务“${schedule.name}”已提交运行 #${response.data.id}`,
+      }[action]
+      message.success(successText)
+      setSchedules(current => current.map(item => {
+        if (item.id !== schedule.id) return item
+        if (action === 'run-now') {
+          return {
+            ...item,
+            latest_run_id: response.data.id,
+            latest_run_status: response.data.status,
+            last_run_at: response.data.created_at || item.last_run_at,
+          }
+        }
+        return { ...item, ...response.data }
+      }))
+      await load({ quiet: true })
+    } catch (error) {
+      const fallback = {
+        enable: `恢复定时任务“${schedule.name}”失败`,
+        disable: `暂停定时任务“${schedule.name}”失败`,
+        'run-now': `立即运行“${schedule.name}”失败`,
+      }[action]
+      message.error(apiErrorMessage(error, fallback))
+    } finally {
+      setScheduleActionLoading(current => ({ ...current, [actionKey]: false }))
+    }
+  }
+
+  const deleteSchedule = async schedule => {
+    const actionKey = `${schedule.id}:delete`
+    setScheduleActionLoading(current => ({ ...current, [actionKey]: true }))
+    try {
+      await api.delete(`/api/admin/managed-schedules/${schedule.id}`)
+      setSchedules(current => current.filter(item => item.id !== schedule.id))
+      if (editingSchedule?.id === schedule.id) setEditingSchedule(null)
+      message.success(`定时任务“${schedule.name}”已删除，待执行任务已取消`)
+    } catch (error) {
+      message.error(apiErrorMessage(error, `删除定时任务“${schedule.name}”失败`))
+    } finally {
+      setScheduleActionLoading(current => ({ ...current, [actionKey]: false }))
     }
   }
 
@@ -384,7 +472,7 @@ export default function ManagedAgents({ embedded = false }) {
     try {
       await api.delete(`/api/agents/${agent.id}`)
       setAgents(current => current.filter(item => item.id !== agent.id))
-      if (dispatchAgent?.id === agent.id) setDispatchAgent(null)
+      if (dispatchAgent?.id === agent.id) closeDispatch()
       message.success(`设备“${agent.machine_name}”已删除`)
     } catch (error) {
       message.error(apiErrorMessage(error, '设备删除失败'))
@@ -414,13 +502,14 @@ export default function ManagedAgents({ embedded = false }) {
     setSubmitting(true)
     try {
       if (isSchedule) {
-        await api.post('/api/admin/managed-schedules', buildSchedulePayload({
-          ...values,
-          name: values.schedule_name,
-          agent_id: dispatchAgent.id,
-          enabled: values.schedule_enabled,
-        }))
-        message.success('定时任务已创建')
+        const payload = buildSchedulePayload({ ...values, agent_id: dispatchAgent.id })
+        if (editingSchedule) {
+          await api.patch(`/api/admin/managed-schedules/${editingSchedule.id}`, payload)
+          message.success(`定时任务“${payload.name}”已更新`)
+        } else {
+          await api.post('/api/admin/managed-schedules', payload)
+          message.success(`定时任务“${payload.name}”已创建`)
+        }
       } else {
         const response = await api.post(`/api/admin/managed-agents/${dispatchAgent.id}/runs`, {
           script_id: values.script_id,
@@ -430,13 +519,13 @@ export default function ManagedAgents({ embedded = false }) {
         })
         message.success(`临时任务 #${response.data.id} 已发布`)
       }
-      setDispatchAgent(null)
+      closeDispatch()
       load({ quiet: true })
     } catch (error) {
       const cronUnsupported = isSchedule && values.schedule_type === 'cron' && [400, 404, 422].includes(error?.response?.status)
       const fallback = cronUnsupported
         ? '当前服务端可能尚未支持 Cron 定时，请升级服务端或改用固定间隔'
-        : isSchedule ? '定时任务创建失败' : '临时任务发布失败'
+        : isSchedule ? (editingSchedule ? '定时任务更新失败' : '定时任务创建失败') : '临时任务发布失败'
       const errorText = apiErrorMessage(error, fallback)
       message.error(cronUnsupported && errorText !== fallback ? `${errorText}；如服务端版本较旧，请升级或改用固定间隔` : errorText)
     } finally {
@@ -444,12 +533,18 @@ export default function ManagedAgents({ embedded = false }) {
     }
   }
 
+  const dispatchSchedules = schedulesByAgent.get(dispatchAgent?.id) || []
+  const dispatchScheduleCounts = scheduleStatusCounts(dispatchSchedules)
+  const taskFieldsDisabled = selectedTaskType === 'manual'
+    ? !dispatchAgent?.enabled || Boolean(dispatchAgent?.running_run_id)
+    : !dispatchAgent?.enabled && !editingSchedule
+
   return (
     <div className="managed-admin-page">
       <div className={embedded ? 'managed-section-heading' : 'page-heading'}>
         <div>
-          {embedded ? <h3>设备与临时任务</h3> : <h2>被控设备</h2>}
-          <p>查看设备画面与运行状态，向空闲设备下发一次性临时任务</p>
+          {embedded ? <h3>设备、临时任务与定时任务</h3> : <h2>被控设备</h2>}
+          <p>查看设备状态，发布临时任务，并维护固定间隔或 Cron 定时任务</p>
         </div>
         <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>刷新</Button>
       </div>
@@ -506,7 +601,7 @@ export default function ManagedAgents({ embedded = false }) {
                 agent={agent}
                 updating={Boolean(updating[agent.id])}
                 deleting={Boolean(deleting[agent.id])}
-                scheduleCount={(schedulesByAgent.get(agent.id) || []).length}
+                scheduleSummary={scheduleStatusCounts(schedulesByAgent.get(agent.id) || [])}
                 onToggle={toggleAgent}
                 onDispatch={openDispatch}
                 onDelete={deleteAgent}
@@ -536,9 +631,11 @@ export default function ManagedAgents({ embedded = false }) {
       ) : null}
 
       <Drawer
-        title={`向 ${dispatchAgent?.machine_name || ''} 发布任务`}
+        title={editingSchedule
+          ? `编辑 ${dispatchAgent?.machine_name || ''} 的定时任务`
+          : `向 ${dispatchAgent?.machine_name || ''} 发布任务`}
         open={Boolean(dispatchAgent)}
-        onClose={() => !submitting && setDispatchAgent(null)}
+        onClose={() => !submitting && closeDispatch()}
         width={620}
         rootClassName="managed-dispatch-drawer"
         extra={(
@@ -546,10 +643,10 @@ export default function ManagedAgents({ embedded = false }) {
             type="primary"
             icon={<SendOutlined />}
             loading={submitting}
-            disabled={!dispatchAgent?.enabled || (selectedTaskType === 'manual' && Boolean(dispatchAgent?.running_run_id))}
+            disabled={taskFieldsDisabled}
             onClick={() => form.submit()}
           >
-            {selectedTaskType === 'schedule' ? '创建定时任务' : '发布临时任务'}
+            {editingSchedule ? '保存定时任务' : selectedTaskType === 'schedule' ? '创建定时任务' : '发布临时任务'}
           </Button>
         )}
         destroyOnHidden
@@ -570,6 +667,7 @@ export default function ManagedAgents({ embedded = false }) {
           <Form.Item name="task_type" label="任务类型">
             <Segmented
               block
+              disabled={Boolean(editingSchedule)}
               options={[
                 { label: '临时任务', value: 'manual' },
                 { label: '定时任务', value: 'schedule' },
@@ -577,80 +675,155 @@ export default function ManagedAgents({ embedded = false }) {
             />
           </Form.Item>
 
-          <div className={`managed-schedule-reveal${selectedTaskType === 'schedule' ? ' is-open' : ''}`} aria-hidden={selectedTaskType !== 'schedule'}>
-            <div className="managed-schedule-reveal__inner">
-              <section className="managed-dispatch-schedules">
-                <div className="managed-dispatch-schedules__heading">
-                  <div>
-                    <h3>当前已安排</h3>
-                    <span>{(schedulesByAgent.get(dispatchAgent?.id) || []).length} 个定时任务</span>
+          {selectedTaskType === 'schedule' && (
+            <div className="managed-schedule-reveal is-open">
+              <div className="managed-schedule-reveal__inner">
+                <section className="managed-dispatch-schedules">
+                  <div className="managed-dispatch-schedules__heading">
+                    <div>
+                      <h3>当前已安排</h3>
+                      <span>{dispatchScheduleCounts.enabled} 个启用 · {dispatchScheduleCounts.paused} 个暂停</span>
+                    </div>
                   </div>
-                </div>
-                {(schedulesByAgent.get(dispatchAgent?.id) || []).length ? (
-                  <div className="managed-dispatch-schedules__list">
-                    {(schedulesByAgent.get(dispatchAgent?.id) || []).map(schedule => (
-                      <div key={schedule.id}>
-                        <div><strong>{schedule.name}</strong><span>{formatSchedule(schedule)}</span></div>
-                        <small>{schedule.enabled ? `下次 ${formatServerTime(schedule.next_run_at)}` : '已暂停'}</small>
-                      </div>
-                    ))}
-                  </div>
-                ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该设备暂无定时任务" />}
-              </section>
+                  {dispatchSchedules.length ? (
+                    <div className="managed-dispatch-schedules__list">
+                      {dispatchSchedules.map(schedule => {
+                        const toggleAction = schedule.enabled ? 'disable' : 'enable'
+                        const toggleText = schedule.enabled ? '暂停' : '恢复'
+                        return (
+                          <article className={`managed-dispatch-schedule-row${editingSchedule?.id === schedule.id ? ' is-editing' : ''}`} key={schedule.id}>
+                            <div className="managed-dispatch-schedule-row__summary">
+                              <div>
+                                <strong title={schedule.name}>{schedule.name}</strong>
+                                <Tag color={schedule.enabled ? 'green' : 'default'}>{schedule.enabled ? '已启用' : '已暂停'}</Tag>
+                              </div>
+                              <span>{scriptsById.get(schedule.script_id)?.name || `脚本 #${schedule.script_id}`}</span>
+                              <small>{formatSchedule(schedule)}</small>
+                              <small>{schedule.enabled ? `下次 ${formatServerTime(schedule.next_run_at)}` : '暂停期间不会自动下发'}</small>
+                              <small>
+                                {schedule.latest_run_id
+                                  ? `最近运行 #${schedule.latest_run_id} · ${runStatusLabels[schedule.latest_run_status] || schedule.latest_run_status || '状态未知'}`
+                                  : '暂无最近运行'}
+                              </small>
+                            </div>
+                            <Space className="managed-dispatch-schedule-row__actions" size={2} wrap>
+                              <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEditSchedule(schedule)}>编辑</Button>
+                              <Popconfirm
+                                title={`${toggleText}定时任务“${schedule.name}”？`}
+                                description={schedule.enabled ? '暂停后不会再自动下发任务。' : '恢复后将重新计算下一次运行时间。'}
+                                okText={toggleText}
+                                cancelText="取消"
+                                onConfirm={() => runScheduleAction(schedule, toggleAction)}
+                              >
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  icon={schedule.enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                                  loading={scheduleActionLoading[`${schedule.id}:${toggleAction}`]}
+                                >
+                                  {toggleText}
+                                </Button>
+                              </Popconfirm>
+                              <Popconfirm
+                                title={`立即运行“${schedule.name}”？`}
+                                description="确认后会立即创建一次待执行任务。"
+                                okText="立即运行"
+                                cancelText="取消"
+                                onConfirm={() => runScheduleAction(schedule, 'run-now')}
+                              >
+                                <Button type="text" size="small" icon={<ThunderboltOutlined />} loading={scheduleActionLoading[`${schedule.id}:run-now`]}>运行</Button>
+                              </Popconfirm>
+                              <Tooltip title={schedule.latest_run_id ? `查看运行 #${schedule.latest_run_id}` : '暂无最近运行'}>
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  icon={<EyeOutlined />}
+                                  disabled={!schedule.latest_run_id}
+                                  onClick={() => schedule.latest_run_id && navigate(`/runs/${schedule.latest_run_id}`)}
+                                >
+                                  最近运行
+                                </Button>
+                              </Tooltip>
+                              <Popconfirm
+                                title={`删除定时任务“${schedule.name}”？`}
+                                description="待执行任务会被取消；已执行和运行中的历史记录会保留。"
+                                okText="删除"
+                                cancelText="取消"
+                                okButtonProps={{ danger: true }}
+                                onConfirm={() => deleteSchedule(schedule)}
+                              >
+                                <Button danger type="text" size="small" icon={<DeleteOutlined />} loading={scheduleActionLoading[`${schedule.id}:delete`]}>删除</Button>
+                              </Popconfirm>
+                            </Space>
+                          </article>
+                        )
+                      })}
+                    </div>
+                  ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该设备暂无定时任务" />}
+                </section>
 
-              <Form.Item name="schedule_name" label="任务名称" rules={selectedTaskType === 'schedule' ? [{ required: true, whitespace: true, message: '请输入任务名称' }] : []}>
-                <Input maxLength={200} placeholder="例如：每小时同步库存" />
-              </Form.Item>
-              <Form.Item name="schedule_type" label="执行方式">
-                <Segmented block options={[{ label: '固定间隔', value: 'interval' }, { label: 'Cron', value: 'cron' }]} />
-              </Form.Item>
-
-              {selectedScheduleType === 'interval' ? (
-                <Form.Item label="执行间隔" required>
-                  <Space.Compact block>
-                    <Form.Item name="interval_value" noStyle><InputNumber min={1} style={{ width: '70%' }} /></Form.Item>
-                    <Form.Item name="interval_unit" noStyle><Select style={{ width: '30%' }} options={durationUnits} /></Form.Item>
-                  </Space.Compact>
+                <Form.Item name="name" label={editingSchedule ? '编辑任务名称' : '任务名称'} rules={[{ required: true, whitespace: true, message: '请输入任务名称' }]}>
+                  <Input maxLength={200} placeholder="例如：每小时同步库存" />
                 </Form.Item>
-              ) : (
-                <div className="managed-cron-config">
-                  <Form.Item name="cron_mode" label="Cron 配置方式">
-                    <Segmented block options={[{ label: '可视化点选', value: 'visual' }, { label: '高级表达式', value: 'advanced' }]} />
-                  </Form.Item>
-                  {selectedCronMode === 'visual' ? (
-                    <>
-                      <Form.Item name="cron_preset" label="执行周期">
-                        <Segmented block options={[{ label: '每小时', value: 'hourly' }, { label: '每天', value: 'daily' }, { label: '每周', value: 'weekly' }, { label: '每月', value: 'monthly' }]} />
-                      </Form.Item>
-                      <div className="managed-cron-grid">
-                        {selectedCronPreset !== 'hourly' && <Form.Item name="cron_hour" label="小时"><Select options={Array.from({ length: 24 }, (_, value) => ({ value, label: `${String(value).padStart(2, '0')} 时` }))} /></Form.Item>}
-                        <Form.Item name="cron_minute" label="分钟"><Select options={Array.from({ length: 60 }, (_, value) => ({ value, label: `${String(value).padStart(2, '0')} 分` }))} /></Form.Item>
-                        {selectedCronPreset === 'monthly' && <Form.Item name="cron_monthday" label="日期"><Select options={Array.from({ length: 31 }, (_, index) => ({ value: index + 1, label: `${index + 1} 日` }))} /></Form.Item>}
-                      </div>
-                      {selectedCronPreset === 'weekly' && (
-                        <Form.Item name="cron_weekdays" label="星期" rules={[{ required: true, message: '请至少选择一天' }]}>
-                          <Checkbox.Group className="managed-weekday-grid" options={['日', '一', '二', '三', '四', '五', '六'].map((label, value) => ({ label: `周${label}`, value }))} />
-                        </Form.Item>
-                      )}
-                    </>
-                  ) : (
-                    <Form.Item name="cron_expression" label="Cron 表达式" extra="分　时　日　月　星期" rules={[{ validator: (_, value) => isValidCronExpression(value) ? Promise.resolve() : Promise.reject(new Error('请输入有效的五段表达式')) }]}>
-                      <Input className="managed-cron-input" placeholder="0 9 * * 1-5" spellCheck={false} />
-                    </Form.Item>
-                  )}
-                  <Form.Item name="timezone" label="时区"><Select showSearch options={[{ value: 'Asia/Shanghai', label: 'Asia/Shanghai（北京时间）' }, { value: 'UTC', label: 'UTC' }]} /></Form.Item>
-                  <div className={`managed-cron-summary${isValidCronExpression(cronExpression) ? '' : ' is-invalid'}`} aria-live="polite">
-                    <span>执行摘要</span><strong>{describeCron(cronExpression)}</strong>
-                  </div>
-                </div>
-              )}
-              <Form.Item name="schedule_enabled" label="创建后立即启用" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </div>
-          </div>
+                <Form.Item name="schedule_type" label="执行方式">
+                  <Segmented block options={[{ label: '固定间隔', value: 'interval' }, { label: 'Cron', value: 'cron' }]} />
+                </Form.Item>
 
-          <fieldset className="managed-task-fields" disabled={!dispatchAgent?.enabled || (selectedTaskType === 'manual' && Boolean(dispatchAgent?.running_run_id))}>
+                {selectedScheduleType === 'interval' ? (
+                  <Form.Item label="执行间隔" required>
+                    <Space.Compact block>
+                      <Form.Item name="interval_value" noStyle><InputNumber min={1} style={{ width: '70%' }} /></Form.Item>
+                      <Form.Item name="interval_unit" noStyle><Select style={{ width: '30%' }} options={durationUnits} /></Form.Item>
+                    </Space.Compact>
+                  </Form.Item>
+                ) : (
+                  <div className="managed-cron-config">
+                    <Form.Item name="cron_mode" label="Cron 配置方式">
+                      <Segmented block options={[{ label: '可视化点选', value: 'visual' }, { label: '高级表达式', value: 'advanced' }]} />
+                    </Form.Item>
+                    {selectedCronMode === 'visual' ? (
+                      <>
+                        <Form.Item name="cron_preset" label="执行周期">
+                          <Segmented block options={[{ label: '每小时', value: 'hourly' }, { label: '每天', value: 'daily' }, { label: '每周', value: 'weekly' }, { label: '每月', value: 'monthly' }]} />
+                        </Form.Item>
+                        <div className="managed-cron-grid">
+                          {selectedCronPreset !== 'hourly' && <Form.Item name="cron_hour" label="小时"><Select options={Array.from({ length: 24 }, (_, value) => ({ value, label: `${String(value).padStart(2, '0')} 时` }))} /></Form.Item>}
+                          <Form.Item name="cron_minute" label="分钟"><Select options={Array.from({ length: 60 }, (_, value) => ({ value, label: `${String(value).padStart(2, '0')} 分` }))} /></Form.Item>
+                          {selectedCronPreset === 'monthly' && <Form.Item name="cron_monthday" label="日期"><Select options={Array.from({ length: 31 }, (_, index) => ({ value: index + 1, label: `${index + 1} 日` }))} /></Form.Item>}
+                        </div>
+                        {selectedCronPreset === 'weekly' && (
+                          <Form.Item name="cron_weekdays" label="星期" rules={[{ required: true, message: '请至少选择一天' }]}>
+                            <Checkbox.Group className="managed-weekday-grid" options={['日', '一', '二', '三', '四', '五', '六'].map((label, value) => ({ label: `周${label}`, value }))} />
+                          </Form.Item>
+                        )}
+                      </>
+                    ) : (
+                      <Form.Item name="cron_expression" label="Cron 表达式" extra="分　时　日　月　星期" rules={[{ validator: (_, value) => isValidCronExpression(value) ? Promise.resolve() : Promise.reject(new Error('请输入有效的五段表达式')) }]}>
+                        <Input className="managed-cron-input" placeholder="0 9 * * 1-5" spellCheck={false} />
+                      </Form.Item>
+                    )}
+                    <Form.Item name="timezone" label="时区"><Select showSearch options={[{ value: 'Asia/Shanghai', label: 'Asia/Shanghai（北京时间）' }, { value: 'UTC', label: 'UTC' }]} /></Form.Item>
+                    {shortMonthDay && (
+                      <Alert
+                        className="managed-cron-month-warning"
+                        type="warning"
+                        showIcon
+                        title={`每月 ${shortMonthDay} 日执行时，没有该日期的短月份不会执行。`}
+                      />
+                    )}
+                    <div className={`managed-cron-summary${isValidCronExpression(cronExpression) ? '' : ' is-invalid'}`} aria-live="polite">
+                      <span>执行摘要</span><strong>{describeCron(cronExpression)}</strong>
+                    </div>
+                  </div>
+                )}
+                <Form.Item name="enabled" label={editingSchedule ? '任务启用状态' : '创建后立即启用'} valuePropName="checked">
+                  <Switch checkedChildren="启用" unCheckedChildren="暂停" />
+                </Form.Item>
+              </div>
+            </div>
+          )}
+
+          <fieldset className="managed-task-fields" disabled={taskFieldsDisabled}>
           <Form.Item name="script_id" label="脚本" rules={[{ required: true, message: '请选择脚本' }]}>
             <Select
               showSearch

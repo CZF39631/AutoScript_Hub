@@ -250,6 +250,82 @@ def test_schedule_crud_toggle_and_run_now(client, admin_token, dev_token):
     assert deleted.status_code == 200
 
 
+def test_schedule_list_filters_latest_run_and_delete_cancels_only_pending(
+    client, admin_token, dev_token, fresh_db
+):
+    TestSession, _ = fresh_db
+    script_id = _upload(client, admin_token)
+    first_agent = _register_managed(client, dev_token, "filter-agent-1", "filter-agent-1")
+    second_agent = _register_managed(client, dev_token, "filter-agent-2", "filter-agent-2")
+    first = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "启用计划", "agent_id": first_agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/enabled.txt"}, "interval_seconds": 60,
+        },
+        headers=_headers(admin_token),
+    ).json()
+    second = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "暂停计划", "agent_id": second_agent["id"], "script_id": script_id,
+            "params": {"url_file": "C:/paused.txt"}, "interval_seconds": 60,
+            "enabled": False,
+        },
+        headers=_headers(admin_token),
+    ).json()
+
+    completed = client.post(
+        "/api/admin/managed-schedules/{}/run-now".format(first["id"]),
+        headers=_headers(admin_token),
+    ).json()
+    claimed = client.post(
+        "/api/runs/{}/claim".format(completed["id"]),
+        json={"agent_id": first_agent["id"]},
+        headers=_headers(dev_token, first_agent["agent_token"]),
+    )
+    assert claimed.status_code == 200
+    finished = client.patch(
+        "/api/runs/{}/status".format(completed["id"]),
+        json={"status": "success", "agent_id": first_agent["id"]},
+        headers=_headers(dev_token, first_agent["agent_token"]),
+    )
+    assert finished.status_code == 200
+    pending = client.post(
+        "/api/admin/managed-schedules/{}/run-now".format(first["id"]),
+        headers=_headers(admin_token),
+    ).json()
+
+    enabled = client.get(
+        "/api/admin/managed-schedules?agent_id={}&enabled=true".format(first_agent["id"]),
+        headers=_headers(admin_token),
+    )
+    paused = client.get(
+        "/api/admin/managed-schedules?enabled=false",
+        headers=_headers(admin_token),
+    )
+    assert enabled.status_code == 200
+    assert [item["id"] for item in enabled.json()] == [first["id"]]
+    assert enabled.json()[0]["latest_run_id"] == pending["id"]
+    assert enabled.json()[0]["latest_run_status"] == "pending"
+    assert [item["id"] for item in paused.json()] == [second["id"]]
+
+    deleted = client.delete(
+        "/api/admin/managed-schedules/{}".format(first["id"]),
+        headers=_headers(admin_token),
+    )
+    assert deleted.status_code == 200
+    db = TestSession()
+    saved_completed = db.query(Run).filter(Run.id == completed["id"]).one()
+    saved_pending = db.query(Run).filter(Run.id == pending["id"]).one()
+    assert saved_completed.status == "success"
+    assert saved_pending.status == "cancelled"
+    assert saved_pending.finished_at is not None
+    assert saved_pending.is_deleted is False
+    assert "计划已删除" in saved_pending.error_msg
+    db.close()
+
+
 def test_scheduler_materializes_once_skips_backlog_and_expires_pending(
     client, admin_token, dev_token, fresh_db, monkeypatch
 ):

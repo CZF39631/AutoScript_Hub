@@ -106,6 +106,25 @@ export function formatSchedule(schedule) {
   return formatInterval(schedule?.interval_seconds)
 }
 
+export function scheduleStatusCounts(schedules = []) {
+  return schedules.reduce((counts, schedule) => {
+    if (schedule?.enabled) counts.enabled += 1
+    else counts.paused += 1
+    return counts
+  }, { enabled: 0, paused: 0 })
+}
+
+export function shortMonthSkipDay(values = {}, expression = '') {
+  let day = null
+  if (values.cron_mode !== 'advanced' && values.cron_preset === 'monthly') {
+    day = Number(values.cron_monthday)
+  } else {
+    const fields = String(expression || values.cron_expression || '').trim().split(/\s+/)
+    if (fields.length === 5 && /^\d+$/.test(fields[2])) day = Number(fields[2])
+  }
+  return Number.isInteger(day) && day >= 29 && day <= 31 ? day : null
+}
+
 export function parseParams(value) {
   if (!value) return {}
   if (typeof value === 'object' && !Array.isArray(value)) return value

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.auth import require_role
@@ -122,6 +122,8 @@ class ManagedScheduleItem(BaseModel):
     updated_by: int
     created_at: datetime
     updated_at: datetime
+    latest_run_id: Optional[int] = None
+    latest_run_status: Optional[str] = None
 
 
 def _utc_naive(value: datetime) -> datetime:
@@ -153,7 +155,27 @@ def _schedule_or_404(db: Session, schedule_id: int) -> ManagedSchedule:
     return schedule
 
 
-def _schedule_item(schedule: ManagedSchedule) -> ManagedScheduleItem:
+def _latest_runs_by_schedule(
+    db: Session, schedule_ids: List[int]
+) -> Dict[int, Run]:
+    if not schedule_ids:
+        return {}
+    latest_ids = db.query(
+        Run.schedule_id.label("schedule_id"),
+        func.max(Run.id).label("run_id"),
+    ).filter(
+        Run.schedule_id.in_(schedule_ids),
+        Run.is_deleted == False,
+    ).group_by(Run.schedule_id).subquery()
+    runs = db.query(Run).join(
+        latest_ids, Run.id == latest_ids.c.run_id
+    ).all()
+    return {run.schedule_id: run for run in runs}
+
+
+def _schedule_item(
+    schedule: ManagedSchedule, latest_run: Optional[Run] = None
+) -> ManagedScheduleItem:
     try:
         params = json.loads(schedule.params or "{}")
     except (TypeError, json.JSONDecodeError):
@@ -177,6 +199,8 @@ def _schedule_item(schedule: ManagedSchedule) -> ManagedScheduleItem:
         updated_by=schedule.updated_by,
         created_at=schedule.created_at,
         updated_at=schedule.updated_at,
+        latest_run_id=latest_run.id if latest_run else None,
+        latest_run_status=latest_run.status if latest_run else None,
     )
 
 
@@ -406,13 +430,19 @@ def dispatch_managed_run(
 
 @router.get("/managed-schedules", response_model=List[ManagedScheduleItem])
 def list_managed_schedules(
+    agent_id: Optional[int] = Query(default=None),
+    enabled: Optional[bool] = Query(default=None),
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
-    schedules = db.query(ManagedSchedule).filter(
-        ManagedSchedule.is_deleted == False
-    ).order_by(ManagedSchedule.created_at.desc()).all()
-    return [_schedule_item(item) for item in schedules]
+    query = db.query(ManagedSchedule).filter(ManagedSchedule.is_deleted == False)
+    if agent_id is not None:
+        query = query.filter(ManagedSchedule.agent_id == agent_id)
+    if enabled is not None:
+        query = query.filter(ManagedSchedule.enabled == enabled)
+    schedules = query.order_by(ManagedSchedule.created_at.desc()).all()
+    latest_runs = _latest_runs_by_schedule(db, [item.id for item in schedules])
+    return [_schedule_item(item, latest_runs.get(item.id)) for item in schedules]
 
 
 @router.post("/managed-schedules", response_model=ManagedScheduleItem)
@@ -469,7 +499,9 @@ def get_managed_schedule(
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
-    return _schedule_item(_schedule_or_404(db, schedule_id))
+    schedule = _schedule_or_404(db, schedule_id)
+    latest_run = _latest_runs_by_schedule(db, [schedule.id]).get(schedule.id)
+    return _schedule_item(schedule, latest_run)
 
 
 @router.patch("/managed-schedules/{schedule_id}", response_model=ManagedScheduleItem)
@@ -559,6 +591,19 @@ def delete_managed_schedule(
     schedule.enabled = False
     schedule.is_deleted = True
     schedule.updated_by = current_user.id
+    now = datetime.now(timezone.utc)
+    db.query(Run).filter(
+        Run.schedule_id == schedule.id,
+        Run.status == "pending",
+        Run.is_deleted == False,
+    ).update(
+        {
+            Run.status: "cancelled",
+            Run.finished_at: now,
+            Run.error_msg: "托管计划已删除，待执行任务已取消",
+        },
+        synchronize_session=False,
+    )
     db.commit()
     write_audit(
         current_user.id,
