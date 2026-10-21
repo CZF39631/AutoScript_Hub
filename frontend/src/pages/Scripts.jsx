@@ -254,14 +254,14 @@ export default function Scripts() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="page-title-row">
         <h2 style={{ margin: 0 }}>脚本</h2>
         {canUpload && (
           <Button type="primary" icon={<PlusOutlined />} disabled={!groupsReady} onClick={() => { form.setFieldsValue({ group_ids: defaultGroupIds(groups) }); setUploadOpen(true) }}>上传脚本</Button>
         )}
       </div>
 
-      <Space style={{ marginBottom: 16 }}>
+      <Space className="filter-toolbar">
         <Input placeholder="搜索脚本名称" prefix={<SearchOutlined />}
           value={search} onChange={e => setSearch(e.target.value)} style={{ width: 240 }} allowClear />
         <Select placeholder="全部分类" value={category} onChange={setCategory}

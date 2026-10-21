@@ -123,7 +123,7 @@ export default function RunDetail() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div className="page-title-row">
         <h2 style={{ margin: 0 }}>执行详情 #{run.id}</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>

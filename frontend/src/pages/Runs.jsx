@@ -175,7 +175,7 @@ export default function Runs() {
           {(r.has_result_files || r.result_files) && (
             canOpenResultLocally(r, agentOnline, agentId) && r.result_files ? (
               <Tooltip title="在执行客户端打开结果文件">
-                <Button type="link" icon={<FolderOpenOutlined />} onClick={() => openLocalResult(r)} />
+                <Button type="link" icon={<FolderOpenOutlined />} aria-label="在执行客户端打开结果文件" onClick={() => openLocalResult(r)} />
               </Tooltip>
             ) : <Tooltip title="结果保存在执行客户端"><span>本地结果</span></Tooltip>
           )}
@@ -186,9 +186,9 @@ export default function Runs() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div className="page-title-row">
         <h2 style={{ margin: 0 }}>执行历史{hasAlive ? ' (自动刷新中...)' : ''}</h2>
-        <Space>
+        <Space className="page-title-actions">
           <Button size="small" onClick={() => {
             setStatusFilter(undefined)
             setUserFilter(undefined)
@@ -201,7 +201,7 @@ export default function Runs() {
         </Space>
       </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space className="filter-toolbar" wrap>
         <Select placeholder="状态" value={statusFilter} onChange={setStatusFilter}
           options={statusOptions} style={{ width: 120 }} allowClear />
         {isAdmin && (

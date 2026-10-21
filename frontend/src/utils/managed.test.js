@@ -7,12 +7,14 @@ import {
   buildVisualCron,
   canConfirmAgentImpact,
   describeCron,
+  dispatchResourceState,
   formatInterval,
   formatSchedule,
   intervalToSeconds,
   isValidCronExpression,
   isManagedClientMode,
   isThumbnailStale,
+  MANAGED_FIRST_CONNECTION_GUIDE,
   managedClientPath,
   scheduleFormValues,
   scheduleStatusCounts,
@@ -27,6 +29,25 @@ test('managed mode and its route whitelist are explicit', () => {
   assert.equal(isManagedClientMode({ _CLIENT_MODE: 'standard' }), false)
   assert.equal(managedClientPath('/scripts'), '/managed')
   assert.equal(managedClientPath('/managed'), '/managed')
+})
+
+test('first-device onboarding exposes only existing in-app recovery routes', () => {
+  assert.equal(MANAGED_FIRST_CONNECTION_GUIDE.steps.length, 3)
+  assert.match(MANAGED_FIRST_CONNECTION_GUIDE.minimumVersion, /最低要求/)
+  assert.deepEqual(
+    MANAGED_FIRST_CONNECTION_GUIDE.links.map(item => item.route),
+    ['/settings', '/updates'],
+  )
+  assert.equal(MANAGED_FIRST_CONNECTION_GUIDE.troubleshooting.length >= 2, true)
+})
+
+test('dispatch resources distinguish loading, ready, empty and recoverable error states', () => {
+  assert.equal(dispatchResourceState({ loading: true, error: 'ignored', value: [] }), 'loading')
+  assert.equal(dispatchResourceState({ error: 'network failed', value: [] }), 'error')
+  assert.equal(dispatchResourceState({ value: [] }), 'empty')
+  assert.equal(dispatchResourceState({ value: null }), 'empty')
+  assert.equal(dispatchResourceState({ value: [{ id: 1 }] }), 'ready')
+  assert.equal(dispatchResourceState({ value: { id: 1 } }), 'ready')
 })
 
 test('fixed intervals convert between form units and seconds', () => {

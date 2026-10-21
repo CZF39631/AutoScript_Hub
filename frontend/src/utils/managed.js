@@ -6,6 +6,31 @@ export const INTERVAL_UNITS = [
 
 const unitMap = new Map(INTERVAL_UNITS.map(item => [item.value, item]))
 
+export const MANAGED_FIRST_CONNECTION_GUIDE = {
+  title: '连接第一台设备',
+  minimumVersion: '最低要求：客户端初始化设置中可选择“被控模式”',
+  steps: [
+    '在目标 Windows 客户端打开初始化设置，填写当前服务端地址并选择“被控模式”。',
+    '完成账号验证和本机运行配置后启动客户端，保持客户端与网络在线。',
+    '返回此页等待设备首次心跳；通常很快出现，也可使用“刷新”立即检查。',
+  ],
+  troubleshooting: [
+    '没有“被控模式”：先在系统设置检查客户端更新，或查看更新说明确认版本能力。',
+    '长时间未上线：核对服务端地址、账号权限、代理与防火墙，并确认客户端仍在运行。',
+  ],
+  links: [
+    { route: '/settings', label: '打开系统设置' },
+    { route: '/updates', label: '查看更新说明' },
+  ],
+}
+
+export function dispatchResourceState({ loading = false, error = '', value = null } = {}) {
+  if (loading) return 'loading'
+  if (error) return 'error'
+  if (value == null || (Array.isArray(value) && value.length === 0)) return 'empty'
+  return 'ready'
+}
+
 export const THUMBNAIL_STALE_AFTER_MS = 2 * 60 * 1000
 
 export function thumbnailTimestamp(agent) {

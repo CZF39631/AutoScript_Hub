@@ -15,9 +15,9 @@ import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
 import {
   agentImpactCounts, apiErrorMessage, buildSchedulePayload, buildVisualCron,
-  canConfirmAgentImpact, describeCron, formatSchedule, intervalToSeconds,
-  isThumbnailStale, isValidCronExpression, scheduleFormValues, scheduleStatusCounts,
-  shortMonthSkipDay, statusPresentation, thumbnailTimestamp,
+  canConfirmAgentImpact, describeCron, dispatchResourceState, formatSchedule, intervalToSeconds,
+  isThumbnailStale, isValidCronExpression, MANAGED_FIRST_CONNECTION_GUIDE,
+  scheduleFormValues, scheduleStatusCounts, shortMonthSkipDay, statusPresentation, thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
 import usePageFocused from '../hooks/usePageFocused'
@@ -309,13 +309,16 @@ export default function ManagedAgents({ embedded = false }) {
   const [dispatchAgent, setDispatchAgent] = useState(null)
   const [editingSchedule, setEditingSchedule] = useState(null)
   const [scriptDetails, setScriptDetails] = useState({})
-  const [scriptLoading, setScriptLoading] = useState(false)
+  const [optionsResource, setOptionsResource] = useState({ status: 'empty', error: '' })
+  const [scriptResource, setScriptResource] = useState({ status: 'empty', error: '', scriptId: null })
   const [submitting, setSubmitting] = useState(false)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [page, setPage] = useState(1)
   const listRequest = useRef(null)
   const impactRequest = useRef(null)
+  const optionsRequest = useRef(0)
+  const scriptRequest = useRef(0)
   const [form] = Form.useForm()
   const selectedScriptId = Form.useWatch('script_id', form)
   const selectedTaskType = Form.useWatch('task_type', form) || 'manual'
@@ -386,26 +389,33 @@ export default function ManagedAgents({ embedded = false }) {
   }, [hasActiveWork, load, pageFocused])
 
   const loadScriptDetail = useCallback(async (scriptId, applyDefaults = true) => {
-    if (!scriptId) return
-    if (scriptDetails[scriptId]) {
-      if (applyDefaults) {
-        const params = parseScriptConfig(scriptDetails[scriptId].config_json).params || []
-        form.setFieldValue('params', parameterDefaults(params))
-      }
+    const requestId = scriptRequest.current + 1
+    scriptRequest.current = requestId
+    if (!scriptId) {
+      setScriptResource({ status: 'empty', error: '', scriptId: null })
       return
     }
-    setScriptLoading(true)
+    if (scriptDetails[scriptId]) {
+      const params = parseScriptConfig(scriptDetails[scriptId].config_json).params || []
+      setScriptResource({ status: dispatchResourceState({ value: params }), error: '', scriptId })
+      if (applyDefaults) form.setFieldValue('params', parameterDefaults(params))
+      return
+    }
+    setScriptResource({ status: 'loading', error: '', scriptId })
     try {
       const response = await api.get(`/api/scripts/${scriptId}`)
+      if (scriptRequest.current !== requestId) return
+      const params = parseScriptConfig(response.data?.config_json).params || []
       setScriptDetails(current => ({ ...current, [scriptId]: response.data }))
-      if (applyDefaults) {
-        const params = parseScriptConfig(response.data?.config_json).params || []
-        form.setFieldValue('params', parameterDefaults(params))
-      }
+      setScriptResource({ status: dispatchResourceState({ value: params }), error: '', scriptId })
+      if (applyDefaults) form.setFieldValue('params', parameterDefaults(params))
     } catch (error) {
-      message.error(apiErrorMessage(error, '脚本参数加载失败'))
-    } finally {
-      setScriptLoading(false)
+      if (scriptRequest.current !== requestId) return
+      setScriptResource({
+        status: 'error',
+        error: apiErrorMessage(error, '脚本参数加载失败，请重试'),
+        scriptId,
+      })
     }
   }, [form, scriptDetails])
 
@@ -448,30 +458,45 @@ export default function ManagedAgents({ embedded = false }) {
   }, [schedules])
 
   const closeDispatch = () => {
+    optionsRequest.current += 1
+    scriptRequest.current += 1
     setDispatchAgent(null)
     setEditingSchedule(null)
   }
 
-  const openDispatch = async agent => {
+  const loadDispatchOptions = async agent => {
+    if (!agent) return
+    const requestId = optionsRequest.current + 1
+    optionsRequest.current = requestId
+    setOptionsResource({ status: 'loading', error: '' })
+    try {
+      const response = await api.get(`/api/admin/managed-agents/${agent.id}/options`)
+      if (optionsRequest.current !== requestId) return
+      const nextScripts = response.data?.scripts || []
+      setScripts(nextScripts)
+      setEnvironments(response.data?.environments || [])
+      setOptionsResource({ status: dispatchResourceState({ value: nextScripts }), error: '' })
+    } catch (error) {
+      if (optionsRequest.current !== requestId) return
+      setOptionsResource({
+        status: 'error',
+        error: apiErrorMessage(error, '无法读取该设备可用的脚本和环境'),
+      })
+    }
+  }
+
+  const openDispatch = agent => {
     setDispatchAgent(agent)
     setEditingSchedule(null)
     setScripts([])
     setEnvironments([])
+    setScriptResource({ status: 'empty', error: '', scriptId: null })
     form.resetFields()
     form.setFieldsValue({
       ...scheduleFormValues(null),
       task_type: 'manual',
     })
-    setScriptLoading(true)
-    try {
-      const response = await api.get(`/api/admin/managed-agents/${agent.id}/options`)
-      setScripts(response.data?.scripts || [])
-      setEnvironments(response.data?.environments || [])
-    } catch (error) {
-      message.error(apiErrorMessage(error, '无法读取该设备可用的脚本和环境'))
-    } finally {
-      setScriptLoading(false)
-    }
+    void loadDispatchOptions(agent)
   }
 
   const openEditSchedule = schedule => {
@@ -681,6 +706,9 @@ export default function ManagedAgents({ embedded = false }) {
   const taskFieldsDisabled = selectedTaskType === 'manual'
     ? !dispatchAgent?.enabled || Boolean(dispatchAgent?.current_run || dispatchAgent?.running_run_id)
     : !dispatchAgent?.enabled && !editingSchedule
+  const selectedScriptResource = scriptResource.scriptId === selectedScriptId ? scriptResource.status : 'empty'
+  const dispatchDataUnavailable = optionsResource.status !== 'ready'
+    || (selectedScriptId && ['loading', 'error'].includes(selectedScriptResource))
   const impactMachineName = impactDialog.data?.machine_name || impactDialog.agent?.machine_name
 
   return (
@@ -772,9 +800,43 @@ export default function ManagedAgents({ embedded = false }) {
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合筛选条件的设备" />
         </div>
       ) : !loadError ? (
-        <div className="managed-agent-empty">
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有托管设备连接到服务器" />
-        </div>
+        <section className="managed-agent-onboarding" aria-labelledby="managed-first-device-title">
+          <div className="managed-agent-onboarding__intro">
+            <DesktopOutlined aria-hidden="true" />
+            <div>
+              <h3 id="managed-first-device-title">{MANAGED_FIRST_CONNECTION_GUIDE.title}</h3>
+              <p>完成一次真实连接后，设备状态、画面与任务入口会显示在这里。</p>
+            </div>
+          </div>
+          <ol className="managed-agent-onboarding__steps">
+            {MANAGED_FIRST_CONNECTION_GUIDE.steps.map((step, index) => (
+              <li key={step}><span aria-hidden="true">{index + 1}</span><p>{step}</p></li>
+            ))}
+          </ol>
+          <Alert
+            type="info"
+            showIcon
+            title={MANAGED_FIRST_CONNECTION_GUIDE.minimumVersion}
+            description={(
+              <ul className="managed-agent-onboarding__troubleshooting">
+                {MANAGED_FIRST_CONNECTION_GUIDE.troubleshooting.map(item => <li key={item}>{item}</li>)}
+              </ul>
+            )}
+          />
+          <Alert
+            className="managed-agent-onboarding__safety"
+            type="warning"
+            showIcon
+            title="首次上线后先做安全试运行"
+            description="先选择无副作用、可快速结束的脚本，使用测试环境和最小参数发布一次临时任务；确认设备、日志与结果均正确后，再创建定时任务。"
+          />
+          <div className="managed-agent-onboarding__actions">
+            {MANAGED_FIRST_CONNECTION_GUIDE.links.map(link => (
+              <Button key={link.route} onClick={() => navigate(link.route)}>{link.label}</Button>
+            ))}
+            <Button type="primary" icon={<ReloadOutlined />} onClick={() => load()}>我已启动客户端，刷新状态</Button>
+          </div>
+        </section>
       ) : null}
 
       <Modal
@@ -879,7 +941,7 @@ export default function ManagedAgents({ embedded = false }) {
             type="primary"
             icon={<SendOutlined />}
             loading={submitting}
-            disabled={taskFieldsDisabled}
+            disabled={taskFieldsDisabled || dispatchDataUnavailable}
             onClick={() => form.submit()}
           >
             {editingSchedule ? '保存定时任务' : selectedTaskType === 'schedule' ? '创建定时任务' : '发布临时任务'}
@@ -898,6 +960,36 @@ export default function ManagedAgents({ embedded = false }) {
         ) : dispatchAgent?.status !== 'online' ? (
           <Alert className="managed-drawer-alert" type="warning" showIcon title="设备当前离线" description="临时任务会保留到有效期结束；设备恢复连接后才能领取。" />
         ) : null}
+
+        {optionsResource.status === 'loading' && (
+          <Alert
+            className="managed-drawer-alert"
+            type="info"
+            showIcon
+            title="正在读取可用脚本与执行环境"
+            description="已填写的任务内容不会因重新读取而清空。"
+          />
+        )}
+        {optionsResource.status === 'error' && (
+          <Alert
+            className="managed-drawer-alert"
+            type="error"
+            showIcon
+            title="可用选项读取失败"
+            description={optionsResource.error}
+            action={<Button onClick={() => loadDispatchOptions(dispatchAgent)}>重试读取</Button>}
+          />
+        )}
+        {optionsResource.status === 'empty' && (
+          <Alert
+            className="managed-drawer-alert"
+            type="info"
+            showIcon
+            title="该设备暂无可用脚本"
+            description="请求已成功，但没有可发布的启用脚本。请先在脚本管理中安装或启用脚本，然后重试读取。"
+            action={<Button onClick={() => navigate('/scripts')}>打开脚本管理</Button>}
+          />
+        )}
 
         <Form form={form} layout="vertical" onFinish={dispatch} requiredMark="optional">
           <Form.Item name="task_type" label="任务类型">
@@ -1065,7 +1157,8 @@ export default function ManagedAgents({ embedded = false }) {
               showSearch
               optionFilterProp="label"
               placeholder="选择要在此设备运行的脚本"
-              loading={scriptLoading}
+              loading={optionsResource.status === 'loading'}
+              disabled={optionsResource.status !== 'ready'}
               onChange={value => { form.setFieldValue('params', {}); loadScriptDetail(value) }}
               options={scripts.map(script => ({ label: script.name, value: script.id, disabled: script.status !== 'active' }))}
             />
@@ -1078,9 +1171,27 @@ export default function ManagedAgents({ embedded = false }) {
             }))} />
           </Form.Item>
 
-          <div className="managed-form-section">
+          <div className="managed-form-section" aria-live="polite">
             <h3>脚本参数</h3>
-            <ManagedParamFields params={scriptParams} disabled={!selectedScriptId || scriptLoading} />
+            {!selectedScriptId && <div className="managed-param-empty">选择脚本后读取参数配置</div>}
+            {selectedScriptId && selectedScriptResource === 'loading' && (
+              <Skeleton active paragraph={{ rows: 2 }} title={false} />
+            )}
+            {selectedScriptId && selectedScriptResource === 'error' && (
+              <Alert
+                type="error"
+                showIcon
+                title="脚本详情读取失败"
+                description={scriptResource.error}
+                action={<Button onClick={() => loadScriptDetail(selectedScriptId)}>重试</Button>}
+              />
+            )}
+            {selectedScriptId && selectedScriptResource === 'empty' && (
+              <div className="managed-param-empty">脚本详情已读取，此脚本无需额外参数</div>
+            )}
+            {selectedScriptId && selectedScriptResource === 'ready' && (
+              <ManagedParamFields params={scriptParams} />
+            )}
           </div>
 
           <Form.Item label="任务有效期" required>

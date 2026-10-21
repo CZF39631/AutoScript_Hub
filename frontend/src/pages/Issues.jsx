@@ -93,7 +93,7 @@ export default function Issues() {
   return (
     <div>
       <h2>{canResolve ? '问题工单' : '我的反馈'}</h2>
-      <Space style={{ marginBottom: 16 }}>
+      <Space className="filter-toolbar">
         <Select placeholder="状态筛选" value={statusFilter} onChange={setStatusFilter}
           options={[{ label: '待处理', value: 'open' }, { label: '已解决', value: 'resolved' }]}
           style={{ width: 130 }} allowClear />

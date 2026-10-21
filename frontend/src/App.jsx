@@ -1,9 +1,11 @@
+import { useEffect, useRef, useState } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Button } from 'antd'
+import { Layout, Menu, Button, Drawer } from 'antd'
 import {
   DashboardOutlined, CodeOutlined, HistoryOutlined,
   UserOutlined, LogoutOutlined, AuditOutlined, BugOutlined, GlobalOutlined,
   SettingOutlined, NotificationOutlined, DesktopOutlined, WarningOutlined,
+  MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined,
 } from '@ant-design/icons'
 import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
@@ -24,6 +26,7 @@ import Updates from './pages/Updates'
 import ManagedControl from './pages/ManagedControl'
 import ManagedClientPanel from './pages/ManagedClientPanel'
 import ImportantUpdateNotice from './components/ImportantUpdateNotice'
+import useMediaQuery from './hooks/useMediaQuery'
 import { isManagedClientMode } from './utils/managed'
 
 const { Sider, Content } = Layout
@@ -60,6 +63,19 @@ function AppLayout() {
   const { agentOnline } = useConnection()
   const nav = useNavigate()
   const loc = useLocation()
+  const isCompact = useMediaQuery('(max-width: 900px)')
+  const isMobile = useMediaQuery('(max-width: 640px)')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(isCompact)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const mobileMenuButton = useRef(null)
+
+  useEffect(() => {
+    setSidebarCollapsed(isCompact)
+  }, [isCompact])
+
+  useEffect(() => {
+    if (!isMobile) setMobileMenuOpen(false)
+  }, [isMobile])
 
   const baseMenuItems = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
@@ -94,37 +110,115 @@ function AppLayout() {
     : loc.pathname.startsWith('/scripts') ? '/scripts'
     : '/dashboard'
 
-  return (
-    <Layout className="app-shell">
-      <Sider width={224} theme="light" className="app-sidebar">
-        <div className="app-brand">
-          <img className="app-brand__mark" src="/app-icon.png" alt="" />
+  const goTo = key => {
+    nav(key)
+    if (isMobile) {
+      setMobileMenuOpen(false)
+      requestAnimationFrame(() => mobileMenuButton.current?.focus())
+    }
+  }
+
+  const closeMobileNavigation = () => {
+    setMobileMenuOpen(false)
+    requestAnimationFrame(() => mobileMenuButton.current?.focus())
+  }
+
+  const navigationContents = ({ collapsed = false } = {}) => (
+    <>
+      <div className="app-brand">
+        <img className="app-brand__mark" src="/app-icon.png" alt="" />
+        {!collapsed && (
           <span>
             <strong>AutoScript</strong>
             <small>Hub</small>
           </span>
-        </div>
-        <Menu className="app-menu" mode="inline" selectedKeys={[selectedKey]} items={menuItems}
-          onClick={({ key }) => nav(key)} />
-        <div className={`agent-status ${agentOnline ? 'agent-status--online' : 'agent-status--offline'}`}
-          title={agentOnline ? '本地 Agent 连接正常' : '本地 Agent 未启动或连接失败'}>
-          <span className="agent-status__light" aria-hidden="true" />
+        )}
+      </div>
+      <Menu className="app-menu" mode="inline" inlineCollapsed={collapsed} selectedKeys={[selectedKey]} items={menuItems}
+        onClick={({ key }) => goTo(key)} />
+      <div className={`agent-status ${agentOnline ? 'agent-status--online' : 'agent-status--offline'}`}
+        title={agentOnline ? '本地 Agent 连接正常' : '本地 Agent 未启动或连接失败'}>
+        <span className="agent-status__light" aria-hidden="true" />
+        {!collapsed && (
           <span>
             <strong>Agent</strong>
             <small>{agentOnline ? '连接正常' : '未启动或连接失败'}</small>
           </span>
+        )}
+        {collapsed && <span className="visually-hidden">Agent {agentOnline ? '连接正常' : '未启动或连接失败'}</span>}
+      </div>
+      <div className="app-account">
+        <div className="app-account__avatar" aria-label={`当前用户：${user?.display_name || user?.username || '用户'}`}>
+          {(user?.display_name || user?.username || 'U').slice(0, 1).toUpperCase()}
         </div>
-        <div className="app-account">
-          <div className="app-account__avatar">{(user?.display_name || user?.username || 'U').slice(0, 1).toUpperCase()}</div>
+        {!collapsed && (
           <div className="app-account__meta">
             <strong>{user?.display_name}</strong>
             <span>{user?.role}</span>
           </div>
-          <Button className="app-account__logout" type="text" icon={<LogoutOutlined />} title="退出登录"
-            onClick={() => { logout(); nav('/login') }} />
-        </div>
-      </Sider>
+        )}
+        <Button className="app-account__logout" type="text" icon={<LogoutOutlined aria-hidden="true" />} aria-label="退出登录"
+          onClick={() => { logout(); nav('/login') }} />
+      </div>
+    </>
+  )
+
+  return (
+    <Layout className={`app-shell${isMobile ? ' app-shell--mobile' : ''}`}>
+      {!isMobile && (
+        <Sider
+          width={224}
+          collapsedWidth={76}
+          collapsed={sidebarCollapsed}
+          theme="light"
+          className="app-sidebar"
+        >
+          {navigationContents({ collapsed: sidebarCollapsed })}
+          {isCompact && (
+            <Button
+              className="app-sidebar-toggle"
+              type="text"
+              icon={sidebarCollapsed ? <MenuUnfoldOutlined aria-hidden="true" /> : <MenuFoldOutlined aria-hidden="true" />}
+              aria-label={sidebarCollapsed ? '展开侧边导航' : '收起侧边导航'}
+              aria-expanded={!sidebarCollapsed}
+              onClick={() => setSidebarCollapsed(value => !value)}
+            />
+          )}
+        </Sider>
+      )}
       <Layout className="app-workspace">
+        {isMobile && (
+          <header className="app-mobile-header">
+            <Button
+              ref={mobileMenuButton}
+              className="app-mobile-menu-button"
+              type="text"
+              icon={<MenuOutlined aria-hidden="true" />}
+              aria-label={mobileMenuOpen ? '关闭主导航菜单' : '打开主导航菜单'}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="app-mobile-navigation"
+              onClick={() => setMobileMenuOpen(value => !value)}
+            />
+            <div className="app-mobile-brand">
+              <img src="/app-icon.png" alt="" />
+              <strong>AutoScript Hub</strong>
+            </div>
+          </header>
+        )}
+        {isMobile && mobileMenuOpen && (
+          <Drawer
+            id="app-mobile-navigation"
+            rootClassName="app-mobile-navigation"
+            title="主导航"
+            placement="left"
+            width="min(86vw, 320px)"
+            open
+            onClose={closeMobileNavigation}
+            destroyOnHidden
+          >
+            <nav aria-label="主导航">{navigationContents()}</nav>
+          </Drawer>
+        )}
         <OfflineBanner />
         <Content className="app-content">
           <ImportantUpdateNotice />

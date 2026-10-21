@@ -58,7 +58,7 @@ export default function AuditLog() {
   return (
     <div>
       <h2>操作审计</h2>
-      <Space style={{ marginBottom: 16 }}>
+      <Space className="filter-toolbar">
         <Select placeholder="操作类型" value={action} onChange={setAction}
           options={actionOptions} style={{ width: 150 }} allowClear />
         <Input placeholder="用户名" value={username}
