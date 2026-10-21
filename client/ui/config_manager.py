@@ -26,6 +26,10 @@ LEGACY_CONFIG_PATH = os.path.join(PROJECT_ROOT, "client_config.json")
 DEFAULT_CONFIG = {
     "server_url": "http://127.0.0.1:8000",
     "client_mode": "standard",
+    # New managed-mode enablement is privacy-preserving until the local user
+    # explicitly consents in the first-run wizard. Legacy managed configs are
+    # migrated below without changing their prior capture behaviour.
+    "thumbnail_capture_paused": True,
     "device_uid": "",
     "username": "",
     "remember_credentials": False,
@@ -70,6 +74,10 @@ def load_config():
     """Load config and restore any remembered password into memory only."""
     config = dict(DEFAULT_CONFIG)
     saved, source = _read_saved_config()
+    # Versions before managed-mode consent had no key and captured by default.
+    # Preserve that established choice only for already-saved managed installs.
+    if saved and saved.get("client_mode") == "managed" and "thumbnail_capture_paused" not in saved:
+        saved["thumbnail_capture_paused"] = False
     saved = ensure_client_identity(saved, CONFIG_PATH)
     config.update(saved)
     config = apply_installed_client_mode(config, _PATHS.install_dir)
@@ -115,6 +123,8 @@ def save_config(config):
     username = str(persisted.get("username", ""))
     remember = bool(persisted.get("remember_credentials", bool(password)))
     persisted["remember_credentials"] = remember
+    if persisted.get("client_mode") == "managed" and "thumbnail_capture_paused" not in persisted:
+        persisted["thumbnail_capture_paused"] = True
     persisted = normalize_client_identity(persisted)
 
     if remember and password:

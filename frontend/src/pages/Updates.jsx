@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Alert, Card, Collapse, List, Space, Switch, Tag, Typography } from 'antd'
+import { Alert, Card, Collapse, Space, Switch, Tag, Typography } from 'antd'
 import { BellOutlined, NotificationOutlined } from '@ant-design/icons'
 import { useConnection } from '../contexts/ConnectionContext'
 import { currentRelease, releaseHistory } from '../data/releaseNotes'
@@ -16,11 +16,9 @@ function ReleaseSections({ release }) {
   return release.sections?.map(section => (
     <div key={section.title} style={{ marginTop: 14 }}>
       <Text strong>{section.title}</Text>
-      <List
-        size="small"
-        dataSource={section.items}
-        renderItem={item => <List.Item style={{ paddingInline: 0 }}>• {item}</List.Item>}
-      />
+      <ul className="release-note-list">
+        {section.items.map(item => <li key={item}>{item}</li>)}
+      </ul>
     </div>
   ))
 }
@@ -53,7 +51,7 @@ export default function Updates() {
       <h2 style={{ marginBottom: 16 }}><NotificationOutlined /> 更新说明</h2>
 
       <Card style={{ maxWidth: 820, marginBottom: 16 }}>
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Space wrap>
             <Tag color="blue">最新更新</Tag>
             {currentRelease.important && <Tag color="red">重要更新</Tag>}
@@ -69,7 +67,7 @@ export default function Updates() {
       </Card>
 
       <Card title={<Space><BellOutlined />提醒设置</Space>} style={{ maxWidth: 820, marginBottom: 16 }}>
-        <Space direction="vertical">
+        <Space orientation="vertical">
           <Space>
             <Switch checked={hideImportant} onChange={changePreference} />
             <Text>默认隐藏重要更新弹窗</Text>
@@ -85,7 +83,7 @@ export default function Updates() {
           style={{ maxWidth: 820, marginBottom: 16 }}
           type="info"
           showIcon
-          message="当前未连接本地 Agent，无法读取已安装客户端版本"
+          title="当前未连接本地 Agent，无法读取已安装客户端版本"
         />
       )}
 

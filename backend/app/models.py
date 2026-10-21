@@ -102,6 +102,10 @@ class Agent(Base):
     __table_args__ = (
         UniqueConstraint("device_uid", name="uq_agents_device_uid"),
         CheckConstraint("mode IN ('standard', 'managed')", name="ck_agents_mode"),
+        Index(
+            "ix_agents_managed_list",
+            "mode", "is_deleted", "enabled", "status", "last_heartbeat",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -169,6 +173,9 @@ class ManagedAgentBatch(Base):
     skipped_count = Column(Integer, nullable=False, default=0)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    lease_expires_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
     items = relationship(

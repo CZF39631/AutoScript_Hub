@@ -17,6 +17,7 @@ from app.database import get_db
 from app.models import (
     Agent, AuditLog, Environment, ManagedAgentBatch, ManagedAgentBatchItem,
     ManagedAgentGroup, ManagedSchedule, Run, Script, User,
+    managed_agent_group_members,
 )
 from app.routers.agents import AgentItem
 from app.routers.runs import _enrich_run, _has_result_files
@@ -166,7 +167,7 @@ class ManagedBatchRequest(BaseModel):
 class ManagedBatchItemResult(BaseModel):
     agent_id: int
     machine_name: str
-    result: Literal["success", "failed", "skipped"]
+    result: Literal["pending", "success", "failed", "skipped"]
     reason: Optional[str] = None
     run_id: Optional[int] = None
     impact: Optional[Dict[str, Any]] = None
@@ -175,7 +176,9 @@ class ManagedBatchItemResult(BaseModel):
 class ManagedBatchResult(BaseModel):
     batch_id: Optional[int] = None
     operation: BatchOperation
+    status: Literal["processing", "stale", "completed", "failed"] = "completed"
     total: int
+    pending: int = 0
     success: int
     failed: int
     skipped: int
@@ -623,7 +626,25 @@ def list_managed_agent_groups(
     groups = db.query(ManagedAgentGroup).filter(
         ManagedAgentGroup.is_deleted == False
     ).order_by(ManagedAgentGroup.name.asc(), ManagedAgentGroup.id.asc()).all()
-    return [_group_item(db, group) for group in groups]
+    group_ids = [group.id for group in groups]
+    counts = dict(db.query(
+        managed_agent_group_members.c.group_id,
+        func.count(Agent.id),
+    ).join(
+        Agent, Agent.id == managed_agent_group_members.c.agent_id,
+    ).filter(
+        managed_agent_group_members.c.group_id.in_(group_ids),
+        Agent.mode == "managed",
+        Agent.is_deleted == False,
+    ).group_by(managed_agent_group_members.c.group_id).all()) if group_ids else {}
+    return [ManagedAgentGroupItem(
+        id=group.id,
+        name=group.name,
+        description=group.description,
+        member_count=counts.get(group.id, 0),
+        created_at=group.created_at,
+        updated_at=group.updated_at,
+    ) for group in groups]
 
 
 @router.post("/managed-agent-groups", response_model=ManagedAgentGroupItem)
@@ -837,11 +858,218 @@ def preview_managed_agent_batch(
     return _batch_preview(db, req)
 
 
-def _batch_result_from_record(batch: ManagedAgentBatch, *, replayed: bool) -> ManagedBatchResult:
-    payload = json.loads(batch.result_json or "{}")
-    payload["batch_id"] = batch.id
-    payload["replayed"] = replayed
-    return ManagedBatchResult.model_validate(payload)
+BATCH_LEASE_SECONDS = 30
+
+
+def _batch_result_from_record(
+    db: Session, batch: ManagedAgentBatch, *, replayed: bool,
+) -> ManagedBatchResult:
+    """Build a result from durable item rows, including in-progress batches."""
+    stored = json.loads(batch.result_json or "{}")
+    initial_items = stored.get("items") if isinstance(stored.get("items"), list) else []
+    items_by_id = {
+        int(item["agent_id"]): dict(item)
+        for item in initial_items
+        if isinstance(item, dict) and item.get("agent_id") is not None
+    }
+    records = db.query(ManagedAgentBatchItem).filter(
+        ManagedAgentBatchItem.batch_id == batch.id,
+    ).order_by(ManagedAgentBatchItem.id.asc()).all()
+    agent_ids = [record.agent_id for record in records]
+    names = dict(db.query(Agent.id, Agent.machine_name).filter(Agent.id.in_(agent_ids)).all()) if agent_ids else {}
+    for record in records:
+        impact = None
+        if record.detail_json:
+            try:
+                impact = json.loads(record.detail_json)
+            except (TypeError, json.JSONDecodeError):
+                impact = None
+        items_by_id[record.agent_id] = {
+            "agent_id": record.agent_id,
+            "machine_name": names.get(record.agent_id, "设备 #{}".format(record.agent_id)),
+            "result": record.result,
+            "reason": record.reason,
+            "run_id": record.run_id,
+            "impact": impact,
+        }
+    items = [ManagedBatchItemResult.model_validate(item) for item in items_by_id.values()]
+    counts = {
+        state: sum(item.result == state for item in items)
+        for state in ("pending", "success", "failed", "skipped")
+    }
+    return ManagedBatchResult(
+        batch_id=batch.id,
+        operation=batch.operation,
+        status=batch.status,
+        total=batch.total_count,
+        pending=counts["pending"],
+        success=counts["success"],
+        failed=counts["failed"],
+        skipped=counts["skipped"],
+        items=items,
+        replayed=replayed,
+    )
+
+
+def _sync_batch_progress(db: Session, batch: ManagedAgentBatch) -> ManagedBatchResult:
+    result = _batch_result_from_record(db, batch, replayed=False)
+    batch.success_count = result.success
+    batch.failed_count = result.failed
+    batch.skipped_count = result.skipped
+    batch.updated_at = datetime.now(timezone.utc)
+    batch.result_json = result.model_dump_json()
+    return result
+
+
+def _execute_one_batch_item(
+    db: Session,
+    batch: ManagedAgentBatch,
+    item: ManagedAgentBatchItem,
+    req: ManagedBatchRequest,
+    current_user: User,
+    groups: List[ManagedAgentGroup],
+) -> None:
+    agent = db.query(Agent).options(selectinload(Agent.managed_groups)).filter(
+        Agent.id == item.agent_id,
+        Agent.mode == "managed",
+        Agent.is_deleted == False,
+    ).first()
+    if not agent:
+        item.result = "failed"
+        item.reason = "设备不存在或已移除"
+        return
+    current = _batch_item_check(db, agent, req)
+    if current.result != "success":
+        item.result = current.result
+        item.reason = current.reason
+        item.detail_json = json.dumps(current.impact, ensure_ascii=False) if current.impact else None
+        return
+
+    run_id = None
+    if req.operation == "dispatch_run":
+        owner = db.query(User).filter(User.id == agent.user_id).one()
+        now = datetime.now(timezone.utc)
+        run = create_validated_run(
+            db, run_user=owner, script_id=req.script_id, params=req.params,
+            environment_id=req.environment_id, requested_by=current_user.id,
+            dispatch_type="managed_manual", target_agent_id=agent.id,
+            scheduled_for=now,
+            expires_at=now + timedelta(seconds=req.expires_in_seconds),
+            commit=False,
+        )
+        run_id = run.id
+        db.add(AuditLog(
+            user_id=current_user.id, username=current_user.username,
+            action="managed_run.batch_dispatch", target_type="run", target_id=run.id,
+            detail="batch={} agent={}".format(batch.id, agent.id),
+            created_at=datetime.now(timezone.utc),
+        ))
+    elif req.operation == "pause_agents":
+        impact = current.impact or preview_agent_impact(db, agent.id, "disable", managed_only=True)
+        disable_agent(
+            db, agent.id, current_user, expected_version=impact["version"],
+            managed_only=True, commit=False,
+        )
+    elif req.operation == "resume_agents":
+        enable_agent(db, agent.id, current_user, managed_only=True, commit=False)
+    elif req.operation == "pause_schedules":
+        changed = db.query(ManagedSchedule).filter(
+            ManagedSchedule.agent_id == agent.id,
+            ManagedSchedule.enabled == True,
+            ManagedSchedule.is_deleted == False,
+        ).update({
+            ManagedSchedule.enabled: False,
+            ManagedSchedule.updated_by: current_user.id,
+            ManagedSchedule.updated_at: datetime.now(timezone.utc),
+        }, synchronize_session=False)
+        db.add(AuditLog(
+            user_id=current_user.id, username=current_user.username,
+            action="managed_schedule.batch_pause", target_type="agent", target_id=agent.id,
+            detail="batch={} schedules={}".format(batch.id, changed),
+            created_at=datetime.now(timezone.utc),
+        ))
+    elif req.operation == "set_groups":
+        agent.managed_groups = groups
+        db.add(AuditLog(
+            user_id=current_user.id, username=current_user.username,
+            action="managed_agent.groups.batch_replace", target_type="agent", target_id=agent.id,
+            detail="batch={} group_ids={}".format(batch.id, req.group_ids or []),
+            created_at=datetime.now(timezone.utc),
+        ))
+
+    item.result = "success"
+    item.reason = "操作成功"
+    item.run_id = run_id
+    item.detail_json = json.dumps(current.impact, ensure_ascii=False) if current.impact else None
+
+
+def _resume_managed_agent_batch(
+    db: Session,
+    batch_id: int,
+    req: ManagedBatchRequest,
+    current_user: User,
+) -> ManagedBatchResult:
+    groups: List[ManagedAgentGroup] = []
+    if req.operation == "set_groups" and req.group_ids:
+        groups = db.query(ManagedAgentGroup).filter(
+            ManagedAgentGroup.id.in_(req.group_ids),
+            ManagedAgentGroup.is_deleted == False,
+        ).all()
+    try:
+        while True:
+            item = db.query(ManagedAgentBatchItem).filter(
+                ManagedAgentBatchItem.batch_id == batch_id,
+                ManagedAgentBatchItem.result == "pending",
+            ).order_by(ManagedAgentBatchItem.id.asc()).first()
+            if item is None:
+                break
+            batch = db.query(ManagedAgentBatch).filter(ManagedAgentBatch.id == batch_id).one()
+            try:
+                _execute_one_batch_item(db, batch, item, req, current_user, groups)
+                batch.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=BATCH_LEASE_SECONDS)
+                _sync_batch_progress(db, batch)
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                item = db.query(ManagedAgentBatchItem).filter(
+                    ManagedAgentBatchItem.id == item.id,
+                ).one()
+                batch = db.query(ManagedAgentBatch).filter(ManagedAgentBatch.id == batch_id).one()
+                detail = exc.detail if isinstance(exc, HTTPException) else "执行失败：{}".format(type(exc).__name__)
+                item.result = "failed"
+                item.reason = str(detail)
+                batch.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=BATCH_LEASE_SECONDS)
+                _sync_batch_progress(db, batch)
+                db.commit()
+
+        batch = db.query(ManagedAgentBatch).filter(ManagedAgentBatch.id == batch_id).one()
+        batch.status = "completed"
+        batch.lease_expires_at = None
+        batch.completed_at = datetime.now(timezone.utc)
+        result = _sync_batch_progress(db, batch)
+        db.add(AuditLog(
+            user_id=current_user.id, username=current_user.username,
+            action="managed_agent.batch.execute", target_type="managed_agent_batch", target_id=batch.id,
+            detail="operation={} total={} success={} failed={} skipped={}".format(
+                req.operation, result.total, result.success, result.failed, result.skipped,
+            ),
+            created_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+        db.refresh(batch)
+        return _batch_result_from_record(db, batch, replayed=False)
+    except BaseException as exc:
+        db.rollback()
+        try:
+            batch = db.query(ManagedAgentBatch).filter(ManagedAgentBatch.id == batch_id).one()
+            batch.status = "stale"
+            batch.lease_expires_at = None
+            batch.last_error = "批次中断：{}".format(type(exc).__name__)
+            _sync_batch_progress(db, batch)
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise
 
 
 @router.post("/managed-agent-batches", response_model=ManagedBatchResult)
@@ -852,6 +1080,7 @@ def execute_managed_agent_batch(
 ):
     canonical = json.dumps(req.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     request_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
     existing = db.query(ManagedAgentBatch).filter(
         ManagedAgentBatch.created_by == current_user.id,
         ManagedAgentBatch.idempotency_key == idempotency_key,
@@ -859,19 +1088,36 @@ def execute_managed_agent_batch(
     if existing:
         if existing.request_hash != request_hash:
             raise HTTPException(status_code=409, detail="幂等键已用于不同的批量请求")
-        if not existing.result_json:
-            raise HTTPException(status_code=409, detail="相同批量请求仍在处理中")
-        return _batch_result_from_record(existing, replayed=True)
+        if existing.status in ("completed", "failed"):
+            return _batch_result_from_record(db, existing, replayed=True)
+        claimed = db.query(ManagedAgentBatch).filter(
+            ManagedAgentBatch.id == existing.id,
+            or_(
+                ManagedAgentBatch.status == "stale",
+                ManagedAgentBatch.lease_expires_at.is_(None),
+                ManagedAgentBatch.lease_expires_at <= now,
+            ),
+        ).update({
+            ManagedAgentBatch.status: "processing",
+            ManagedAgentBatch.lease_expires_at: now + timedelta(seconds=BATCH_LEASE_SECONDS),
+            ManagedAgentBatch.last_error: None,
+            ManagedAgentBatch.updated_at: now,
+        }, synchronize_session=False)
+        db.commit()
+        if not claimed:
+            db.refresh(existing)
+            return _batch_result_from_record(db, existing, replayed=True)
+        return _resume_managed_agent_batch(db, existing.id, req, current_user).model_copy(
+            update={"replayed": True}
+        )
 
-    active_since = datetime.now(timezone.utc) - timedelta(minutes=10)
     active_count = db.query(func.count(ManagedAgentBatch.id)).filter(
         ManagedAgentBatch.status == "processing",
-        ManagedAgentBatch.created_at >= active_since,
+        ManagedAgentBatch.lease_expires_at > now,
     ).scalar() or 0
     if active_count >= 2:
         raise HTTPException(status_code=429, detail="当前已有 2 个批次在处理，请稍后重试")
-
-    recent = datetime.now(timezone.utc) - timedelta(minutes=1)
+    recent = now - timedelta(minutes=1)
     burst_count = db.query(func.count(ManagedAgentBatch.id)).filter(
         ManagedAgentBatch.created_by == current_user.id,
         ManagedAgentBatch.created_at >= recent,
@@ -880,13 +1126,56 @@ def execute_managed_agent_batch(
         raise HTTPException(status_code=429, detail="一分钟内最多执行 10 个批次，请稍后重试")
 
     preview = _batch_preview(db, req)
+    agents, _ = _batch_targets(db, req.selection, 50 if req.operation == "dispatch_run" else 200)
+    agent_ids = {agent.id for agent in agents}
+    initial_items = []
+    for preview_item in preview.items:
+        if preview_item.agent_id in agent_ids and preview_item.result == "success":
+            initial_items.append(preview_item.model_copy(update={
+                "result": "pending", "reason": "等待处理",
+            }))
+        else:
+            initial_items.append(preview_item)
+    initial = ManagedBatchResult(
+        operation=req.operation,
+        status="processing",
+        total=preview.total,
+        pending=sum(item.result == "pending" for item in initial_items),
+        success=0,
+        failed=sum(item.result == "failed" for item in initial_items),
+        skipped=sum(item.result == "skipped" for item in initial_items),
+        items=initial_items,
+    )
     batch = ManagedAgentBatch(
-        idempotency_key=idempotency_key, request_hash=request_hash, operation=req.operation,
-        status="processing", selection_json=json.dumps(req.selection.model_dump(mode="json"), ensure_ascii=False),
-        request_json=canonical, total_count=preview.total, created_by=current_user.id,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        operation=req.operation,
+        status="processing",
+        selection_json=json.dumps(req.selection.model_dump(mode="json"), ensure_ascii=False),
+        request_json=canonical,
+        result_json=initial.model_dump_json(),
+        total_count=preview.total,
+        failed_count=initial.failed,
+        skipped_count=initial.skipped,
+        created_by=current_user.id,
+        created_at=now,
+        updated_at=now,
+        lease_expires_at=now + timedelta(seconds=BATCH_LEASE_SECONDS),
     )
     db.add(batch)
     try:
+        db.flush()
+        for item in initial_items:
+            if item.agent_id not in agent_ids:
+                continue
+            db.add(ManagedAgentBatchItem(
+                batch_id=batch.id,
+                agent_id=item.agent_id,
+                result=item.result,
+                reason=item.reason,
+                run_id=item.run_id,
+                detail_json=json.dumps(item.impact, ensure_ascii=False) if item.impact else None,
+            ))
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -894,102 +1183,10 @@ def execute_managed_agent_batch(
             ManagedAgentBatch.created_by == current_user.id,
             ManagedAgentBatch.idempotency_key == idempotency_key,
         ).first()
-        if concurrent and concurrent.request_hash == request_hash and concurrent.result_json:
-            return _batch_result_from_record(concurrent, replayed=True)
-        raise HTTPException(status_code=409, detail="相同批量请求已在处理中")
-    db.refresh(batch)
-
-    groups = []
-    if req.operation == "set_groups" and req.group_ids:
-        groups = db.query(ManagedAgentGroup).filter(
-            ManagedAgentGroup.id.in_(req.group_ids), ManagedAgentGroup.is_deleted == False,
-        ).all()
-    executed: List[ManagedBatchItemResult] = []
-    agents, _missing = _batch_targets(db, req.selection, 50 if req.operation == "dispatch_run" else 200)
-    agents_by_id = {agent.id: agent for agent in agents}
-    for item in preview.items:
-        if item.result != "success":
-            executed.append(item)
-            continue
-        agent = agents_by_id.get(item.agent_id)
-        if not agent:
-            executed.append(item.model_copy(update={"result": "failed", "reason": "设备状态已变化"}))
-            continue
-        current = _batch_item_check(db, agent, req)
-        if current.result != "success":
-            executed.append(current)
-            continue
-        try:
-            run_id = None
-            if req.operation == "dispatch_run":
-                owner = db.query(User).filter(User.id == agent.user_id).one()
-                now = datetime.now(timezone.utc)
-                run = create_validated_run(
-                    db, run_user=owner, script_id=req.script_id, params=req.params,
-                    environment_id=req.environment_id, requested_by=current_user.id,
-                    dispatch_type="managed_manual", target_agent_id=agent.id,
-                    scheduled_for=now, expires_at=now + timedelta(seconds=req.expires_in_seconds),
-                )
-                run_id = run.id
-                write_audit(current_user.id, current_user.username, "managed_run.batch_dispatch",
-                            "run", run.id, detail="batch={} agent={}".format(batch.id, agent.id), db=db)
-            elif req.operation == "pause_agents":
-                impact = current.impact or preview_agent_impact(db, agent.id, "disable", managed_only=True)
-                disable_agent(db, agent.id, current_user, expected_version=impact["version"], managed_only=True)
-            elif req.operation == "resume_agents":
-                enable_agent(db, agent.id, current_user, managed_only=True)
-            elif req.operation == "pause_schedules":
-                changed = db.query(ManagedSchedule).filter(
-                    ManagedSchedule.agent_id == agent.id, ManagedSchedule.enabled == True,
-                    ManagedSchedule.is_deleted == False,
-                ).update({
-                    ManagedSchedule.enabled: False, ManagedSchedule.updated_by: current_user.id,
-                    ManagedSchedule.updated_at: datetime.now(timezone.utc),
-                }, synchronize_session=False)
-                db.commit()
-                write_audit(current_user.id, current_user.username, "managed_schedule.batch_pause",
-                            "agent", agent.id, detail="batch={} schedules={}".format(batch.id, changed), db=db)
-            elif req.operation == "set_groups":
-                agent.managed_groups = groups
-                db.commit()
-                write_audit(current_user.id, current_user.username, "managed_agent.groups.batch_replace",
-                            "agent", agent.id, detail="batch={} group_ids={}".format(batch.id, req.group_ids or []), db=db)
-            executed.append(current.model_copy(update={"reason": "操作成功", "run_id": run_id}))
-        except Exception as exc:
-            db.rollback()
-            detail = exc.detail if isinstance(exc, HTTPException) else "执行失败：{}".format(type(exc).__name__)
-            executed.append(current.model_copy(update={"result": "failed", "reason": str(detail)}))
-
-    counts = {status: sum(item.result == status for item in executed) for status in ("success", "failed", "skipped")}
-    result = ManagedBatchResult(
-        batch_id=batch.id, operation=req.operation, total=len(executed),
-        success=counts["success"], failed=counts["failed"], skipped=counts["skipped"], items=executed,
-    )
-    batch = db.query(ManagedAgentBatch).filter(ManagedAgentBatch.id == batch.id).one()
-    persisted_agent_ids = set(agents_by_id)
-    for item in executed:
-        if item.agent_id not in persisted_agent_ids:
-            continue
-        db.add(ManagedAgentBatchItem(
-            batch_id=batch.id, agent_id=item.agent_id, result=item.result,
-            reason=item.reason, run_id=item.run_id,
-            detail_json=json.dumps(item.impact, ensure_ascii=False) if item.impact else None,
-        ))
-    batch.status = "completed"
-    batch.success_count = counts["success"]
-    batch.failed_count = counts["failed"]
-    batch.skipped_count = counts["skipped"]
-    batch.completed_at = datetime.now(timezone.utc)
-    batch.result_json = result.model_dump_json()
-    db.add(AuditLog(
-        user_id=current_user.id, username=current_user.username,
-        action="managed_agent.batch.execute", target_type="managed_agent_batch", target_id=batch.id,
-        detail="operation={} total={} success={} failed={} skipped={}".format(
-            req.operation, result.total, result.success, result.failed, result.skipped,
-        ), created_at=datetime.now(timezone.utc),
-    ))
-    db.commit()
-    return result
+        if concurrent and concurrent.request_hash == request_hash:
+            return _batch_result_from_record(db, concurrent, replayed=True)
+        raise HTTPException(status_code=409, detail="幂等键已用于不同的批量请求")
+    return _resume_managed_agent_batch(db, batch.id, req, current_user)
 
 
 @router.get("/managed-agent-batches/{batch_id}", response_model=ManagedBatchResult)
@@ -998,9 +1195,9 @@ def get_managed_agent_batch(
     db: Session = Depends(get_db),
 ):
     batch = db.query(ManagedAgentBatch).filter(ManagedAgentBatch.id == batch_id).first()
-    if not batch or not batch.result_json:
-        raise HTTPException(status_code=404, detail="批次不存在或尚未完成")
-    return _batch_result_from_record(batch, replayed=False)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    return _batch_result_from_record(db, batch, replayed=False)
 
 
 @router.get("/managed-agents/{agent_id}/impact", response_model=ManagedAgentImpact)

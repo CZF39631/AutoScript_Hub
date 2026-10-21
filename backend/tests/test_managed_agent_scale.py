@@ -1,7 +1,11 @@
 import os
 from datetime import datetime, timedelta, timezone
 
+import pytest
+from sqlalchemy import event
+
 from app.models import Agent, AuditLog, ManagedAgentBatch, ManagedAgentBatchItem, Run, User
+from app.routers import managed as managed_router
 
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -374,3 +378,112 @@ def test_batch_all_filter_has_hard_limit(client, admin_token, fresh_db):
     )
     assert response.status_code == 413
     assert "200" in response.json()["detail"]
+
+
+def test_interrupted_batch_exposes_partial_progress_and_resumes_once(
+    client, admin_token, dev_token, fresh_db, monkeypatch
+):
+    TestSession, _ = fresh_db
+    first = _register(client, dev_token, "resume-first", "续跑设备甲")
+    second = _register(client, dev_token, "resume-second", "续跑设备乙")
+    db = TestSession()
+    db.query(Agent).filter(Agent.id.in_([first["id"], second["id"]])).update(
+        {Agent.enabled: False}, synchronize_session=False,
+    )
+    db.commit()
+    db.close()
+
+    original = managed_router._execute_one_batch_item
+    calls = []
+
+    class SimulatedCrash(BaseException):
+        pass
+
+    def interrupt_second(*args, **kwargs):
+        calls.append(args[2].agent_id)
+        if len(calls) == 2:
+            raise SimulatedCrash("service stopped")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(managed_router, "_execute_one_batch_item", interrupt_second)
+    payload = {
+        "operation": "resume_agents",
+        "selection": {"mode": "explicit", "agent_ids": [first["id"], second["id"]]},
+    }
+    with pytest.raises(SimulatedCrash):
+        client.post(
+            "/api/admin/managed-agent-batches", json=payload,
+            headers=_headers(admin_token, "interrupted-resume-0001"),
+        )
+
+    db = TestSession()
+    batch = db.query(ManagedAgentBatch).one()
+    batch_id = batch.id
+    assert batch.status == "stale"
+    assert [item.result for item in batch.items] == ["success", "pending"]
+    db.close()
+
+    partial = client.get(
+        "/api/admin/managed-agent-batches/{}".format(batch_id),
+        headers=_headers(admin_token),
+    )
+    assert partial.status_code == 200
+    assert partial.json()["status"] == "stale"
+    assert partial.json()["pending"] == 1
+    assert partial.json()["success"] == 1
+
+    monkeypatch.setattr(managed_router, "_execute_one_batch_item", original)
+    resumed = client.post(
+        "/api/admin/managed-agent-batches", json=payload,
+        headers=_headers(admin_token, "interrupted-resume-0001"),
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "completed"
+    assert resumed.json()["replayed"] is True
+    assert resumed.json()["pending"] == 0
+    assert resumed.json()["success"] == 2
+
+    db = TestSession()
+    assert db.query(AuditLog).filter(
+        AuditLog.action == "managed_agent.enable",
+        AuditLog.target_id == first["id"],
+    ).count() == 1
+    assert db.query(AuditLog).filter(
+        AuditLog.action == "managed_agent.enable",
+        AuditLog.target_id == second["id"],
+    ).count() == 1
+    assert db.query(ManagedAgentBatchItem).count() == 2
+    db.close()
+
+
+def test_managed_group_list_uses_constant_query_count(
+    client, admin_token, fresh_db
+):
+    _, engine = fresh_db
+    for index in range(12):
+        response = client.post(
+            "/api/admin/managed-agent-groups",
+            json={"name": "聚合查询组 {:02d}".format(index)},
+            headers=_headers(admin_token),
+        )
+        assert response.status_code == 200
+
+    statements = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        response = client.get(
+            "/api/admin/managed-agent-groups", headers=_headers(admin_token),
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert response.status_code == 200
+    assert len(response.json()) == 12
+    # Authentication plus the endpoint's group and aggregate-count selects stay
+    # constant; the old implementation added one SELECT per group.
+    assert len(statements) <= 5

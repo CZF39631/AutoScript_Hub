@@ -117,8 +117,8 @@ export default function ManagedClientPanel() {
           icon={<SafetyCertificateOutlined />}
           title="屏幕缩略图隐私说明"
           description={capturePaused
-            ? '画面采集已由本机暂停。暂停优先于管理员设置，Agent 不会截图或上传；恢复前服务端无法绕过。'
-            : '设备解锁时每分钟上传一张低分辨率缩略图，服务端只保留最新一张；锁屏时不采集。这不是视频，也不采集声音。'}
+            ? '画面采集已由本机暂停。Agent 不会再截图或上传，并会通过心跳请求服务端清除已有最新缩略图；若清理暂时失败，后续心跳会继续请求。恢复前管理员无法绕过本机暂停。'
+            : '设备解锁时最多每 60 秒上传一张低分辨率缩略图到中心服务端，管理员可查看，且每台设备只保留最新一张；锁屏时不采集。这不是视频，也不采集声音。'}
           action={overview && (
             <Button
               icon={capturePaused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
@@ -168,10 +168,6 @@ export default function ManagedClientPanel() {
                 <div><span>连接</span><strong>{connectionState.title}</strong><small>{connectionState.detail}</small></div>
               </Card>
               <Card className="managed-status-card">
-                <div className="managed-status-card__icon"><LaptopOutlined /></div>
-                <div><span>设备</span><strong>{deviceName}</strong><small>{connection.agent_id ? `Agent #${connection.agent_id}` : '等待设备注册'}</small></div>
-              </Card>
-              <Card className="managed-status-card">
                 <div className="managed-status-card__icon"><CloudServerOutlined /></div>
                 <div><span>当前任务</span><strong>{currentRun ? (currentRun.script_name || `任务 #${currentRun.id}`) : '暂无任务'}</strong><small>{currentRun ? '任务由管理员远程下发' : '设备保持待命'}</small></div>
               </Card>
@@ -186,7 +182,8 @@ export default function ManagedClientPanel() {
             </div>
 
             <div className="managed-client-grid">
-              <Card title="设备状态" className="managed-client-card">
+              <details className="managed-client-technical">
+                <summary><LaptopOutlined /> 设备技术信息</summary>
                 <Descriptions column={1} size="small" colon={false}>
                   <Descriptions.Item label="设备名称">{deviceName}</Descriptions.Item>
                   <Descriptions.Item label="设备标识">{device.device_uid || connection.device_uid || '-'}</Descriptions.Item>
@@ -197,7 +194,7 @@ export default function ManagedClientPanel() {
                   <Descriptions.Item label="最近采集尝试">{thumbnailCapture.lastAttemptAt ? localTime(thumbnailCapture.lastAttemptAt) : '暂无'}</Descriptions.Item>
                   <Descriptions.Item label="最近上传成功">{thumbnailCapture.lastSuccessAt ? localTime(thumbnailCapture.lastSuccessAt) : '暂无'}</Descriptions.Item>
                 </Descriptions>
-              </Card>
+              </details>
 
               <Card title="当前任务" className="managed-client-card">
                 {currentRun ? (

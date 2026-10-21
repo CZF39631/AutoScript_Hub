@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Checkbox, List, Modal, Space, Tag, Typography } from 'antd'
+import { Checkbox, Modal, Space, Tag, Typography } from 'antd'
 import { RocketOutlined } from '@ant-design/icons'
 import { useConnection } from '../contexts/ConnectionContext'
 import { currentRelease } from '../data/releaseNotes'
@@ -50,7 +50,7 @@ export default function ImportantUpdateNotice() {
       onCancel={close}
       destroyOnHidden
     >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         <div>
           <Tag color="blue">v{version}</Tag>
           <Title level={4} style={{ display: 'inline', margin: 0 }}>{currentRelease.title}</Title>
@@ -59,11 +59,9 @@ export default function ImportantUpdateNotice() {
         {currentRelease.sections.map(section => (
           <div key={section.title}>
             <Text strong>{section.title}</Text>
-            <List
-              size="small"
-              dataSource={section.items}
-              renderItem={item => <List.Item style={{ paddingInline: 0 }}>• {item}</List.Item>}
-            />
+            <ul className="release-note-list">
+              {section.items.map(item => <li key={item}>{item}</li>)}
+            </ul>
           </div>
         ))}
         <Checkbox checked={hideFuture} onChange={event => setHideFuture(event.target.checked)}>

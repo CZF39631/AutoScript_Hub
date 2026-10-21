@@ -17,7 +17,7 @@ from app.database import get_db
 from app.models import User, Agent, Run
 from app.schemas import RunBrief
 from app.auth import create_agent_token, get_current_user, require_role, verify_agent_token
-from app.services.agent_thumbnails import read_bounded_jpeg, replace_thumbnail
+from app.services.agent_thumbnails import delete_thumbnail, read_bounded_jpeg, replace_thumbnail
 from app.services.audit import write_audit
 from app.services.managed_agent_lifecycle import delete_agent as delete_agent_lifecycle
 
@@ -204,6 +204,16 @@ def heartbeat(
         agent.agent_version = req.agent_version
     if req.thumbnail_capture_paused is not None:
         agent.thumbnail_capture_paused = req.thumbnail_capture_paused
+        if req.thumbnail_capture_paused:
+            # Local pause is authoritative: make the old image unavailable on the
+            # same heartbeat. Filesystem cleanup is best-effort and must never
+            # turn a healthy heartbeat into a failure.
+            try:
+                delete_thumbnail(agent.id)
+            except OSError:
+                logger.warning("暂停画面采集后清理缩略图失败: agent_id=%s", agent.id)
+            agent.thumbnail_updated_at = None
+            agent.thumbnail_size = None
     db.commit()
     return {
         "status": "ok",

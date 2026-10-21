@@ -220,19 +220,22 @@ function AgentCard({ agent, checked, updating, scheduleSummary, onSelect, onPaus
         <Button type="link" size="small" icon={<FolderOutlined />} onClick={() => onGroups(agent)}>调整</Button>
       </div>
 
-      <dl className="managed-agent-card__details">
-        <div><dt>Agent 版本</dt><dd>{agent.agent_version || '-'}</dd></div>
-        <div><dt>最近心跳</dt><dd>{agent.last_heartbeat ? formatServerTime(agent.last_heartbeat) : '从未连接'}</dd></div>
-        <div><dt>采集允许</dt><dd>{agent.enabled ? '服务端允许上传' : '设备停用，不接收上传'}</dd></div>
-        <div><dt>设备端暂停</dt><dd>{agent.thumbnail_capture_paused ? '已暂停（管理员不可恢复）' : '未暂停'}</dd></div>
-        <div><dt>最近上传</dt><dd>{updatedAt ? formatServerTime(updatedAt) : '尚未上传'}</dd></div>
-        <div>
-          <dt>定时任务</dt>
-          <dd>{scheduleSummary.enabled || scheduleSummary.paused
-            ? `${scheduleSummary.enabled} 个启用 · ${scheduleSummary.paused} 个暂停`
-            : '暂无'}</dd>
-        </div>
-      </dl>
+      <details className="managed-agent-card__technical">
+        <summary>技术信息与采集状态</summary>
+        <dl className="managed-agent-card__details">
+          <div><dt>Agent 版本</dt><dd>{agent.agent_version || '-'}</dd></div>
+          <div><dt>最近心跳</dt><dd>{agent.last_heartbeat ? formatServerTime(agent.last_heartbeat) : '从未连接'}</dd></div>
+          <div><dt>上传权限</dt><dd>{agent.enabled ? '服务端允许' : '设备停用'}</dd></div>
+          <div><dt>本机采集</dt><dd>{agent.thumbnail_capture_paused ? '已暂停（仅本机可恢复）' : '允许'}</dd></div>
+          <div><dt>最近上传</dt><dd>{updatedAt ? formatServerTime(updatedAt) : '尚未上传'}</dd></div>
+          <div>
+            <dt>托管计划</dt>
+            <dd>{scheduleSummary.enabled || scheduleSummary.paused
+              ? `${scheduleSummary.enabled} 个启用 · ${scheduleSummary.paused} 个暂停`
+              : '暂无'}</dd>
+          </div>
+        </dl>
+      </details>
 
       <section className="managed-agent-card__runs" aria-label="任务状态摘要">
         <div className="managed-agent-card__run-row">

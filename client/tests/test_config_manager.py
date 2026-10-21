@@ -75,6 +75,24 @@ def test_config_manager_uses_mutable_client_data_root(monkeypatch, tmp_path):
     assert not Path(str(config_manager.CONFIG_PATH) + ".tmp").exists()
 
 
+def test_new_managed_config_defaults_capture_to_paused_but_legacy_managed_is_preserved(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
+    from client.ui import config_manager
+    config_manager = importlib.reload(config_manager)
+    path = Path(config_manager.CONFIG_PATH)
+
+    config_manager.save_config({"client_mode": "managed"})
+    assert config_manager.load_config()["thumbnail_capture_paused"] is True
+
+    path.write_text(json.dumps({
+        "client_mode": "managed",
+        "server_url": "https://legacy.example.test",
+    }), encoding="utf-8")
+    assert config_manager.load_config()["thumbnail_capture_paused"] is False
+
+
 def test_saved_config_cannot_override_the_embedded_client_version(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("AUTOSCRIPT_VERSION", "0.9.7")

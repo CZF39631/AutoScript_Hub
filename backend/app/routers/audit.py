@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
 from app.database import get_db
-from app.models import User, AuditLog
+from app.models import Agent, User, AuditLog
 from app.auth import require_role
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
@@ -18,6 +18,7 @@ class AuditLogItem(BaseModel):
     action: str
     target_type: Optional[str] = None
     target_id: Optional[int] = None
+    target_name: Optional[str] = None
     detail: Optional[str] = None
     ip_address: Optional[str] = None
     created_at: datetime
@@ -45,4 +46,14 @@ def list_audit_logs(
         q = q.filter(AuditLog.target_type == target_type)
     if target_id is not None:
         q = q.filter(AuditLog.target_id == target_id)
-    return q.offset(offset).limit(limit).all()
+    rows = q.offset(offset).limit(limit).all()
+    agent_ids = {
+        row.target_id for row in rows
+        if row.target_type == "agent" and row.target_id is not None
+    }
+    agent_names = dict(db.query(Agent.id, Agent.machine_name).filter(
+        Agent.id.in_(agent_ids)
+    ).all()) if agent_ids else {}
+    return [AuditLogItem.model_validate(row).model_copy(update={
+        "target_name": agent_names.get(row.target_id) if row.target_type == "agent" else None,
+    }) for row in rows]

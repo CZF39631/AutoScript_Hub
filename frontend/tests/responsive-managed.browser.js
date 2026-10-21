@@ -3,6 +3,13 @@
 async page => {
   const origin = 'http://127.0.0.1:5183'
   const errors = []
+  const expectedInjectedConsoleErrors = []
+  const realConsoleErrors = []
+  const expectedFailurePaths = [
+    '/api/admin/managed-agent-batches',
+    '/api/admin/managed-agents/7/options',
+    '/api/scripts/11',
+  ]
   let showAgent = false
   let failNextOptions = true
   let detailAttempts = 0
@@ -16,11 +23,27 @@ async page => {
     groups: [], thumbnail_updated_at: '2026-10-21T08:00:00Z', thumbnail_size: 128,
   }
   page.on('pageerror', error => errors.push(error.message))
+  page.on('console', message => {
+    if (message.type() !== 'error') return
+    const text = message.text()
+    const locationUrl = message.location().url || ''
+    if (/503/.test(text) && expectedFailurePaths.some(path => locationUrl.includes(path))) {
+      expectedInjectedConsoleErrors.push(`${locationUrl}: ${text}`)
+    } else {
+      realConsoleErrors.push(`${locationUrl}: ${text}`)
+    }
+  })
   await page.context().route('**/*', async route => {
     const raw = route.request().url()
     if (!raw.startsWith(origin + '/')) {
       if (/^http:\/\/127\.0\.0\.1:\d+\/local\/connection/.test(raw)) {
         return route.fulfill({ json: { agent_id: 'synthetic', pending_sync_count: 0 } })
+      }
+      if (/^http:\/\/127\.0\.0\.1:\d+\/local\/update/.test(raw)) {
+        return route.fulfill({ json: { current_version: 'test', state: 'idle', update_available: false } })
+      }
+      if (/^http:\/\/127\.0\.0\.1:\d+\/local\/runtime/.test(raw)) {
+        return route.fulfill({ json: { status: 'ready', version: '3.11.9' } })
       }
       return route.abort()
     }
@@ -28,12 +51,18 @@ async page => {
     if (!path.startsWith('/api/') && !path.startsWith('/local/')) return route.continue()
     if (path === '/api/health') return route.fulfill({ json: { status: 'ok' } })
     if (path === '/local/connection') return route.fulfill({ json: { agent_id: 'synthetic', pending_sync_count: 0 } })
+    if (path === '/local/update') return route.fulfill({ json: { current_version: 'test', state: 'idle', update_available: false } })
     if (path === '/api/dashboard/stats') return route.fulfill({ json: {
       today_runs: 0, week_runs: 0, today_success: 0, today_success_rate: 0, today_failed: 0,
       online_users: 0, total_users: 0, week_success_rate: 0, week_success: 0,
       total_scripts: 0, total_runs: 0, script_ranking: [], recent_failed: [],
     } })
     if (path === '/api/settings') return route.fulfill({ json: { update_manifest_urls: [] } })
+    if (path === '/api/audit') return route.fulfill({ json: [{
+      id: 1, username: 'admin', action: 'managed_thumbnail.view',
+      target_type: 'agent', target_id: 7, target_name: '验收设备',
+      detail: 'synthetic', created_at: '2026-10-21T08:00:00Z',
+    }] })
     if (path === '/api/admin/managed-agents') return route.fulfill({ json: showAgent ? [agent] : [] })
     if (path === '/api/admin/managed-agents/paged') return route.fulfill({ json: {
       items: showAgent ? [agent] : [], total: showAgent ? 2 : 0, page: 1, page_size: 24, pages: 1,
@@ -150,6 +179,12 @@ async page => {
   await assertNoDocumentOverflow('900px')
   await assertNoHiddenFocusable('900px')
 
+  await page.goto(origin + '/audit?target_type=agent&target_id=7')
+  await page.getByRole('status', { name: '当前对象筛选' }).getByText('验收设备 #7').waitFor()
+  await page.getByText('验收设备（agent #7）').waitFor()
+  await page.getByRole('button', { name: '清除对象筛选' }).click()
+  if (page.url().includes('target_id=')) throw new Error('audit target filter was not cleared visibly')
+
   showAgent = true
   await login(390)
   await page.getByText('画面已遮罩，查看操作会记录审计').waitFor()
@@ -245,5 +280,6 @@ async page => {
   await batchDispatch.getByRole('button', { name: /取\s*消/ }).click()
 
   if (errors.length) throw new Error('page errors: ' + errors.join('; '))
-  console.log('PASS: responsive layout, zero first-load thumbnails, groups, selection, dangerous/delete modals, idempotent retry and option recovery')
+  if (realConsoleErrors.length) throw new Error('real console errors: ' + realConsoleErrors.join('; '))
+  console.log(`PASS: responsive layout, zero first-load thumbnails, groups, selection, dangerous/delete modals, idempotent retry and option recovery; pageerrors=0; real-console-errors=0; expected-injected-console-errors=${expectedInjectedConsoleErrors.length}`)
 }

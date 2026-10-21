@@ -284,7 +284,7 @@ button, input, select, textarea { font: inherit; }
 .managed-selection-bar { position: sticky; bottom: 12px; z-index: 12; margin: 0 0 14px; padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid rgba(0,0,0,.09); border-radius: 12px; background: rgba(250,250,252,.96); box-shadow: 0 8px 24px rgba(0,0,0,.1); }
 .managed-selection-bar__scope, .managed-selection-bar__actions { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .managed-selection-bar__scope strong { color: #174f27; font-size: 12px; font-variant-numeric: tabular-nums; }
-.managed-selection-bar .ant-btn { height: 30px; padding-inline: 9px; font-size: 12px; }
+.managed-selection-bar .ant-btn { min-height: 36px; padding-inline: 10px; font-size: 12px; }
 .managed-agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 248px), 1fr)); gap: 12px; align-items: start; }
 .managed-agent-card { min-width: 0; padding: 12px; border: 1px solid rgba(0,0,0,.075); border-radius: 14px; background: rgba(255,255,255,.9); transition: border-color .2s ease, background-color .2s ease; }
 .managed-agent-card:hover { border-color: rgba(0,122,255,.25); }
@@ -325,27 +325,32 @@ button, input, select, textarea { font: inherit; }
 .managed-thumbnail-state--masked .ant-btn-primary { border-color: #0a84ff; background: #0a84ff; }
 .managed-thumbnail-age { position: absolute; right: 8px; bottom: 8px; padding: 4px 7px; display: inline-flex; align-items: center; gap: 5px; border-radius: 7px; color: #fff4d5; background: rgba(92,57,0,.86); font-size: 11px; font-weight: 600; backdrop-filter: blur(8px); }
 .managed-agent-card__groups { min-height: 28px; margin: -5px 0 5px; display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
-.managed-agent-card__groups > span { color: var(--apple-secondary); font-size: 11px; }
-.managed-agent-card__groups .ant-tag { margin-inline-end: 0; max-width: 110px; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.managed-agent-card__groups .ant-btn { margin-inline-start: auto; height: 26px; padding-inline: 5px; font-size: 11px; }
-.managed-agent-card__details { margin: 0; }
-.managed-agent-card__details > div { min-width: 0; padding: 5px 0; display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; border-bottom: 1px solid rgba(0,0,0,.055); font-size: 11px; }
+.managed-agent-card__groups > span { color: var(--apple-secondary); font-size: 12px; }
+.managed-agent-card__groups .ant-tag { margin-inline-end: 0; max-width: 110px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-card__groups .ant-btn { margin-inline-start: auto; min-height: 36px; padding-inline: 7px; font-size: 12px; }
+.managed-agent-card__technical { margin: 6px 0 0; }
+.managed-agent-card__technical summary { min-height: 36px; display: flex; align-items: center; color: #56565b; font-size: 12px; font-weight: 600; cursor: pointer; }
+.managed-agent-card__technical summary::before { content: ""; width: 7px; height: 7px; margin: 0 7px 0 2px; border-right: 1.5px solid #78787d; border-bottom: 1.5px solid #78787d; transform: rotate(-45deg); transition: transform .18s ease; }
+.managed-agent-card__technical[open] summary::before { transform: rotate(45deg); }
+.managed-agent-card__details { margin: 0 0 6px; padding: 0 10px; border-radius: 10px; background: #f6f6f8; }
+.managed-agent-card__details > div { min-width: 0; padding: 7px 0; display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; border-bottom: 1px solid rgba(0,0,0,.055); font-size: 12px; }
 .managed-agent-card__details dt { color: var(--apple-secondary); }
 .managed-agent-card__details dd { margin: 0; overflow: hidden; color: #363638; font-variant-numeric: tabular-nums; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .managed-agent-card__runs { margin-top: 10px; border-top: 1px solid rgba(0,0,0,.075); }
 .managed-agent-card__run-row { min-width: 0; padding: 8px 0; display: grid; grid-template-columns: 62px minmax(0, 1fr); align-items: baseline; gap: 3px 8px; border-bottom: 1px solid rgba(0,0,0,.055); }
-.managed-agent-card__run-row > span { color: var(--apple-secondary); font-size: 11px; }
+.managed-agent-card__run-row > span { color: var(--apple-secondary); font-size: 12px; }
 .managed-agent-card__run-row > div { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .managed-agent-card__run-row strong { color: #363638; font-size: 12px; font-variant-numeric: tabular-nums; }
-.managed-agent-card__run-row .ant-btn-link { min-width: 0; height: auto; padding: 0; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-card__run-row .ant-btn-link { min-width: 0; min-height: 36px; padding: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .managed-agent-card__run-row > .ant-btn-link { justify-self: end; max-width: 100%; }
-.managed-agent-card__run-row .ant-tag { margin-inline-end: 0; font-size: 10px; line-height: 18px; }
-.managed-agent-card__run-row > small { grid-column: 2; overflow: hidden; color: var(--apple-secondary); font-size: 10px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
-.managed-agent-card__error { grid-column: 1 / -1; margin: 2px 0 0; display: -webkit-box; overflow: hidden; color: #b42318; font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.managed-agent-card__run-row .ant-tag { margin-inline-end: 0; font-size: 12px; line-height: 20px; }
+.managed-agent-card__run-row > small { grid-column: 2; overflow: hidden; color: var(--apple-secondary); font-size: 12px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-card__error { grid-column: 1 / -1; margin: 2px 0 0; display: -webkit-box; overflow: hidden; color: #b42318; font-size: 12px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .managed-agent-card__actions { margin-top: 10px; display: grid; grid-template-columns: 1fr; align-items: center; gap: 8px; }
-.managed-agent-card__actions .ant-btn { height: 30px; padding-inline: 10px; font-size: 12px; }
+.managed-agent-card__actions .ant-btn { min-height: 36px; padding-inline: 10px; font-size: 12px; }
+.managed-agent-card__actions > .managed-agent-acceptance-action { min-height: 40px; }
 .managed-agent-card__primary-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 2px; }
-.managed-agent-card__primary-actions > .ant-btn:last-child { width: 44px; min-height: 44px; padding-inline: 0; }
+.managed-agent-card__primary-actions > .ant-btn:last-child { width: 40px; min-height: 40px; padding-inline: 0; }
 .managed-agent-acceptance-action { width: 100%; justify-content: center; color: #7a4b00; border-color: rgba(178,80,0,.3); background: rgba(255,159,10,.08); }
 .is-disabled .managed-agent-acceptance-action { color: #0066cc; border-color: rgba(0,122,255,.26); background: rgba(0,122,255,.07); }
 .managed-group-manager { display: grid; gap: 14px; }
@@ -354,7 +359,7 @@ button, input, select, textarea { font: inherit; }
 .managed-group-manager__list > div { min-height: 48px; padding: 7px 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(0,0,0,.055); }
 .managed-group-manager__list > div > span { min-width: 0; display: flex; flex-direction: column; }
 .managed-group-manager__list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.managed-group-manager__list small { color: var(--apple-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.managed-group-manager__list small { color: var(--apple-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .managed-batch-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 150px; gap: 12px; }
 .managed-batch-form__params { grid-column: 1 / -1; }
 .managed-batch-preview h3 { margin: 0 0 12px; font-size: 14px; }
@@ -363,8 +368,8 @@ button, input, select, textarea { font: inherit; }
 .managed-batch-results > div:last-child { border-bottom: 0; }
 .managed-batch-results > div > span { min-width: 0; display: flex; align-items: baseline; gap: 7px; }
 .managed-batch-results strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.managed-batch-results small { color: var(--apple-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
-.managed-batch-results p { grid-column: 1 / -1; margin: 0; color: var(--apple-secondary); font-size: 11px; }
+.managed-batch-results small { color: var(--apple-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.managed-batch-results p { grid-column: 1 / -1; margin: 0; color: var(--apple-secondary); font-size: 12px; }
 .managed-batch-results .is-failed p { color: #b42318; }
 .managed-impact-modal .ant-modal-body { padding-top: 6px; }
 .managed-impact-loading { padding: 10px 0 2px; }
@@ -411,7 +416,7 @@ button, input, select, textarea { font: inherit; }
 .managed-client-brand img { width: 38px; height: 38px; border-radius: 12px; box-shadow: 0 7px 18px rgba(0,122,255,.22); }
 .managed-client-brand > span { display: flex; flex-direction: column; line-height: 1.25; }
 .managed-client-brand strong { font-size: 15px; }
-.managed-client-brand small { color: var(--apple-secondary); font-size: 11px; }
+.managed-client-brand small { color: var(--apple-secondary); font-size: 12px; }
 .managed-client-refresh { display: flex; align-items: center; gap: 12px; }
 .managed-client-refresh > span { color: var(--apple-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .managed-client-content { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 44px; }
@@ -428,13 +433,23 @@ button, input, select, textarea { font: inherit; }
 .managed-status-card span { color: var(--apple-secondary); font-size: 12px; }
 .managed-status-card strong { margin: 4px 0; overflow: hidden; color: var(--apple-text); font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .managed-status-card small { overflow: hidden; color: var(--apple-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.managed-client-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 18px; }
-.managed-client-card { min-height: 252px; }
+.managed-client-grid { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(0, 1.2fr); gap: 18px; margin-bottom: 18px; }
+.managed-client-technical { align-self: start; overflow: hidden; border: 1px solid var(--apple-border); border-radius: 14px; background: #fff; box-shadow: var(--apple-shadow); }
+.managed-client-technical summary { min-height: 52px; padding: 0 18px; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; cursor: pointer; }
+.managed-client-technical .ant-descriptions { padding: 0 18px 14px; }
+.managed-client-technical .ant-descriptions-item-label { width: 96px; color: var(--apple-secondary); }
+.managed-client-card { min-height: 220px; }
 .managed-client-card .ant-descriptions-item-label { width: 96px; color: var(--apple-secondary); }
 .managed-current-run__top { margin-bottom: 18px; display: flex; align-items: center; gap: 13px; }
 .managed-current-run__icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: #007aff; background: rgba(0,122,255,.1); font-size: 20px; }
 .managed-current-run__top > div { display: flex; align-items: center; gap: 10px; }
 .managed-current-run__top strong { font-size: 15px; }
+.audit-target-filter { min-height: 36px; padding: 3px 4px 3px 10px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(0,122,255,.2); border-radius: 10px; background: rgba(0,122,255,.06); }
+.audit-target-filter > span { color: #4e6070; font-size: 12px; }
+.audit-target-filter .ant-tag { margin: 0; }
+.audit-target-filter .ant-btn { min-height: 30px; }
+.release-note-list { margin: 6px 0 0; padding-inline-start: 20px; color: #3a3a3c; line-height: 1.65; }
+.release-note-list li + li { margin-top: 3px; }
 .managed-client-runs .ant-card-body { padding: 0; }
 .managed-client-runs .ant-table-wrapper { border: 0; border-radius: 0 0 16px 16px; box-shadow: none; }
 

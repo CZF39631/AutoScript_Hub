@@ -204,6 +204,7 @@ def disable_agent(
     *,
     expected_version: Optional[str],
     managed_only: bool = True,
+    commit: bool = True,
 ) -> Agent:
     agent = _agent_or_404(db, agent_id, managed_only=managed_only)
     impact = _snapshot(db, agent, "disable")
@@ -212,8 +213,11 @@ def disable_agent(
     agent.enabled = False
     agent.status = "offline"
     _audit(db, actor, "managed_agent.disable", agent.id, impact)
-    db.commit()
-    db.refresh(agent)
+    if commit:
+        db.commit()
+        db.refresh(agent)
+    else:
+        db.flush()
     return agent
 
 
@@ -223,6 +227,7 @@ def enable_agent(
     actor: User,
     *,
     managed_only: bool = True,
+    commit: bool = True,
 ) -> Agent:
     agent = _agent_or_404(db, agent_id, managed_only=managed_only)
     agent.enabled = True
@@ -237,8 +242,11 @@ def enable_agent(
         detail="管理员恢复接单；已暂停计划不会自动恢复",
         created_at=datetime.now(timezone.utc),
     ))
-    db.commit()
-    db.refresh(agent)
+    if commit:
+        db.commit()
+        db.refresh(agent)
+    else:
+        db.flush()
     return agent
 
 

@@ -300,7 +300,7 @@ export default function Scripts() {
         onCancel={() => { if (!deletionLock.current) setDeleteTarget(null) }}
         onOk={confirmDelete} okText="确认从市场删除" cancelText="取消"
         confirmLoading={deleting} closable={!deleting} keyboard={!deleting}
-        maskClosable={!deleting} cancelButtonProps={{ disabled: deleting }}
+        mask={{ closable: !deleting }} cancelButtonProps={{ disabled: deleting }}
         okButtonProps={{ danger: true, disabled: !canConfirmDeletion(confirmation) }}>
         <Alert type="warning" showIcon title="影响所有可访问该脚本的用户"
           description="这是从市场删除脚本，不是卸载本机。历史执行记录、工单和文件会保留；有待执行或运行中的任务时无法删除，不会自动取消任务。" />

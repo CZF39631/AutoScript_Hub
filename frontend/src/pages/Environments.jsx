@@ -170,7 +170,7 @@ export default function Environments() {
         <Alert
           type={runtimeInfo?.status === 'ready' ? 'success' : 'info'}
           showIcon
-          message="私有 Python 3.11.9"
+          title="私有 Python 3.11.9"
           description={runtimeInfo?.status === 'ready'
             ? `已就绪：${runtimeInfo.path}。脚本依赖会按指纹自动创建、校验并复用独立环境。`
             : '请在 Windows 客户端中查看运行时状态；安装器会提供私有 Python，脚本不使用系统 Python。'}

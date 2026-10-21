@@ -45,6 +45,12 @@ def test_fresh_database_upgrades_to_head(tmp_path):
         "target_agent_id", "requested_by", "dispatch_type", "schedule_id",
         "retry_of_run_id", "scheduled_for", "expires_at", "claimed_at",
     }.issubset({column["name"] for column in inspector.get_columns("runs")})
+    assert {"updated_at", "lease_expires_at", "last_error"}.issubset(
+        {column["name"] for column in inspector.get_columns("managed_agent_batches")}
+    )
+    assert "ix_agents_managed_list" in {
+        index["name"] for index in inspector.get_indexes("agents")
+    }
 
 
 def test_existing_known_database_is_adopted_without_losing_rows(tmp_path):

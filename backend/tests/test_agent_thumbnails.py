@@ -214,6 +214,54 @@ def test_device_pause_is_authoritative_and_old_protocol_omission_preserves_state
     assert resumed.json()["thumbnail_capture_paused"] is False
 
 
+def test_pause_heartbeat_clears_latest_thumbnail_without_breaking_heartbeat(
+    client, admin_token, dev_token, isolated_thumbnail_dir, monkeypatch
+):
+    agent = _register(client, dev_token, "thumbnail-clear-on-pause")
+    uploaded = client.post(
+        "/api/agents/{}/thumbnail".format(agent["id"]),
+        content=_image_bytes(),
+        headers={
+            **_headers(dev_token, agent["agent_token"]),
+            "Content-Type": "image/jpeg",
+        },
+    )
+    assert uploaded.status_code == 200
+    assert agent_thumbnails.thumbnail_path(agent["id"]).exists()
+
+    paused = client.post(
+        "/api/agents/{}/heartbeat".format(agent["id"]),
+        json={"thumbnail_capture_paused": True},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert paused.status_code == 200
+    assert not agent_thumbnails.thumbnail_path(agent["id"]).exists()
+    assert client.get(
+        "/api/admin/managed-agents/{}/thumbnail".format(agent["id"]),
+        headers=_headers(admin_token),
+    ).status_code == 404
+
+    # A filesystem cleanup problem is retried by later heartbeats and must not
+    # turn liveness reporting into an error. Metadata is still cleared so the
+    # stale image is no longer served.
+    monkeypatch.setattr(
+        "app.routers.agents.delete_thumbnail",
+        lambda _agent_id: (_ for _ in ()).throw(OSError("locked")),
+    )
+    failed_cleanup = client.post(
+        "/api/agents/{}/heartbeat".format(agent["id"]),
+        json={"thumbnail_capture_paused": True},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert failed_cleanup.status_code == 200
+    managed = client.get(
+        "/api/admin/managed-agents", headers=_headers(admin_token),
+    ).json()
+    row = next(item for item in managed if item["id"] == agent["id"])
+    assert row["thumbnail_updated_at"] is None
+    assert row["thumbnail_size"] is None
+
+
 def test_thumbnail_upload_rejects_wrong_type_corrupt_oversize_and_oversized_dimensions(
     client, dev_token
 ):

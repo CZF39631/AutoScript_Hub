@@ -3,12 +3,32 @@
 async page => {
   const origin = 'http://127.0.0.1:5183'
   const errors = []
+  const expectedInjectedConsoleErrors = []
+  const realConsoleErrors = []
   page.on('pageerror', e => errors.push(e.message))
+  page.on('console', message => {
+    if (message.type() !== 'error') return
+    const text = message.text()
+    const locationUrl = message.location().url || ''
+    if (/500/.test(text) && locationUrl.includes('/api/issues/1/log')) {
+      expectedInjectedConsoleErrors.push(`${locationUrl}: ${text}`)
+    } else {
+      realConsoleErrors.push(`${locationUrl}: ${text}`)
+    }
+  })
   let scenario = 'race'
   const issue = (id, extra = {}) => ({ id, title: '合成工单' + id, username: 'synthetic', status: 'open', created_at: '2026-01-01', run_id: id, run_params: '{}', ...extra })
   await page.context().route('**/*', async route => {
     const raw = route.request().url()
-    if (!raw.startsWith(origin + '/')) return route.abort()
+    if (!raw.startsWith(origin + '/')) {
+      if (/^http:\/\/127\.0\.0\.1:\d+\/local\/connection/.test(raw)) {
+        return route.fulfill({ json: { agent_id: 'synthetic', pending_sync_count: 0 } })
+      }
+      if (/^http:\/\/127\.0\.0\.1:\d+\/local\/update/.test(raw)) {
+        return route.fulfill({ json: { current_version: 'test', state: 'idle', update_available: false } })
+      }
+      return route.abort()
+    }
     const path = raw.slice(origin.length).split('?')[0]
     if (path.startsWith('/api/') || path.startsWith('/local/')) {
       let data = []
@@ -21,6 +41,7 @@ async page => {
       }
       if (path === '/api/health') data = { status: 'ok' }
       if (path === '/local/connection') data = { agent_id: 'synthetic', pending_sync_count: 0 }
+      if (path === '/local/update') data = { current_version: 'test', state: 'idle', update_available: false }
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
     }
     return route.continue()
@@ -55,5 +76,6 @@ async page => {
   check(await page.getByRole('heading', { name: '我的反馈' }).isVisible(), 'page blank')
   await close()
   check(errors.length === 0, 'page errors: ' + errors.join(';'))
-  console.log('PASS: late success, late error/loading, close, no-run, malformed JSON; pageerrors=0')
+  check(realConsoleErrors.length === 0, 'real console errors: ' + realConsoleErrors.join(';'))
+  console.log(`PASS: late success, late error/loading, close, no-run, malformed JSON; pageerrors=0; real-console-errors=0; expected-injected-console-errors=${expectedInjectedConsoleErrors.length}`)
 }
