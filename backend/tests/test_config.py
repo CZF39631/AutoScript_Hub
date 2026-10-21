@@ -21,6 +21,7 @@ print(json.dumps({
     "scripts_dir": config.SCRIPTS_DIR,
     "logs_dir": config.LOGS_DIR,
     "backups_dir": config.BACKUPS_DIR,
+    "thumbnails_dir": config.THUMBNAILS_DIR,
     "admin_username": config.ADMIN_USERNAME,
     "admin_password": config.ADMIN_PASSWORD,
 }))
@@ -57,6 +58,7 @@ def test_data_dir_owns_default_runtime_paths(tmp_path):
     assert Path(values["scripts_dir"]) == tmp_path / "scripts"
     assert Path(values["logs_dir"]) == tmp_path / "logs"
     assert Path(values["backups_dir"]) == tmp_path / "backups"
+    assert Path(values["thumbnails_dir"]) == tmp_path / "thumbnails"
 
 
 def test_runtime_paths_accept_explicit_environment_overrides(tmp_path):

@@ -6,6 +6,28 @@ export const INTERVAL_UNITS = [
 
 const unitMap = new Map(INTERVAL_UNITS.map(item => [item.value, item]))
 
+export const THUMBNAIL_STALE_AFTER_MS = 2 * 60 * 1000
+
+export function thumbnailTimestamp(agent) {
+  return agent?.thumbnail_updated_at || null
+}
+
+export function shouldRefreshThumbnail(previousTimestamp, nextTimestamp) {
+  return Boolean(nextTimestamp) && previousTimestamp !== nextTimestamp
+}
+
+export function isThumbnailStale(timestamp, now = Date.now()) {
+  if (!timestamp) return false
+  const value = timestamp instanceof Date ? timestamp : String(timestamp).trim()
+  const normalized = typeof value === 'string' && !/(Z|[+-]\d{2}:?\d{2})$/i.test(value)
+    ? `${value}Z`
+    : value
+  const capturedAt = new Date(normalized).getTime()
+  const currentTime = now instanceof Date ? now.getTime() : Number(now)
+  if (!Number.isFinite(capturedAt) || !Number.isFinite(currentTime)) return false
+  return currentTime - capturedAt > THUMBNAIL_STALE_AFTER_MS
+}
+
 export function isManagedClientMode(target = typeof window === 'undefined' ? undefined : window) {
   return target?._CLIENT_MODE === 'managed'
 }

@@ -6,9 +6,12 @@ import {
   formatInterval,
   intervalToSeconds,
   isManagedClientMode,
+  isThumbnailStale,
   managedClientPath,
   scheduleFormValues,
   secondsToInterval,
+  shouldRefreshThumbnail,
+  thumbnailTimestamp,
 } from './managed.js'
 
 test('managed mode and its route whitelist are explicit', () => {
@@ -24,6 +27,26 @@ test('fixed intervals convert between form units and seconds', () => {
   assert.deepEqual(secondsToInterval(172800), { value: 2, unit: 'day' })
   assert.equal(formatInterval(3600), '每 1 小时')
   assert.equal(intervalToSeconds(0, 'day'), null)
+})
+
+test('thumbnail timestamps only trigger image refresh when a new capture exists', () => {
+  const first = '2026-04-01T08:00:00Z'
+  const second = '2026-04-01T08:01:00Z'
+  assert.equal(thumbnailTimestamp({ thumbnail_updated_at: first }), first)
+  assert.equal(thumbnailTimestamp({}), null)
+  assert.equal(shouldRefreshThumbnail(undefined, first), true)
+  assert.equal(shouldRefreshThumbnail(first, first), false)
+  assert.equal(shouldRefreshThumbnail(first, second), true)
+  assert.equal(shouldRefreshThumbnail(first, null), false)
+})
+
+test('thumbnail age becomes stale only after two minutes', () => {
+  const capturedAt = '2026-04-01T08:00:00Z'
+  assert.equal(isThumbnailStale(capturedAt, new Date('2026-04-01T08:02:00Z')), false)
+  assert.equal(isThumbnailStale(capturedAt, new Date('2026-04-01T08:02:00.001Z')), true)
+  assert.equal(isThumbnailStale('2026-04-01T08:00:00', new Date('2026-04-01T08:02:01Z')), true)
+  assert.equal(isThumbnailStale(null, new Date('2026-04-01T09:00:00Z')), false)
+  assert.equal(isThumbnailStale('not-a-date', new Date('2026-04-01T09:00:00Z')), false)
 })
 
 test('schedule form values and API payload preserve params and nullable environment', () => {

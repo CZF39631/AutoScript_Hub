@@ -1,13 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Drawer, Empty, Form, InputNumber, Select, Space, Switch, Table, Tag,
-  Typography, message,
+  Alert, Button, Drawer, Empty, Form, InputNumber, Select, Skeleton, Space, Switch, Tag,
+  message,
 } from 'antd'
-import { CloudServerOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons'
+import {
+  DesktopOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined, SendOutlined,
+  WarningOutlined,
+} from '@ant-design/icons'
 import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
 import { parseScriptConfig } from '../utils/groups'
-import { apiErrorMessage, intervalToSeconds, statusPresentation } from '../utils/managed'
+import {
+  apiErrorMessage, intervalToSeconds, isThumbnailStale, statusPresentation,
+  thumbnailTimestamp,
+} from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
 
 const durationUnits = [
@@ -23,6 +29,123 @@ function parameterDefaults(params) {
   }, {})
 }
 
+function ThumbnailScreen({ agent }) {
+  const timestamp = thumbnailTimestamp(agent)
+  const [attempt, setAttempt] = useState(0)
+  const [image, setImage] = useState({ status: timestamp ? 'loading' : 'empty', url: '' })
+  const stale = isThumbnailStale(timestamp)
+
+  useEffect(() => {
+    if (!timestamp) {
+      setImage({ status: 'empty', url: '' })
+      return undefined
+    }
+
+    const controller = new AbortController()
+    let objectUrl = ''
+    setImage({ status: 'loading', url: '' })
+
+    api.get(`/api/admin/managed-agents/${agent.id}/thumbnail`, {
+      responseType: 'blob',
+      signal: controller.signal,
+    }).then(response => {
+      if (controller.signal.aborted) return
+      objectUrl = URL.createObjectURL(response.data)
+      setImage({ status: 'ready', url: objectUrl })
+    }).catch(error => {
+      if (controller.signal.aborted || error?.code === 'ERR_CANCELED') return
+      setImage({ status: error?.response?.status === 404 ? 'empty' : 'error', url: '' })
+    })
+
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [agent.id, attempt, timestamp])
+
+  return (
+    <div className="managed-monitor" aria-busy={image.status === 'loading'}>
+      <div className="managed-monitor__screen">
+        {image.status === 'ready' && (
+          <img src={image.url} alt={`${agent.machine_name} 最近上传的屏幕缩略图`} />
+        )}
+        {image.status === 'loading' && (
+          <div className="managed-thumbnail-state">
+            <LoadingOutlined spin />
+            <span>正在读取画面</span>
+          </div>
+        )}
+        {image.status === 'empty' && (
+          <div className="managed-thumbnail-state">
+            <PictureOutlined />
+            <span>暂无可用画面</span>
+          </div>
+        )}
+        {image.status === 'error' && (
+          <div className="managed-thumbnail-state managed-thumbnail-state--error" role="alert">
+            <WarningOutlined />
+            <span>画面读取失败</span>
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => setAttempt(value => value + 1)}>重试</Button>
+          </div>
+        )}
+        {image.status === 'ready' && stale && (
+          <span className="managed-thumbnail-age"><WarningOutlined /> 画面较旧</span>
+        )}
+      </div>
+      <div className="managed-monitor__chin"><span /></div>
+      <div className="managed-monitor__stand" aria-hidden="true" />
+    </div>
+  )
+}
+
+function AgentCard({ agent, updating, onToggle, onDispatch }) {
+  const status = statusPresentation(agent.status, agent.enabled)
+  const updatedAt = thumbnailTimestamp(agent)
+
+  return (
+    <article className={`managed-agent-card${agent.enabled ? '' : ' is-disabled'}`}>
+      <div className="managed-agent-card__header">
+        <div className="managed-agent-card__identity">
+          <span className="managed-agent-card__device"><DesktopOutlined /></span>
+          <div>
+            <h3 title={agent.machine_name}>{agent.machine_name}</h3>
+            <span title={agent.machine_ip || ''}>{agent.machine_ip || '未上报 IP'}</span>
+          </div>
+        </div>
+        <Tag color={status.color}>{status.text}</Tag>
+      </div>
+
+      <ThumbnailScreen agent={agent} />
+
+      <dl className="managed-agent-card__details">
+        <div><dt>Agent 版本</dt><dd>{agent.agent_version || '-'}</dd></div>
+        <div><dt>最近心跳</dt><dd>{agent.last_heartbeat ? formatServerTime(agent.last_heartbeat) : '从未连接'}</dd></div>
+        <div><dt>画面更新时间</dt><dd>{updatedAt ? formatServerTime(updatedAt) : '暂无画面'}</dd></div>
+      </dl>
+
+      <div className="managed-agent-card__actions">
+        <div className="managed-agent-toggle">
+          <span>允许接收任务</span>
+          <Switch
+            checked={agent.enabled}
+            loading={updating}
+            onChange={() => onToggle(agent)}
+            aria-label={`${agent.machine_name}启用状态`}
+          />
+        </div>
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          disabled={!agent.enabled}
+          onClick={() => onDispatch(agent)}
+        >
+          下发任务
+        </Button>
+      </div>
+    </article>
+  )
+}
+
 export default function ManagedAgents() {
   const [agents, setAgents] = useState([])
   const [scripts, setScripts] = useState([])
@@ -34,22 +157,40 @@ export default function ManagedAgents() {
   const [scriptDetails, setScriptDetails] = useState({})
   const [scriptLoading, setScriptLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const listRequest = useRef(null)
   const [form] = Form.useForm()
   const selectedScriptId = Form.useWatch('script_id', form)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async ({ quiet = false } = {}) => {
+    if (quiet && listRequest.current) return
+    listRequest.current?.abort()
+    const controller = new AbortController()
+    listRequest.current = controller
+    if (!quiet) setLoading(true)
     setLoadError('')
     try {
-      const response = await api.get('/api/admin/managed-agents')
-      setAgents(response.data || [])
+      const response = await api.get('/api/admin/managed-agents', { signal: controller.signal })
+      if (!controller.signal.aborted) setAgents(Array.isArray(response.data) ? response.data : [])
     } catch (error) {
-      setLoadError(apiErrorMessage(error, '被控设备加载失败'))
+      if (!controller.signal.aborted && error?.code !== 'ERR_CANCELED') {
+        setLoadError(apiErrorMessage(error, '被控设备加载失败'))
+      }
+    } finally {
+      if (listRequest.current === controller) {
+        if (!quiet) setLoading(false)
+        listRequest.current = null
+      }
     }
-    setLoading(false)
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    const timer = setInterval(() => load({ quiet: true }), 60_000)
+    return () => {
+      clearInterval(timer)
+      listRequest.current?.abort()
+    }
+  }, [load])
 
   const loadScriptDetail = useCallback(async (scriptId) => {
     if (!scriptId || scriptDetails[scriptId]) return
@@ -93,7 +234,7 @@ export default function ManagedAgents() {
     setUpdating(current => ({ ...current, [agent.id]: true }))
     try {
       const response = await api.patch(`/api/admin/managed-agents/${agent.id}`, { enabled: !agent.enabled })
-      setAgents(current => current.map(item => item.id === agent.id ? response.data : item))
+      setAgents(current => current.map(item => item.id === agent.id ? { ...item, ...response.data } : item))
       message.success(response.data.enabled ? '设备已启用' : '设备已停用')
     } catch (error) {
       message.error(apiErrorMessage(error, '设备状态更新失败'))
@@ -125,66 +266,52 @@ export default function ManagedAgents() {
     }
   }
 
-  const columns = [
-    {
-      title: '设备', key: 'device', minWidth: 190,
-      render: (_, agent) => (
-        <div className="managed-device-cell">
-          <span className={`managed-device-icon ${agent.status === 'online' && agent.enabled ? 'is-online' : ''}`}>
-            <CloudServerOutlined />
-          </span>
-          <span>
-            <strong>{agent.machine_name}</strong>
-            <small>{agent.machine_ip || '未上报 IP'}</small>
-          </span>
-        </div>
-      ),
-    },
-    {
-      title: '设备标识', dataIndex: 'device_uid', key: 'uid', minWidth: 180,
-      render: value => <Typography.Text copyable={{ text: value }} ellipsis className="managed-device-uid">{value}</Typography.Text>,
-    },
-    {
-      title: '状态', key: 'status', width: 90,
-      render: (_, agent) => { const view = statusPresentation(agent.status, agent.enabled); return <Tag color={view.color}>{view.text}</Tag> },
-    },
-    { title: 'Agent 版本', dataIndex: 'agent_version', key: 'version', width: 110, render: value => value || '-' },
-    { title: '最近心跳', dataIndex: 'last_heartbeat', key: 'heartbeat', width: 170, render: value => value ? formatServerTime(value) : '从未连接' },
-    {
-      title: '启用', key: 'enabled', width: 80,
-      render: (_, agent) => <Switch checked={agent.enabled} loading={updating[agent.id]} onChange={() => toggleAgent(agent)} aria-label={`${agent.machine_name}启用状态`} />,
-    },
-    {
-      title: '操作', key: 'action', width: 120,
-      render: (_, agent) => (
-        <Button type="link" icon={<SendOutlined />} disabled={!agent.enabled} onClick={() => openDispatch(agent)}>
-          下发任务
-        </Button>
-      ),
-    },
-  ]
-
   return (
     <div className="managed-admin-page">
       <div className="page-heading">
         <div>
           <h2>被控设备</h2>
-          <p>查看托管 Agent 状态，并将一次性任务定向下发到指定设备</p>
+          <p>查看设备最近上传的静态缩略图与连接状态，并定向下发一次性任务</p>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>刷新</Button>
       </div>
 
-      {loadError && <Alert className="managed-page-alert" type="error" showIcon title={loadError} action={<Button size="small" onClick={load}>重试</Button>} />}
+      {loadError && (
+        <Alert
+          className="managed-page-alert"
+          type={agents.length ? 'warning' : 'error'}
+          showIcon
+          title={agents.length ? '自动刷新失败，当前显示上次结果' : loadError}
+          description={agents.length ? loadError : undefined}
+          action={<Button size="small" onClick={() => load()}>重试</Button>}
+        />
+      )}
 
-      <Table
-        dataSource={agents}
-        columns={columns}
-        rowKey="id"
-        loading={loading}
-        scroll={{ x: 980 }}
-        pagination={{ pageSize: 20, hideOnSinglePage: true }}
-        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有托管设备连接到服务器" /> }}
-      />
+      {loading && !agents.length ? (
+        <div className="managed-agent-grid" aria-label="正在加载被控设备">
+          {[0, 1, 2].map(item => (
+            <div className="managed-agent-card managed-agent-card--loading" key={item}>
+              <Skeleton active paragraph={{ rows: 6 }} />
+            </div>
+          ))}
+        </div>
+      ) : agents.length ? (
+        <div className="managed-agent-grid">
+          {agents.map(agent => (
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              updating={Boolean(updating[agent.id])}
+              onToggle={toggleAgent}
+              onDispatch={openDispatch}
+            />
+          ))}
+        </div>
+      ) : !loadError ? (
+        <div className="managed-agent-empty">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有托管设备连接到服务器" />
+        </div>
+      ) : null}
 
       <Drawer
         title={`向 ${dispatchAgent?.machine_name || ''} 下发任务`}

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -15,11 +16,17 @@ from app.models import Agent, Environment, ManagedSchedule, Run, Script, User
 from app.routers.agents import AgentItem
 from app.routers.runs import _enrich_run
 from app.schemas import RunBrief
+from app.services.agent_thumbnails import thumbnail_path
 from app.services.audit import write_audit
 from app.services.run_dispatch import create_validated_run, validate_run_request
 from app.services.script_access import restrict_script_query
 
 router = APIRouter(prefix="/api/admin", tags=["managed-agents"])
+
+
+class ManagedAgentItem(AgentItem):
+    thumbnail_updated_at: Optional[datetime] = None
+    thumbnail_size: Optional[int] = None
 
 
 class ManagedRunCreate(BaseModel):
@@ -185,7 +192,7 @@ def _create_schedule_run(
     )
 
 
-@router.get("/managed-agents", response_model=List[AgentItem])
+@router.get("/managed-agents", response_model=List[ManagedAgentItem])
 def list_managed_agents(
     enabled: Optional[bool] = Query(default=None),
     current_user: User = Depends(require_role("admin")),
@@ -195,6 +202,26 @@ def list_managed_agents(
     if enabled is not None:
         query = query.filter(Agent.enabled == enabled)
     return query.order_by(Agent.enabled.desc(), Agent.last_heartbeat.desc()).all()
+
+
+@router.get("/managed-agents/{agent_id}/thumbnail")
+def get_managed_agent_thumbnail(
+    agent_id: int,
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    agent = _managed_agent_or_404(db, agent_id)
+    path = thumbnail_path(agent.id)
+    if agent.thumbnail_updated_at is None or agent.thumbnail_size is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="缩略图不存在")
+    return FileResponse(
+        path=str(path),
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/managed-agents/{agent_id}/options")

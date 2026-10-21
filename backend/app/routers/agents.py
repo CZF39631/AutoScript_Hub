@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from app.database import get_db
 from app.models import User, Agent, Run
 from app.schemas import RunBrief
 from app.auth import create_agent_token, get_current_user, require_role, verify_agent_token
+from app.services.agent_thumbnails import delete_thumbnail, read_bounded_jpeg, replace_thumbnail
 from app.services.audit import write_audit
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,41 @@ def heartbeat(
     return {"status": "ok", "agent_id": agent_id}
 
 
+@router.post("/{agent_id}/thumbnail")
+async def upload_thumbnail(
+    agent_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    agent_token: Optional[str] = Header(default=None, alias="X-Agent-Token"),
+):
+    """Replace this managed device's thumbnail using both user and device credentials."""
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.user_id == current_user.id,
+        Agent.mode == "managed",
+        Agent.enabled == True,
+        Agent.is_deleted == False,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="托管 Agent 不存在或已禁用")
+    verify_agent_token(agent_token, agent)
+
+    data, width, height = await read_bounded_jpeg(request)
+    replace_thumbnail(agent.id, data)
+    agent.thumbnail_updated_at = datetime.now(timezone.utc)
+    agent.thumbnail_size = len(data)
+    db.commit()
+    db.refresh(agent)
+    return {
+        "agent_id": agent.id,
+        "thumbnail_updated_at": agent.thumbnail_updated_at,
+        "thumbnail_size": agent.thumbnail_size,
+        "width": width,
+        "height": height,
+    }
+
+
 @router.get("", response_model=List[AgentItem])
 def list_agents(
     current_user: User = Depends(require_role("admin", "developer")),
@@ -287,6 +323,11 @@ def delete_agent(
     ).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent 不存在")
+    # Refuse to report a successful device deletion if its retained screen data
+    # could not also be removed.
+    delete_thumbnail(agent.id)
+    agent.thumbnail_updated_at = None
+    agent.thumbnail_size = None
     agent.is_deleted = True
     agent.status = "offline"
     db.commit()

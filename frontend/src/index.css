@@ -189,14 +189,42 @@ button, input, select, textarea { font: inherit; }
 .managed-admin-page { min-width: 0; }
 .managed-page-alert { margin-bottom: 16px; }
 .managed-drawer-alert { margin-bottom: 20px; }
-.managed-device-cell { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.managed-device-cell > span:last-child { min-width: 0; display: flex; flex-direction: column; }
-.managed-device-cell strong, .managed-plan-cell strong { overflow: hidden; color: var(--apple-text); text-overflow: ellipsis; white-space: nowrap; }
-.managed-device-cell small, .managed-plan-cell small { margin-top: 2px; color: var(--apple-secondary); font-size: 11px; }
-.managed-device-icon { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; color: #8e8e93; background: rgba(142,142,147,.11); }
-.managed-device-icon.is-online { color: #248a3d; background: rgba(52,199,89,.12); }
-.managed-device-uid { display: block; max-width: 220px; }
+.managed-agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 20px; align-items: start; }
+.managed-agent-card { min-width: 0; padding: 18px; border: 1px solid rgba(0,0,0,.075); border-radius: 16px; background: rgba(255,255,255,.9); transition: border-color .2s ease, background-color .2s ease; }
+.managed-agent-card:hover { border-color: rgba(0,122,255,.25); }
+.managed-agent-card.is-disabled { background: rgba(247,247,249,.82); }
+.managed-agent-card--loading { min-height: 440px; padding-top: 24px; }
+.managed-agent-card__header { min-width: 0; margin-bottom: 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.managed-agent-card__identity { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.managed-agent-card__identity > div { min-width: 0; }
+.managed-agent-card__device { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; color: #0071e3; background: rgba(0,122,255,.1); font-size: 17px; }
+.is-disabled .managed-agent-card__device { color: #77777c; background: rgba(118,118,128,.1); }
+.managed-agent-card__identity h3 { margin: 0; overflow: hidden; color: var(--apple-text); font-size: 15px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-card__identity span { display: block; margin-top: 2px; overflow: hidden; color: var(--apple-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-card__header .ant-tag { flex: 0 0 auto; margin-inline-end: 0; }
+.managed-monitor { position: relative; margin: 2px 0 31px; padding: 8px 8px 0; border-radius: 13px; background: #303034; }
+.managed-monitor__screen { position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; overflow: hidden; border-radius: 7px; background: #18181b; }
+.managed-monitor__screen img { width: 100%; height: 100%; display: block; object-fit: contain; }
+.managed-monitor__chin { height: 18px; display: grid; place-items: center; }
+.managed-monitor__chin span { width: 5px; height: 5px; border-radius: 50%; background: #85858a; }
+.managed-monitor__stand { position: absolute; inset-inline-start: 50%; bottom: -17px; width: 74px; height: 5px; background: #69696f; transform: translateX(-50%); }
+.managed-monitor__stand::before { content: ""; position: absolute; inset-inline-start: 28px; top: 0; width: 18px; height: 14px; background: #5a5a5f; clip-path: polygon(25% 0, 75% 0, 100% 100%, 0 100%); }
+.managed-thumbnail-state { position: absolute; inset: 0; padding: 16px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: #c7c7cc; font-size: 12px; text-align: center; }
+.managed-thumbnail-state > .anticon { color: #8e8e93; font-size: 24px; }
+.managed-thumbnail-state--error > .anticon { color: #ff9f0a; }
+.managed-thumbnail-state .ant-btn { margin-top: 2px; color: #f5f5f7; border-color: #626268; background: #3a3a3e; }
+.managed-thumbnail-age { position: absolute; right: 8px; bottom: 8px; padding: 4px 7px; display: inline-flex; align-items: center; gap: 5px; border-radius: 7px; color: #fff4d5; background: rgba(92,57,0,.86); font-size: 11px; font-weight: 600; backdrop-filter: blur(8px); }
+.managed-agent-card__details { margin: 0; }
+.managed-agent-card__details > div { min-width: 0; padding: 8px 0; display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; border-bottom: 1px solid rgba(0,0,0,.055); font-size: 12px; }
+.managed-agent-card__details dt { color: var(--apple-secondary); }
+.managed-agent-card__details dd { margin: 0; overflow: hidden; color: #363638; font-variant-numeric: tabular-nums; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-card__actions { margin-top: 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.managed-agent-toggle { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #48484a; font-size: 12px; }
+.managed-agent-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.managed-agent-empty { min-height: 330px; display: grid; place-items: center; border: 1px dashed rgba(0,0,0,.13); border-radius: 16px; background: rgba(255,255,255,.58); }
 .managed-plan-cell { min-width: 0; display: flex; flex-direction: column; }
+.managed-plan-cell strong { overflow: hidden; color: var(--apple-text); text-overflow: ellipsis; white-space: nowrap; }
+.managed-plan-cell small { margin-top: 2px; color: var(--apple-secondary); font-size: 11px; }
 .managed-form-section { margin: 6px 0 22px; padding: 16px; border-radius: 14px; background: rgba(245,245,247,.82); border: 1px solid var(--apple-border); }
 .managed-form-section h3 { margin: 0 0 14px; font-size: 14px; }
 .managed-form-section .ant-alert { margin-bottom: 16px; }
@@ -214,7 +242,8 @@ button, input, select, textarea { font: inherit; }
 .managed-client-refresh { display: flex; align-items: center; gap: 12px; }
 .managed-client-refresh > span { color: var(--apple-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .managed-client-content { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 44px; }
-.managed-mode-notice, .managed-pause-alert { margin-bottom: 18px; }
+.managed-privacy-notice, .managed-mode-notice, .managed-pause-alert { margin-bottom: 18px; }
+.managed-privacy-notice .ant-alert-description { max-width: 76ch; }
 .managed-client-loading { min-height: 360px; padding: 28px; border-radius: 18px; background: #fff; border: 1px solid var(--apple-border); }
 .managed-client-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
 .managed-status-card .ant-card-body { min-height: 122px; display: flex; align-items: center; gap: 14px; padding: 20px; }
@@ -245,6 +274,13 @@ button, input, select, textarea { font: inherit; }
 }
 
 @media (max-width: 640px) {
+  .managed-admin-page .page-heading { gap: 12px; }
+  .managed-admin-page .page-heading p { max-width: 34ch; }
+  .managed-agent-grid { gap: 14px; }
+  .managed-agent-card { padding: 14px; }
+  .managed-agent-card__actions { grid-template-columns: 1fr; }
+  .managed-agent-toggle { min-height: 32px; }
+  .managed-agent-card__actions .ant-btn { width: 100%; }
   .managed-client-header { height: auto; padding: 16px 18px; align-items: flex-start; }
   .managed-client-refresh { align-items: flex-end; flex-direction: column-reverse; gap: 6px; }
   .managed-client-content { width: calc(100% - 28px); padding-top: 18px; }

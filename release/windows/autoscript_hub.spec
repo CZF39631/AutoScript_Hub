@@ -7,14 +7,20 @@ from PyInstaller.utils.hooks import collect_all
 ROOT = Path.cwd()
 GENERATED = ROOT / "release-output" / "autoscript-build"
 webview_datas, webview_binaries, webview_hidden = collect_all("webview")
+mss_datas, mss_binaries, mss_hidden = collect_all("mss")
+pillow_datas, pillow_binaries, pillow_hidden = collect_all("PIL")
 common_datas = [
     (str(ROOT / "frontend" / "dist"), "client/ui/static"),
     (str(ROOT / "client" / "update" / "update-public-key.b64"), "client/update"),  # client/update/update-public-key.b64
-] + webview_datas
-common_binaries = webview_binaries
-common_hidden = webview_hidden + [
+] + webview_datas + mss_datas + pillow_datas
+common_binaries = webview_binaries + mss_binaries + pillow_binaries
+common_hidden = webview_hidden + mss_hidden + pillow_hidden + [
     "client.ui.wizard",
     "client.agent.notifier",
+    "mss",
+    "mss.windows",
+    "PIL.Image",
+    "PIL.JpegImagePlugin",
     "plyer",
     "plyer.platforms.win.notification",
 ]

@@ -9,3 +9,4 @@ aiofiles==23.2.1
 httpx==0.25.2
 packaging==26.0
 alembic==1.13.3
+Pillow==12.2.0

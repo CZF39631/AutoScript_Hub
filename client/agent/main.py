@@ -16,6 +16,7 @@ import requests
 from client.agent.local_server import start_local_server
 from client.runtime.local_auth import get_or_create_agent_token
 from client.agent.script_parser import parse_script_config
+from client.agent.thumbnail import capture_thumbnail
 from shared.script_contract import extract_script_archive, validate_params
 from shared.version import get_version
 from client.runtime.client_identity import apply_installed_client_mode, ensure_client_identity
@@ -84,6 +85,11 @@ _restart_requested = False
 _shutdown_when_idle = False
 _last_settings_sync_time = 0
 _last_script_access_sync_time = 0
+_thumbnail_worker = None
+_thumbnail_worker_lock = threading.Lock()
+_thumbnail_state_lock = threading.Lock()
+_last_thumbnail_attempt_at = None
+_last_thumbnail_success_at = None
 
 _CLIENT_SETTING_KEYS = {
     "server_url",
@@ -102,6 +108,8 @@ _CLIENT_SETTING_KEYS = {
 OFFLINE_NOTIFY_THRESHOLD_SEC = 30 * 60  # 30 min (design §5.9)
 UPDATE_CHECK_INTERVAL_SEC = 6 * 60 * 60
 SCRIPT_AUTHORIZATION_MAX_AGE_SEC = 7 * 24 * 60 * 60
+THUMBNAIL_INTERVAL_SEC = 60
+THUMBNAIL_UPLOAD_TIMEOUT_SEC = 10
 PENDING_REPORTS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_reports.json")
 PENDING_LOG_UPLOADS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_log_uploads.json")
 SCRIPT_AUTHORIZATIONS_FILE = str(_CLIENT_PATHS.config_dir / "script_authorizations.json")
@@ -691,6 +699,71 @@ def send_heartbeat():
     return False
 
 
+def _attempt_thumbnail_upload():
+    """Capture and upload one managed-mode thumbnail without leaking failures."""
+    global _last_thumbnail_attempt_at, _last_thumbnail_success_at
+
+    with _thumbnail_state_lock:
+        _last_thumbnail_attempt_at = time.time()
+
+    if (
+        _client_config.get("client_mode", "standard") != "managed"
+        or not _agent_id
+        or not _token
+        or not _agent_token
+    ):
+        return False
+
+    try:
+        payload = capture_thumbnail()
+        headers = _agent_headers()
+        headers["Content-Type"] = "image/jpeg"
+        response = requests.post(
+            "{}/api/agents/{}/thumbnail".format(BACKEND_URL, _agent_id),
+            data=payload,
+            headers=headers,
+            timeout=THUMBNAIL_UPLOAD_TIMEOUT_SEC,
+            allow_redirects=False,
+        )
+        if not 200 <= response.status_code < 300:
+            return False
+        with _thumbnail_state_lock:
+            _last_thumbnail_success_at = time.time()
+        return True
+    except Exception as exc:
+        # Screenshot APIs can fail while Windows changes desktop/session. This
+        # worker must never affect polling, heartbeat, or task state.
+        logger.debug("屏幕缩略图捕获或上传失败: %s", exc)
+        return False
+
+
+def _thumbnail_worker_loop(stop_event=None):
+    """Run thumbnail attempts on an isolated daemon worker every 60 seconds."""
+    while True:
+        _attempt_thumbnail_upload()
+        if stop_event is None:
+            time.sleep(THUMBNAIL_INTERVAL_SEC)
+        elif stop_event.wait(THUMBNAIL_INTERVAL_SEC):
+            return
+
+
+def _start_thumbnail_worker():
+    """Start the singleton managed-mode thumbnail daemon, if applicable."""
+    global _thumbnail_worker
+    if _client_config.get("client_mode", "standard") != "managed":
+        return None
+    with _thumbnail_worker_lock:
+        if _thumbnail_worker is not None and _thumbnail_worker.is_alive():
+            return _thumbnail_worker
+        _thumbnail_worker = threading.Thread(
+            target=_thumbnail_worker_loop,
+            name="managed-thumbnail-worker",
+            daemon=True,
+        )
+        _thumbnail_worker.start()
+        return _thumbnail_worker
+
+
 def _check_offline_notification():
     """Pop system notification if disconnected > 30 min (design §5.9)."""
     global _offline_notified
@@ -1211,12 +1284,19 @@ def get_client_info():
             "started_at": _local_run_info.get("start_time"),
             "local": True,
         }
-    return {
+    info = {
         "client_mode": _client_config.get("client_mode", "standard"),
         "device_uid": _client_config.get("device_uid"),
         "machine_name": machine_name,
         "current_run": current_run,
     }
+    if info["client_mode"] == "managed":
+        with _thumbnail_state_lock:
+            info.update({
+                "last_thumbnail_attempt_at": _last_thumbnail_attempt_at,
+                "last_thumbnail_success_at": _last_thumbnail_success_at,
+            })
+    return info
 
 
 def get_connection_status():
@@ -1723,7 +1803,8 @@ def agent_iteration(username, password):
             _check_offline_notification()
             return False
         print("Agent 已认证为 {},每 {} 秒轮询一次".format(username, POLL_INTERVAL))
-        register_agent()
+        if register_agent():
+            _start_thumbnail_worker()
 
     now = time.time()
     if _last_update_check_time == 0 or now - _last_update_check_time >= UPDATE_CHECK_INTERVAL_SEC:

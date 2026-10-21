@@ -34,7 +34,10 @@ def test_fresh_database_upgrades_to_head(tmp_path):
         "managed_schedules", "alembic_version",
     }.issubset(tables)
     inspector = inspect(create_engine(database_url))
-    assert {"device_uid", "mode", "enabled", "agent_token_issued_at"}.issubset(
+    assert {
+        "device_uid", "mode", "enabled", "agent_token_issued_at",
+        "thumbnail_updated_at", "thumbnail_size",
+    }.issubset(
         {column["name"] for column in inspector.get_columns("agents")}
     )
     assert {
@@ -166,6 +169,35 @@ def test_legacy_schema_with_incompatible_column_type_is_rejected_before_stamp(tm
         upgrade_database(database_url)
 
     assert "alembic_version" not in inspect(create_engine(database_url)).get_table_names()
+
+
+def test_thumbnail_migration_upgrades_0006_and_downgrades_cleanly(tmp_path):
+    database_url = _sqlite_url(tmp_path / "agent-thumbnails.db")
+    config = alembic_config(database_url)
+    command.upgrade(config, "0006_managed_agent_mode")
+    # 0001 intentionally builds current metadata on brand-new databases. Remove
+    # the future columns to reproduce a deployment whose real head is 0006.
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE agents DROP COLUMN thumbnail_updated_at"))
+        connection.execute(text("ALTER TABLE agents DROP COLUMN thumbnail_size"))
+    before = {column["name"] for column in inspect(engine).get_columns("agents")}
+    assert "thumbnail_updated_at" not in before
+    assert "thumbnail_size" not in before
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    after = {column["name"] for column in inspect(engine).get_columns("agents")}
+    assert {"thumbnail_updated_at", "thumbnail_size"}.issubset(after)
+    engine.dispose()
+
+    command.downgrade(config, "0006_managed_agent_mode")
+    engine = create_engine(database_url)
+    downgraded = {column["name"] for column in inspect(engine).get_columns("agents")}
+    assert "thumbnail_updated_at" not in downgraded
+    assert "thumbnail_size" not in downgraded
+    engine.dispose()
 
 
 def test_managed_downgrade_terminates_directed_work_before_dropping_target(tmp_path):

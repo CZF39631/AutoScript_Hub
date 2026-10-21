@@ -105,6 +105,8 @@ class Agent(Base):
     agent_version = Column(String(20), nullable=True)
     last_heartbeat = Column(DateTime, nullable=True)
     agent_token_issued_at = Column(DateTime, nullable=True)
+    thumbnail_updated_at = Column(DateTime, nullable=True)
+    thumbnail_size = Column(Integer, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     is_deleted = Column(Boolean, nullable=False, default=False)

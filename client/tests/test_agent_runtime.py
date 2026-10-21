@@ -80,11 +80,15 @@ def test_client_info_exposes_identity_and_structured_current_run(monkeypatch):
         "script_name": "安全巡检",
         "start_time": 123.0,
     })
+    monkeypatch.setattr(agent, "_last_thumbnail_attempt_at", 120.0)
+    monkeypatch.setattr(agent, "_last_thumbnail_success_at", 121.0)
 
     assert agent.get_client_info() == {
         "client_mode": "managed",
         "device_uid": "stable-device-uid",
         "machine_name": "desktop-a",
+        "last_thumbnail_attempt_at": 120.0,
+        "last_thumbnail_success_at": 121.0,
         "current_run": {
             "id": 71,
             "status": "running",
@@ -566,6 +570,7 @@ def test_agent_iteration_stays_alive_offline_and_recovers_authentication(monkeyp
 
     monkeypatch.setattr(agent, "authenticate", fake_authenticate)
     monkeypatch.setattr(agent, "register_agent", lambda: events.append("registered") or 3)
+    monkeypatch.setattr(agent, "_start_thumbnail_worker", lambda: events.append("thumbnail-worker"))
     monkeypatch.setattr(agent, "_flush_pending_reports", lambda: events.append("reports"))
     monkeypatch.setattr(agent, "_check_local_runs", lambda: events.append("local-runs"))
     monkeypatch.setattr(agent, "poll_and_execute", lambda: events.append("poll"))
@@ -586,6 +591,7 @@ def test_agent_iteration_stays_alive_offline_and_recovers_authentication(monkeyp
     assert agent.agent_iteration("operator", "secret") is True
     assert events[-6:] == ["reports", "local-runs", "poll", "heartbeat", "sync", "notify"]
     assert "registered" in events
+    assert "thumbnail-worker" in events
 
 
 def test_authenticated_agent_checks_updates_on_start_and_every_six_hours(monkeypatch):

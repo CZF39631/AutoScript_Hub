@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Descriptions, Empty, Skeleton, Table, Tag } from 'antd'
 import {
   CheckCircleOutlined, CloudServerOutlined, DisconnectOutlined, LaptopOutlined,
-  LoadingOutlined, PauseCircleOutlined, ReloadOutlined,
+  LoadingOutlined, PauseCircleOutlined, ReloadOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons'
 import { useConnection } from '../contexts/ConnectionContext'
 import { loadManagedPanelData } from '../api/managedLocal'
@@ -94,6 +94,15 @@ export default function ManagedClientPanel() {
       </header>
 
       <section className="managed-client-content" aria-live="polite">
+        <Alert
+          className="managed-privacy-notice"
+          type="info"
+          showIcon
+          icon={<SafetyCertificateOutlined />}
+          title="屏幕缩略图隐私说明"
+          description="设备解锁时每分钟上传一张低分辨率缩略图，服务端只保留最新一张；锁屏时不采集。这不是视频，也不采集声音。"
+        />
+
         {overview?.paused && (
           <Alert
             className="managed-pause-alert"
