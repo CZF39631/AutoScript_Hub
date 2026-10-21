@@ -189,39 +189,45 @@ button, input, select, textarea { font: inherit; }
 .managed-admin-page { min-width: 0; }
 .managed-page-alert { margin-bottom: 16px; }
 .managed-drawer-alert { margin-bottom: 20px; }
-.managed-agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 20px; align-items: start; }
-.managed-agent-card { min-width: 0; padding: 18px; border: 1px solid rgba(0,0,0,.075); border-radius: 16px; background: rgba(255,255,255,.9); transition: border-color .2s ease, background-color .2s ease; }
+.managed-agent-toolbar { margin-bottom: 14px; display: grid; grid-template-columns: minmax(220px, 340px) 132px 1fr; align-items: center; gap: 10px; }
+.managed-agent-toolbar .ant-input-affix-wrapper, .managed-agent-toolbar .ant-select-selector { min-height: 36px; }
+.managed-agent-count { justify-self: end; color: var(--apple-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.managed-agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 248px), 1fr)); gap: 12px; align-items: start; }
+.managed-agent-card { min-width: 0; padding: 12px; border: 1px solid rgba(0,0,0,.075); border-radius: 14px; background: rgba(255,255,255,.9); transition: border-color .2s ease, background-color .2s ease; }
 .managed-agent-card:hover { border-color: rgba(0,122,255,.25); }
 .managed-agent-card.is-disabled { background: rgba(247,247,249,.82); }
-.managed-agent-card--loading { min-height: 440px; padding-top: 24px; }
-.managed-agent-card__header { min-width: 0; margin-bottom: 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.managed-agent-card__identity { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.managed-agent-card--loading { min-height: 330px; padding-top: 18px; }
+.managed-agent-card__header { min-width: 0; margin-bottom: 10px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.managed-agent-card__identity { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .managed-agent-card__identity > div { min-width: 0; }
-.managed-agent-card__device { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; color: #0071e3; background: rgba(0,122,255,.1); font-size: 17px; }
+.managed-agent-card__device { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 8px; color: #0071e3; background: rgba(0,122,255,.1); font-size: 14px; }
 .is-disabled .managed-agent-card__device { color: #77777c; background: rgba(118,118,128,.1); }
 .managed-agent-card__identity h3 { margin: 0; overflow: hidden; color: var(--apple-text); font-size: 15px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .managed-agent-card__identity span { display: block; margin-top: 2px; overflow: hidden; color: var(--apple-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .managed-agent-card__header .ant-tag { flex: 0 0 auto; margin-inline-end: 0; }
-.managed-monitor { position: relative; margin: 2px 0 31px; padding: 8px 8px 0; border-radius: 13px; background: #303034; }
-.managed-monitor__screen { position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; overflow: hidden; border-radius: 7px; background: #18181b; }
+.managed-monitor { position: relative; margin: 0 0 23px; padding: 5px 5px 0; border-radius: 9px; background: #303034; }
+.managed-monitor__screen { position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; overflow: hidden; border-radius: 5px; background: #18181b; }
 .managed-monitor__screen img { width: 100%; height: 100%; display: block; object-fit: contain; }
-.managed-monitor__chin { height: 18px; display: grid; place-items: center; }
-.managed-monitor__chin span { width: 5px; height: 5px; border-radius: 50%; background: #85858a; }
-.managed-monitor__stand { position: absolute; inset-inline-start: 50%; bottom: -17px; width: 74px; height: 5px; background: #69696f; transform: translateX(-50%); }
-.managed-monitor__stand::before { content: ""; position: absolute; inset-inline-start: 28px; top: 0; width: 18px; height: 14px; background: #5a5a5f; clip-path: polygon(25% 0, 75% 0, 100% 100%, 0 100%); }
+.managed-monitor__chin { height: 12px; display: grid; place-items: center; }
+.managed-monitor__chin span { width: 4px; height: 4px; border-radius: 50%; background: #85858a; }
+.managed-monitor__stand { position: absolute; inset-inline-start: 50%; bottom: -12px; width: 58px; height: 4px; background: #69696f; transform: translateX(-50%); }
+.managed-monitor__stand::before { content: ""; position: absolute; inset-inline-start: 22px; top: 0; width: 14px; height: 10px; background: #5a5a5f; clip-path: polygon(25% 0, 75% 0, 100% 100%, 0 100%); }
 .managed-thumbnail-state { position: absolute; inset: 0; padding: 16px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: #c7c7cc; font-size: 12px; text-align: center; }
 .managed-thumbnail-state > .anticon { color: #8e8e93; font-size: 24px; }
 .managed-thumbnail-state--error > .anticon { color: #ff9f0a; }
 .managed-thumbnail-state .ant-btn { margin-top: 2px; color: #f5f5f7; border-color: #626268; background: #3a3a3e; }
 .managed-thumbnail-age { position: absolute; right: 8px; bottom: 8px; padding: 4px 7px; display: inline-flex; align-items: center; gap: 5px; border-radius: 7px; color: #fff4d5; background: rgba(92,57,0,.86); font-size: 11px; font-weight: 600; backdrop-filter: blur(8px); }
 .managed-agent-card__details { margin: 0; }
-.managed-agent-card__details > div { min-width: 0; padding: 8px 0; display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; border-bottom: 1px solid rgba(0,0,0,.055); font-size: 12px; }
+.managed-agent-card__details > div { min-width: 0; padding: 5px 0; display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; border-bottom: 1px solid rgba(0,0,0,.055); font-size: 11px; }
 .managed-agent-card__details dt { color: var(--apple-secondary); }
 .managed-agent-card__details dd { margin: 0; overflow: hidden; color: #363638; font-variant-numeric: tabular-nums; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
-.managed-agent-card__actions { margin-top: 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.managed-agent-card__actions { margin-top: 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.managed-agent-card__actions .ant-btn { height: 30px; padding-inline: 10px; font-size: 12px; }
 .managed-agent-toggle { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #48484a; font-size: 12px; }
 .managed-agent-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .managed-agent-empty { min-height: 330px; display: grid; place-items: center; border: 1px dashed rgba(0,0,0,.13); border-radius: 16px; background: rgba(255,255,255,.58); }
+.managed-agent-empty--compact { min-height: 220px; }
+.managed-agent-pagination { margin-top: 18px; display: flex; justify-content: flex-end; }
 .managed-plan-cell { min-width: 0; display: flex; flex-direction: column; }
 .managed-plan-cell strong { overflow: hidden; color: var(--apple-text); text-overflow: ellipsis; white-space: nowrap; }
 .managed-plan-cell small { margin-top: 2px; color: var(--apple-secondary); font-size: 11px; }
@@ -276,8 +282,10 @@ button, input, select, textarea { font: inherit; }
 @media (max-width: 640px) {
   .managed-admin-page .page-heading { gap: 12px; }
   .managed-admin-page .page-heading p { max-width: 34ch; }
-  .managed-agent-grid { gap: 14px; }
-  .managed-agent-card { padding: 14px; }
+  .managed-agent-toolbar { grid-template-columns: minmax(0, 1fr) 116px; }
+  .managed-agent-count { grid-column: 1 / -1; justify-self: start; }
+  .managed-agent-grid { gap: 10px; }
+  .managed-agent-card { padding: 12px; }
   .managed-agent-card__actions { grid-template-columns: 1fr; }
   .managed-agent-toggle { min-height: 32px; }
   .managed-agent-card__actions .ant-btn { width: 100%; }

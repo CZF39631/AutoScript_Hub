@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Drawer, Empty, Form, InputNumber, Select, Skeleton, Space, Switch, Tag,
-  message,
+  Alert, Button, Drawer, Empty, Form, Input, InputNumber, Pagination, Select, Skeleton, Space,
+  Switch, Tag, message,
 } from 'antd'
 import {
-  DesktopOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined, SendOutlined,
-  WarningOutlined,
+  DesktopOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined, SearchOutlined,
+  SendOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
@@ -15,6 +15,8 @@ import {
   thumbnailTimestamp,
 } from '../utils/managed'
 import { formatServerTime } from '../utils/dateTime'
+
+const AGENTS_PER_PAGE = 24
 
 const durationUnits = [
   { value: 'minute', label: '分钟' },
@@ -157,6 +159,9 @@ export default function ManagedAgents() {
   const [scriptDetails, setScriptDetails] = useState({})
   const [scriptLoading, setScriptLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [page, setPage] = useState(1)
   const listRequest = useRef(null)
   const [form] = Form.useForm()
   const selectedScriptId = Form.useWatch('script_id', form)
@@ -211,6 +216,27 @@ export default function ManagedAgents() {
     const detail = scriptDetails[selectedScriptId]
     return parseScriptConfig(detail?.config_json).params || []
   }, [scriptDetails, selectedScriptId])
+
+  const filteredAgents = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase()
+    return agents.filter(agent => {
+      const matchesKeyword = !keyword || [agent.machine_name, agent.machine_ip, agent.agent_version]
+        .some(value => String(value || '').toLocaleLowerCase().includes(keyword))
+      const matchesStatus = statusFilter === 'all'
+        || (statusFilter === 'disabled' ? !agent.enabled : agent.enabled && agent.status === statusFilter)
+      return matchesKeyword && matchesStatus
+    })
+  }, [agents, query, statusFilter])
+
+  const pageAgents = useMemo(() => {
+    const start = (page - 1) * AGENTS_PER_PAGE
+    return filteredAgents.slice(start, start + AGENTS_PER_PAGE)
+  }, [filteredAgents, page])
+
+  useEffect(() => {
+    const lastPage = Math.max(1, Math.ceil(filteredAgents.length / AGENTS_PER_PAGE))
+    if (page > lastPage) setPage(lastPage)
+  }, [filteredAgents.length, page])
 
   const openDispatch = async agent => {
     setDispatchAgent(agent)
@@ -287,25 +313,66 @@ export default function ManagedAgents() {
         />
       )}
 
+      {agents.length > 0 && (
+        <div className="managed-agent-toolbar">
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="搜索设备名、IP 或版本"
+            value={query}
+            onChange={event => { setQuery(event.target.value); setPage(1) }}
+          />
+          <Select
+            aria-label="设备状态筛选"
+            value={statusFilter}
+            onChange={value => { setStatusFilter(value); setPage(1) }}
+            options={[
+              { value: 'all', label: '全部状态' },
+              { value: 'online', label: '在线' },
+              { value: 'offline', label: '离线' },
+              { value: 'disabled', label: '已停用' },
+            ]}
+          />
+          <span className="managed-agent-count">{filteredAgents.length} 台设备</span>
+        </div>
+      )}
+
       {loading && !agents.length ? (
         <div className="managed-agent-grid" aria-label="正在加载被控设备">
-          {[0, 1, 2].map(item => (
+          {[0, 1, 2, 3].map(item => (
             <div className="managed-agent-card managed-agent-card--loading" key={item}>
-              <Skeleton active paragraph={{ rows: 6 }} />
+              <Skeleton active paragraph={{ rows: 5 }} />
             </div>
           ))}
         </div>
-      ) : agents.length ? (
-        <div className="managed-agent-grid">
-          {agents.map(agent => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              updating={Boolean(updating[agent.id])}
-              onToggle={toggleAgent}
-              onDispatch={openDispatch}
+      ) : pageAgents.length ? (
+        <>
+          <div className="managed-agent-grid">
+            {pageAgents.map(agent => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                updating={Boolean(updating[agent.id])}
+                onToggle={toggleAgent}
+                onDispatch={openDispatch}
+              />
+            ))}
+          </div>
+          {filteredAgents.length > AGENTS_PER_PAGE && (
+            <Pagination
+              className="managed-agent-pagination"
+              current={page}
+              pageSize={AGENTS_PER_PAGE}
+              total={filteredAgents.length}
+              showSizeChanger={false}
+              showLessItems
+              onChange={setPage}
             />
-          ))}
+          )}
+        </>
+      ) : agents.length ? (
+        <div className="managed-agent-empty managed-agent-empty--compact">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合筛选条件的设备" />
         </div>
       ) : !loadError ? (
         <div className="managed-agent-empty">
