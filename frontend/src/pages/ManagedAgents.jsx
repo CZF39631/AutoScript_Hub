@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Drawer, Empty, Form, Input, InputNumber, Pagination, Popconfirm, Select,
-  Skeleton, Space, Switch, Tag, Tooltip, message,
+  Alert, Button, Drawer, Empty, Form, Input, InputNumber, Pagination, Popconfirm, Segmented,
+  Select, Skeleton, Space, Switch, Tag, Tooltip, message,
 } from 'antd'
 import {
   DeleteOutlined, DesktopOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined,
@@ -181,6 +181,7 @@ export default function ManagedAgents({ embedded = false }) {
   const listRequest = useRef(null)
   const [form] = Form.useForm()
   const selectedScriptId = Form.useWatch('script_id', form)
+  const selectedTaskType = Form.useWatch('task_type', form) || 'manual'
 
   const load = useCallback(async ({ quiet = false } = {}) => {
     if (quiet && listRequest.current) return
@@ -279,7 +280,16 @@ export default function ManagedAgents({ embedded = false }) {
     setScripts([])
     setEnvironments([])
     form.resetFields()
-    form.setFieldsValue({ expires_value: 1, expires_unit: 'hour', params: {} })
+    form.setFieldsValue({
+      task_type: 'manual',
+      schedule_name: '',
+      interval_value: 1,
+      interval_unit: 'hour',
+      expires_value: 1,
+      expires_unit: 'hour',
+      schedule_enabled: true,
+      params: {},
+    })
     setScriptLoading(true)
     try {
       const response = await api.get(`/api/admin/managed-agents/${agent.id}/options`)
@@ -322,21 +332,44 @@ export default function ManagedAgents({ embedded = false }) {
   const dispatch = async values => {
     const expires = intervalToSeconds(values.expires_value, values.expires_unit)
     if (!expires || expires < 60 || expires > 604800) {
-      message.error('有效期须在 1 分钟到 7 天之间')
+      message.error('任务有效期须在 1 分钟到 7 天之间')
+      return
+    }
+    const isSchedule = values.task_type === 'schedule'
+    const interval = isSchedule
+      ? intervalToSeconds(values.interval_value, values.interval_unit)
+      : null
+    if (isSchedule && (!interval || interval < 60 || interval > 31536000)) {
+      message.error('执行间隔须在 1 分钟到 365 天之间')
       return
     }
     setSubmitting(true)
     try {
-      const response = await api.post(`/api/admin/managed-agents/${dispatchAgent.id}/runs`, {
-        script_id: values.script_id,
-        params: values.params || {},
-        environment_id: values.environment_id ?? null,
-        expires_in_seconds: expires,
-      })
-      message.success(`任务 #${response.data.id} 已定向下发`)
+      if (isSchedule) {
+        await api.post('/api/admin/managed-schedules', {
+          name: values.schedule_name.trim(),
+          agent_id: dispatchAgent.id,
+          script_id: values.script_id,
+          params: values.params || {},
+          environment_id: values.environment_id ?? null,
+          interval_seconds: interval,
+          expires_after_seconds: expires,
+          enabled: values.schedule_enabled,
+        })
+        message.success('定时任务已创建')
+      } else {
+        const response = await api.post(`/api/admin/managed-agents/${dispatchAgent.id}/runs`, {
+          script_id: values.script_id,
+          params: values.params || {},
+          environment_id: values.environment_id ?? null,
+          expires_in_seconds: expires,
+        })
+        message.success(`临时任务 #${response.data.id} 已发布`)
+      }
       setDispatchAgent(null)
+      load({ quiet: true })
     } catch (error) {
-      message.error(apiErrorMessage(error, '任务下发失败'))
+      message.error(apiErrorMessage(error, isSchedule ? '定时任务创建失败' : '临时任务发布失败'))
     } finally {
       setSubmitting(false)
     }
@@ -434,7 +467,7 @@ export default function ManagedAgents({ embedded = false }) {
       ) : null}
 
       <Drawer
-        title={`向 ${dispatchAgent?.machine_name || ''} 下发任务`}
+        title={`向 ${dispatchAgent?.machine_name || ''} 发布任务`}
         open={Boolean(dispatchAgent)}
         onClose={() => !submitting && setDispatchAgent(null)}
         width={520}
@@ -443,10 +476,10 @@ export default function ManagedAgents({ embedded = false }) {
             type="primary"
             icon={<SendOutlined />}
             loading={submitting}
-            disabled={!dispatchAgent?.enabled || Boolean(dispatchAgent?.running_run_id)}
+            disabled={!dispatchAgent?.enabled || (selectedTaskType === 'manual' && Boolean(dispatchAgent?.running_run_id))}
             onClick={() => form.submit()}
           >
-            发布临时任务
+            {selectedTaskType === 'schedule' ? '创建定时任务' : '发布临时任务'}
           </Button>
         )}
         destroyOnHidden
@@ -457,35 +490,64 @@ export default function ManagedAgents({ embedded = false }) {
             type="warning"
             showIcon
             title={`设备正在执行${dispatchAgent.running_dispatch_type === 'managed_schedule' ? '定时' : '临时'}任务 #${dispatchAgent.running_run_id}`}
-            description="当前任务结束前不能再发布临时任务，但可以查看和维护下方定时任务。"
+            description="当前任务结束前不能再发布临时任务，但仍可切换到定时任务进行查看或创建。"
           />
         ) : dispatchAgent?.status !== 'online' ? (
           <Alert className="managed-drawer-alert" type="warning" showIcon title="设备当前离线" description="临时任务会保留到有效期结束；设备恢复连接后才能领取。" />
         ) : null}
 
-        <section className="managed-dispatch-schedules">
-          <div className="managed-dispatch-schedules__heading">
-            <div>
-              <h3>已安排的定时任务</h3>
-              <span>{(schedulesByAgent.get(dispatchAgent?.id) || []).length} 个</span>
-            </div>
-            <Button type="link" href="#schedules" onClick={() => setDispatchAgent(null)}>管理定时任务</Button>
-          </div>
-          {(schedulesByAgent.get(dispatchAgent?.id) || []).length ? (
-            <div className="managed-dispatch-schedules__list">
-              {(schedulesByAgent.get(dispatchAgent?.id) || []).map(schedule => (
-                <div key={schedule.id}>
-                  <div><strong>{schedule.name}</strong><span>{formatInterval(schedule.interval_seconds)}</span></div>
-                  <small>{schedule.enabled ? `下次 ${formatServerTime(schedule.next_run_at)}` : '已暂停'}</small>
+        <Form form={form} layout="vertical" onFinish={dispatch} requiredMark="optional">
+          <Form.Item name="task_type" label="任务类型">
+            <Segmented
+              block
+              options={[
+                { label: '临时任务', value: 'manual' },
+                { label: '定时任务', value: 'schedule' },
+              ]}
+            />
+          </Form.Item>
+
+          <div className={`managed-schedule-reveal${selectedTaskType === 'schedule' ? ' is-open' : ''}`} aria-hidden={selectedTaskType !== 'schedule'}>
+            <div className="managed-schedule-reveal__inner">
+              <section className="managed-dispatch-schedules">
+                <div className="managed-dispatch-schedules__heading">
+                  <div>
+                    <h3>当前已安排</h3>
+                    <span>{(schedulesByAgent.get(dispatchAgent?.id) || []).length} 个定时任务</span>
+                  </div>
                 </div>
-              ))}
+                {(schedulesByAgent.get(dispatchAgent?.id) || []).length ? (
+                  <div className="managed-dispatch-schedules__list">
+                    {(schedulesByAgent.get(dispatchAgent?.id) || []).map(schedule => (
+                      <div key={schedule.id}>
+                        <div><strong>{schedule.name}</strong><span>{formatInterval(schedule.interval_seconds)}</span></div>
+                        <small>{schedule.enabled ? `下次 ${formatServerTime(schedule.next_run_at)}` : '已暂停'}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该设备暂无定时任务" />}
+              </section>
+
+              <Form.Item name="schedule_name" label="任务名称" rules={selectedTaskType === 'schedule' ? [{ required: true, whitespace: true, message: '请输入任务名称' }] : []}>
+                <Input maxLength={200} placeholder="例如：每小时同步库存" />
+              </Form.Item>
+              <Form.Item label="执行间隔" required>
+                <Space.Compact block>
+                  <Form.Item name="interval_value" noStyle>
+                    <InputNumber min={1} style={{ width: '70%' }} />
+                  </Form.Item>
+                  <Form.Item name="interval_unit" noStyle>
+                    <Select style={{ width: '30%' }} options={durationUnits} />
+                  </Form.Item>
+                </Space.Compact>
+              </Form.Item>
+              <Form.Item name="schedule_enabled" label="创建后立即启用" valuePropName="checked">
+                <Switch />
+              </Form.Item>
             </div>
-          ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该设备暂无定时任务" />}
-        </section>
+          </div>
 
-        <div className="managed-dispatch-divider"><span>发布临时任务</span></div>
-
-        <Form form={form} layout="vertical" onFinish={dispatch} requiredMark="optional" disabled={!dispatchAgent?.enabled || Boolean(dispatchAgent?.running_run_id)}>
+          <fieldset className="managed-task-fields" disabled={!dispatchAgent?.enabled || (selectedTaskType === 'manual' && Boolean(dispatchAgent?.running_run_id))}>
           <Form.Item name="script_id" label="脚本" rules={[{ required: true, message: '请选择脚本' }]}>
             <Select
               showSearch
@@ -519,6 +581,7 @@ export default function ManagedAgents({ embedded = false }) {
               </Form.Item>
             </Space.Compact>
           </Form.Item>
+          </fieldset>
         </Form>
       </Drawer>
     </div>

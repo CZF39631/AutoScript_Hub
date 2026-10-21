@@ -1,17 +1,6 @@
-import { useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
 import ManagedAgents from './ManagedAgents'
-import ManagedSchedules from './ManagedSchedules'
 
 export default function ManagedControl() {
-  const location = useLocation()
-
-  useEffect(() => {
-    if (location.hash === '#schedules') {
-      requestAnimationFrame(() => document.getElementById('managed-schedules')?.scrollIntoView({ behavior: 'smooth' }))
-    }
-  }, [location.hash])
-
   return (
     <div className="managed-control-page">
       <div className="page-heading managed-control-heading">
@@ -22,10 +11,6 @@ export default function ManagedControl() {
       </div>
 
       <ManagedAgents embedded />
-
-      <section id="managed-schedules" className="managed-control-schedules" aria-label="定时任务">
-        <ManagedSchedules embedded />
-      </section>
     </div>
   )
 }

@@ -135,7 +135,7 @@ function AppLayout() {
             <Route path="/runs" element={<Runs />} />
             <Route path="/runs/:id" element={<RunDetail />} />
             <Route path="/managed-agents" element={<AdminRoute><ManagedControl /></AdminRoute>} />
-            <Route path="/managed-schedules" element={<Navigate to="/managed-agents#schedules" replace />} />
+            <Route path="/managed-schedules" element={<Navigate to="/managed-agents" replace />} />
             <Route path="/users" element={<Users />} />
             <Route path="/audit" element={<AuditLog />} />
             <Route path="/issues" element={<Issues />} />
