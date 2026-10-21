@@ -23,7 +23,7 @@ function parameterDefaults(params) {
   }, {})
 }
 
-export default function ManagedSchedules() {
+export default function ManagedSchedules({ embedded = false }) {
   const [schedules, setSchedules] = useState([])
   const [agents, setAgents] = useState([])
   const [scripts, setScripts] = useState([])
@@ -229,14 +229,14 @@ export default function ManagedSchedules() {
 
   return (
     <div className="managed-admin-page">
-      <div className="page-heading">
+      <div className={embedded ? 'managed-section-heading' : 'page-heading'}>
         <div>
-          <h2>托管计划</h2>
+          {embedded ? <h3>定时任务</h3> : <h2>托管计划</h2>}
           <p>按固定分钟、小时或天间隔，向指定被控设备自动下发任务</p>
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建计划</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建定时任务</Button>
         </Space>
       </div>
 

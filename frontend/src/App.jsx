@@ -3,8 +3,7 @@ import { Layout, Menu, Button } from 'antd'
 import {
   DashboardOutlined, CodeOutlined, HistoryOutlined,
   UserOutlined, LogoutOutlined, AuditOutlined, BugOutlined, GlobalOutlined,
-  SettingOutlined, NotificationOutlined, DesktopOutlined, CalendarOutlined,
-  WarningOutlined,
+  SettingOutlined, NotificationOutlined, DesktopOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
@@ -22,8 +21,7 @@ import Issues from './pages/Issues'
 import Environments from './pages/Environments'
 import Settings from './pages/Settings'
 import Updates from './pages/Updates'
-import ManagedAgents from './pages/ManagedAgents'
-import ManagedSchedules from './pages/ManagedSchedules'
+import ManagedControl from './pages/ManagedControl'
 import ManagedClientPanel from './pages/ManagedClientPanel'
 import ImportantUpdateNotice from './components/ImportantUpdateNotice'
 import { isManagedClientMode } from './utils/managed'
@@ -74,8 +72,7 @@ function AppLayout() {
   ]
 
   const adminItems = [
-    { key: '/managed-agents', icon: <DesktopOutlined />, label: '被控设备' },
-    { key: '/managed-schedules', icon: <CalendarOutlined />, label: '托管计划' },
+    { key: '/managed-agents', icon: <DesktopOutlined />, label: '设备托管' },
     { key: '/users', icon: <UserOutlined />, label: '用户管理' },
     { key: '/audit', icon: <AuditOutlined />, label: '操作审计' },
   ]
@@ -87,7 +84,7 @@ function AppLayout() {
   const selectedKey = loc.pathname === '/dashboard' ? '/dashboard'
     : loc.pathname.startsWith('/runs') ? '/runs'
     : loc.pathname.startsWith('/managed-agents') ? '/managed-agents'
-    : loc.pathname.startsWith('/managed-schedules') ? '/managed-schedules'
+    : loc.pathname.startsWith('/managed-schedules') ? '/managed-agents'
     : loc.pathname.startsWith('/users') ? '/users'
     : loc.pathname.startsWith('/audit') ? '/audit'
     : loc.pathname.startsWith('/issues') ? '/issues'
@@ -137,8 +134,8 @@ function AppLayout() {
             <Route path="/scripts/:id" element={<ScriptDetail />} />
             <Route path="/runs" element={<Runs />} />
             <Route path="/runs/:id" element={<RunDetail />} />
-            <Route path="/managed-agents" element={<AdminRoute><ManagedAgents /></AdminRoute>} />
-            <Route path="/managed-schedules" element={<AdminRoute><ManagedSchedules /></AdminRoute>} />
+            <Route path="/managed-agents" element={<AdminRoute><ManagedControl /></AdminRoute>} />
+            <Route path="/managed-schedules" element={<Navigate to="/managed-agents?tab=schedules" replace />} />
             <Route path="/users" element={<Users />} />
             <Route path="/audit" element={<AuditLog />} />
             <Route path="/issues" element={<Issues />} />

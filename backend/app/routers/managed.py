@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/admin", tags=["managed-agents"])
 class ManagedAgentItem(AgentItem):
     thumbnail_updated_at: Optional[datetime] = None
     thumbnail_size: Optional[int] = None
+    running_run_id: Optional[int] = None
 
 
 class ManagedRunCreate(BaseModel):
@@ -201,7 +202,25 @@ def list_managed_agents(
     query = db.query(Agent).filter(Agent.mode == "managed", Agent.is_deleted == False)
     if enabled is not None:
         query = query.filter(Agent.enabled == enabled)
-    return query.order_by(Agent.enabled.desc(), Agent.last_heartbeat.desc()).all()
+    agents = query.order_by(Agent.enabled.desc(), Agent.last_heartbeat.desc()).all()
+    agent_ids = [agent.id for agent in agents]
+    running_by_agent = {}
+    if agent_ids:
+        running = db.query(Run).filter(
+            Run.status == "running",
+            Run.is_deleted == False,
+            or_(Run.target_agent_id.in_(agent_ids), Run.agent_id.in_(agent_ids)),
+        ).order_by(Run.created_at.asc()).all()
+        for run in running:
+            device_id = run.agent_id or run.target_agent_id
+            if device_id in agent_ids and device_id not in running_by_agent:
+                running_by_agent[device_id] = run.id
+    return [
+        ManagedAgentItem.model_validate(agent).model_copy(
+            update={"running_run_id": running_by_agent.get(agent.id)}
+        )
+        for agent in agents
+    ]
 
 
 @router.get("/managed-agents/{agent_id}/thumbnail")
@@ -320,6 +339,16 @@ def dispatch_managed_run(
     ).first()
     if not owner:
         raise HTTPException(status_code=409, detail="Agent 所属用户不可用")
+    running = db.query(Run).filter(
+        Run.status == "running",
+        Run.is_deleted == False,
+        or_(Run.target_agent_id == agent.id, Run.agent_id == agent.id),
+    ).first()
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail="设备正在执行任务 #{}，暂时不能下发临时任务".format(running.id),
+        )
     now = datetime.now(timezone.utc)
     run = create_validated_run(
         db,

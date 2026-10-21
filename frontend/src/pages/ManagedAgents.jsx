@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Drawer, Empty, Form, Input, InputNumber, Pagination, Select, Skeleton, Space,
-  Switch, Tag, message,
+  Alert, Button, Drawer, Empty, Form, Input, InputNumber, Pagination, Popconfirm, Select,
+  Skeleton, Space, Switch, Tag, Tooltip, message,
 } from 'antd'
 import {
-  DesktopOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined, SearchOutlined,
-  SendOutlined, WarningOutlined,
+  DeleteOutlined, DesktopOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined,
+  SearchOutlined, SendOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import api from '../api/client'
 import ManagedParamFields from '../components/ManagedParamFields'
@@ -100,7 +100,7 @@ function ThumbnailScreen({ agent }) {
   )
 }
 
-function AgentCard({ agent, updating, onToggle, onDispatch }) {
+function AgentCard({ agent, updating, deleting, onToggle, onDispatch, onDelete }) {
   const status = statusPresentation(agent.status, agent.enabled)
   const updatedAt = thumbnailTimestamp(agent)
 
@@ -135,26 +135,43 @@ function AgentCard({ agent, updating, onToggle, onDispatch }) {
             aria-label={`${agent.machine_name}启用状态`}
           />
         </div>
-        <Button
-          type="primary"
-          icon={<SendOutlined />}
-          disabled={!agent.enabled}
-          onClick={() => onDispatch(agent)}
-        >
-          下发任务
-        </Button>
+        <div className="managed-agent-card__primary-actions">
+          <Tooltip title={agent.running_run_id ? `正在执行任务 #${agent.running_run_id}，完成后才能下发` : ''}>
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              disabled={!agent.enabled || Boolean(agent.running_run_id)}
+              onClick={() => onDispatch(agent)}
+            >
+              {agent.running_run_id ? '任务执行中' : '临时任务'}
+            </Button>
+          </Tooltip>
+          <Popconfirm
+            title={`删除设备“${agent.machine_name}”？`}
+            description={agent.status === 'online' ? '设备当前在线，删除后再次连接会重新注册。' : '设备记录和最新缩略图将被删除，历史任务仍保留。'}
+            okText="删除设备"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => onDelete(agent)}
+          >
+            <Tooltip title="删除设备">
+              <Button danger type="text" icon={<DeleteOutlined />} loading={deleting} aria-label={`删除设备${agent.machine_name}`} />
+            </Tooltip>
+          </Popconfirm>
+        </div>
       </div>
     </article>
   )
 }
 
-export default function ManagedAgents() {
+export default function ManagedAgents({ embedded = false }) {
   const [agents, setAgents] = useState([])
   const [scripts, setScripts] = useState([])
   const [environments, setEnvironments] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [updating, setUpdating] = useState({})
+  const [deleting, setDeleting] = useState({})
   const [dispatchAgent, setDispatchAgent] = useState(null)
   const [scriptDetails, setScriptDetails] = useState({})
   const [scriptLoading, setScriptLoading] = useState(false)
@@ -239,6 +256,10 @@ export default function ManagedAgents() {
   }, [filteredAgents.length, page])
 
   const openDispatch = async agent => {
+    if (agent.running_run_id) {
+      message.warning(`设备正在执行任务 #${agent.running_run_id}，完成后才能下发临时任务`)
+      return
+    }
     setDispatchAgent(agent)
     setScripts([])
     setEnvironments([])
@@ -269,6 +290,20 @@ export default function ManagedAgents() {
     }
   }
 
+  const deleteAgent = async agent => {
+    setDeleting(current => ({ ...current, [agent.id]: true }))
+    try {
+      await api.delete(`/api/agents/${agent.id}`)
+      setAgents(current => current.filter(item => item.id !== agent.id))
+      if (dispatchAgent?.id === agent.id) setDispatchAgent(null)
+      message.success(`设备“${agent.machine_name}”已删除`)
+    } catch (error) {
+      message.error(apiErrorMessage(error, '设备删除失败'))
+    } finally {
+      setDeleting(current => ({ ...current, [agent.id]: false }))
+    }
+  }
+
   const dispatch = async values => {
     const expires = intervalToSeconds(values.expires_value, values.expires_unit)
     if (!expires || expires < 60 || expires > 604800) {
@@ -294,10 +329,10 @@ export default function ManagedAgents() {
 
   return (
     <div className="managed-admin-page">
-      <div className="page-heading">
+      <div className={embedded ? 'managed-section-heading' : 'page-heading'}>
         <div>
-          <h2>被控设备</h2>
-          <p>查看设备最近上传的静态缩略图与连接状态，并定向下发一次性任务</p>
+          {embedded ? <h3>设备与临时任务</h3> : <h2>被控设备</h2>}
+          <p>查看设备画面与运行状态，向空闲设备下发一次性临时任务</p>
         </div>
         <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>刷新</Button>
       </div>
@@ -353,8 +388,10 @@ export default function ManagedAgents() {
                 key={agent.id}
                 agent={agent}
                 updating={Boolean(updating[agent.id])}
+                deleting={Boolean(deleting[agent.id])}
                 onToggle={toggleAgent}
                 onDispatch={openDispatch}
+                onDelete={deleteAgent}
               />
             ))}
           </div>

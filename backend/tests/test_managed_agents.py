@@ -161,6 +161,40 @@ def test_managed_run_is_visible_and_claimable_only_by_target_device(
     assert right_claim.json()["claimed_at"] is not None
 
 
+def test_manual_dispatch_is_blocked_while_device_is_running(
+    client, admin_token, dev_token
+):
+    script_id = _upload(client, admin_token)
+    agent = _register_managed(client, dev_token, "busy-manual-target", "busy-target")
+    first = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/first.txt"}},
+        headers=_headers(admin_token),
+    )
+    assert first.status_code == 200
+    claimed = client.post(
+        "/api/runs/{}/claim".format(first.json()["id"]),
+        json={"agent_id": agent["id"]},
+        headers=_headers(dev_token, agent["agent_token"]),
+    )
+    assert claimed.status_code == 200
+
+    listed = client.get(
+        "/api/admin/managed-agents",
+        headers=_headers(admin_token),
+    )
+    busy_agent = next(item for item in listed.json() if item["id"] == agent["id"])
+    blocked = client.post(
+        "/api/admin/managed-agents/{}/runs".format(agent["id"]),
+        json={"script_id": script_id, "params": {"url_file": "C:/second.txt"}},
+        headers=_headers(admin_token),
+    )
+
+    assert busy_agent["running_run_id"] == first.json()["id"]
+    assert blocked.status_code == 409
+    assert "正在执行任务" in blocked.json()["detail"]
+
+
 def test_schedule_crud_toggle_and_run_now(client, admin_token, dev_token):
     script_id = _upload(client, admin_token)
     agent = _register_managed(client, dev_token, "schedule-agent", "schedule-agent")
