@@ -77,25 +77,37 @@ function AppLayout() {
     if (!isMobile) setMobileMenuOpen(false)
   }, [isMobile])
 
-  const baseMenuItems = [
+  const primaryMenuItems = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
     { key: '/scripts', icon: <CodeOutlined />, label: '脚本管理' },
     { key: '/runs', icon: <HistoryOutlined />, label: '执行历史' },
+  ]
+
+  const operationMenuItems = [
     { key: '/issues', icon: <BugOutlined />, label: '问题工单' },
     { key: '/environments', icon: <GlobalOutlined />, label: '环境管理' },
-    { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
-    { key: '/updates', icon: <NotificationOutlined />, label: '更新说明' },
   ]
 
   const adminItems = [
-    { key: '/managed-agents', icon: <DesktopOutlined />, label: '设备托管' },
     { key: '/users', icon: <UserOutlined />, label: '用户管理' },
     { key: '/audit', icon: <AuditOutlined />, label: '操作审计' },
   ]
 
+  const utilityMenuItems = [
+    { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
+    { key: '/updates', icon: <NotificationOutlined />, label: '更新说明' },
+  ]
+
   const menuItems = user?.role === 'admin'
-    ? [...baseMenuItems, ...adminItems]
-    : baseMenuItems
+    ? [
+        primaryMenuItems[0],
+        { key: '/managed-agents', icon: <DesktopOutlined />, label: '设备托管' },
+        ...primaryMenuItems.slice(1),
+        ...operationMenuItems,
+        ...adminItems,
+        ...utilityMenuItems,
+      ]
+    : [...primaryMenuItems, ...operationMenuItems, ...utilityMenuItems]
 
   const selectedKey = loc.pathname === '/dashboard' ? '/dashboard'
     : loc.pathname.startsWith('/runs') ? '/runs'
