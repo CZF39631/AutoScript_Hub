@@ -26,7 +26,7 @@ def test_pyinstaller_builds_three_executables_in_one_collection():
     requirements = _read("client/requirements.txt")
     assert "plyer==2.1.0" in requirements
     assert "mss==10.2.0" in requirements
-    assert "Pillow==12.2.0" in requirements
+    assert "Pillow==13.0.0" in requirements
 
 
 def test_updater_is_self_contained_before_it_is_copied_outside_install_tree():
