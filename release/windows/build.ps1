@@ -95,21 +95,15 @@ try {
     if ($ActualChineseLanguageHash -ne $ChineseLanguageHash) {
         throw "ChineseSimplified.isl hash mismatch: $ActualChineseLanguageHash"
     }
-    $Installers = @()
-    foreach ($Edition in @('standard', 'managed')) {
-        & $ISCC "/DMyAppVersion=$Version" "/DMyEdition=$Edition" (Join-Path $PSScriptRoot 'installer.iss')
-        if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $Edition edition" }
-        $BaseName = if ($Edition -eq 'managed') { 'AutoScript-Hub-Managed-Preview' } else { 'AutoScript-Hub-Manager-Preview' }
-        $Installers += Join-Path $OutputRoot "$BaseName-$Version.exe"
-    }
+    & $ISCC "/DMyAppVersion=$Version" "/DMyEdition=release" (Join-Path $PSScriptRoot 'installer.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'ISCC failed for release edition' }
 
+    $Installer = Join-Path $OutputRoot "AutoScript-Hub-Setup-$Version.exe"
     $Limit = 95MB
-    foreach ($Installer in $Installers) {
-        if ((Get-Item -LiteralPath $Installer).Length -ge $Limit) {
-            throw "Installer exceeds the 95MB Gitee release gate: $Installer"
-        }
-        Write-Output $Installer
+    if ((Get-Item -LiteralPath $Installer).Length -ge $Limit) {
+        throw "Installer exceeds the 95MB release gate: $Installer"
     }
+    Write-Output $Installer
 } finally {
     Pop-Location
 }
