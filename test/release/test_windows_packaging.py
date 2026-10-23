@@ -90,6 +90,9 @@ def test_inno_installs_per_user_private_runtime_and_preserves_data():
     assert "{localappdata}\\Programs\\{#MyInstallName}" in installer
     assert "AutoScript Hub Manager Preview" in installer
     assert "AutoScript Hub Managed Preview" in installer
+    assert 'MyEdition "release"' in installer
+    assert "AutoScript-Hub-Setup" in installer
+    assert "A77DCEAD-026B-4E4E-9796-821C117A61B8" in installer
     assert "windows-runtime\\python\\*" in installer
     assert "python-3.11.9-amd64.exe" not in installer
     assert "Exec(PrivatePython" in installer
@@ -121,6 +124,8 @@ def test_build_enforces_tests_and_95mb_gitee_gate():
     assert "ChineseSimplified.isl" in build
     assert "raw.githubusercontent.com/kira-96/Inno-Setup-Chinese-Simplified-Translation" in build
     assert "LOCALAPPDATA" in build
+    assert '"/DMyEdition=release"' in build
+    assert 'AutoScript-Hub-Setup-$Version.exe' in build
 
 
 def test_ui_entry_starts_independent_agent_and_writes_startup_marker():

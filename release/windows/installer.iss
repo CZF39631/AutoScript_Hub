@@ -2,7 +2,7 @@
   #define MyAppVersion "1.0.0"
 #endif
 #ifndef MyEdition
-  #define MyEdition "standard"
+  #define MyEdition "release"
 #endif
 #if MyEdition == "managed"
   #define MyAppName "AutoScript Hub 被控端预览版"
@@ -11,21 +11,28 @@
   #define MyDataMarker "client-data-managed.txt"
   #define MyDataName "AutoScriptHubManagedPreview"
   #define MyInstallName "AutoScript Hub Managed Preview"
-#else
+#elif MyEdition == "standard"
   #define MyAppName "AutoScript Hub 管理端预览版"
   #define MyOutputName "AutoScript-Hub-Manager-Preview"
   #define MyModeFile "client-mode-standard.txt"
   #define MyDataMarker "client-data-manager.txt"
   #define MyDataName "AutoScriptHubManagerPreview"
   #define MyInstallName "AutoScript Hub Manager Preview"
+#else
+  #define MyAppName "AutoScript Hub"
+  #define MyOutputName "AutoScript-Hub-Setup"
+  #define MyDataName "AutoScriptHub"
+  #define MyInstallName "AutoScript Hub"
 #endif
 #define MyAppPublisher "AutoScript Hub"
 
 [Setup]
 #if MyEdition == "managed"
 AppId={{1D6477AF-8AA7-4B56-8E76-728AFEF18AA9}
-#else
+#elif MyEdition == "standard"
 AppId={{9A498C94-809A-4947-A8BE-EEC5D33EC0C7}
+#else
+AppId={{A77DCEAD-026B-4E4E-9796-821C117A61B8}
 #endif
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
@@ -67,8 +74,10 @@ Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\release-output\windows\AutoScriptHub\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\release-output\windows-runtime\python\*"; DestDir: "{app}\runtime\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "cache\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+#if MyEdition != "release"
 Source: "{#MyModeFile}"; DestDir: "{app}"; DestName: "client-mode.txt"; Flags: ignoreversion
 Source: "{#MyDataMarker}"; DestDir: "{app}"; DestName: "client-data-dir-name.txt"; Flags: ignoreversion
+#endif
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\AutoScriptHub.exe"
