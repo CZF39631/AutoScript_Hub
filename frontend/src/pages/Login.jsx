@@ -69,7 +69,7 @@ export default function Login() {
 
   return (
     <div className="login-page">
-      <Card className="login-card" bordered={false}>
+      <Card className="login-card" variant="borderless">
         <div className="login-brand">
           <img className="login-brand__icon" src="/app-icon.png" alt="AutoScript Hub" />
           <h1>AutoScript Hub</h1>
@@ -80,7 +80,7 @@ export default function Login() {
             <Alert
               type="error"
               showIcon
-              message={error}
+              title={error}
               style={{ marginBottom: 16 }}
               role="alert"
             />

@@ -1,5 +1,7 @@
 import importlib
 import json
+import uuid
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -14,6 +16,42 @@ def test_default_update_source_prefers_public_gitee_mirror(monkeypatch, tmp_path
     assert config["github_update_repository"] == "CZF39631/AutoScript_Hub"
     assert config["update_channel"] == "stable"
     assert config["pip_index_url"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+
+def test_legacy_config_gets_standard_mode_and_stable_device_uid(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
+    from client.ui import config_manager
+    config_manager = importlib.reload(config_manager)
+    path = Path(config_manager.CONFIG_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"server_url": "https://example.test"}), encoding="utf-8")
+
+    first = config_manager.load_config()
+    second = config_manager.load_config()
+    config_manager.save_config({"output_dir": r"D:\results"})
+    third = config_manager.load_config()
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+
+    assert first["client_mode"] == "standard"
+    assert second["device_uid"] == first["device_uid"]
+    assert third["device_uid"] == first["device_uid"]
+    assert persisted["device_uid"] == first["device_uid"]
+    assert persisted["client_mode"] == "standard"
+    assert str(uuid.UUID(first["device_uid"])) == first["device_uid"]
+    assert not Path(str(path) + ".tmp").exists()
+
+
+def test_installer_edition_overrides_saved_client_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
+    from client.ui import config_manager
+    config_manager = importlib.reload(config_manager)
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "client-mode.txt").write_text("managed\n", encoding="utf-8")
+    monkeypatch.setattr(config_manager, "_PATHS", replace(config_manager._PATHS, install_dir=install_dir))
+    config_manager.save_config({"client_mode": "standard"})
+
+    assert config_manager.load_config()["client_mode"] == "managed"
 
 
 def test_blank_saved_pip_source_uses_the_default_mirror(monkeypatch, tmp_path):
@@ -35,6 +73,24 @@ def test_config_manager_uses_mutable_client_data_root(monkeypatch, tmp_path):
     assert Path(config_manager.CONFIG_PATH) == tmp_path / "data" / "config" / "client.json"
     assert config_manager.load_config()["server_url"] == "http://192.168.1.10:8000"
     assert not Path(str(config_manager.CONFIG_PATH) + ".tmp").exists()
+
+
+def test_new_managed_config_defaults_capture_to_paused_but_legacy_managed_is_preserved(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AUTOSCRIPT_CLIENT_DATA_DIR", str(tmp_path / "data"))
+    from client.ui import config_manager
+    config_manager = importlib.reload(config_manager)
+    path = Path(config_manager.CONFIG_PATH)
+
+    config_manager.save_config({"client_mode": "managed"})
+    assert config_manager.load_config()["thumbnail_capture_paused"] is True
+
+    path.write_text(json.dumps({
+        "client_mode": "managed",
+        "server_url": "https://legacy.example.test",
+    }), encoding="utf-8")
+    assert config_manager.load_config()["thumbnail_capture_paused"] is False
 
 
 def test_saved_config_cannot_override_the_embedded_client_version(monkeypatch, tmp_path):

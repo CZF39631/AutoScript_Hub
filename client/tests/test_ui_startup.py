@@ -1,4 +1,5 @@
 import errno
+import io
 
 from client.ui import main as ui
 
@@ -26,8 +27,28 @@ def test_local_server_uses_next_port_when_default_is_unavailable(monkeypatch):
     monkeypatch.setattr(ui.threading, "Thread", FakeThread)
     monkeypatch.setattr(ui, "get_or_create_agent_token", lambda: "token")
 
-    assert ui.start_local_server("http://lan:8000") == 18082
+    assert ui.start_local_server("http://lan:8000", "managed") == 18082
     assert attempts == [18081, 18082]
+    assert ui.LocalUIHandler.client_mode == "managed"
+
+
+def test_index_injects_client_mode_for_the_frontend(monkeypatch, tmp_path):
+    (tmp_path / "index.html").write_text("<html><head></head><body></body></html>", encoding="utf-8")
+    monkeypatch.setattr(ui, "STATIC_DIR", str(tmp_path))
+    handler = object.__new__(ui.LocalUIHandler)
+    handler.path = "/"
+    handler.backend_url = "http://lan:8000"
+    handler.agent_api_token = "token"
+    handler.client_mode = "managed"
+    handler.wfile = io.BytesIO()
+    handler.send_response = lambda *_: None
+    handler.send_header = lambda *_: None
+    handler.end_headers = lambda: None
+
+    handler._serve_static()
+
+    body = handler.wfile.getvalue().decode("utf-8")
+    assert 'window._CLIENT_MODE="managed"' in body
 
 
 def test_first_run_finishes_wizard_before_starting_the_main_webview(monkeypatch):
@@ -58,9 +79,15 @@ def test_configured_client_starts_one_main_webview(monkeypatch):
 
     window = Window()
     monkeypatch.setattr(ui, "is_setup_complete", lambda: True)
-    monkeypatch.setattr(ui, "load_config", lambda: {"server_url": "http://lan:8000"})
     monkeypatch.setattr(
-        ui, "start_local_server", lambda url: events.append(("server", url)) or 18082
+        ui,
+        "load_config",
+        lambda: {"server_url": "http://lan:8000", "client_mode": "managed"},
+    )
+    monkeypatch.setattr(
+        ui,
+        "start_local_server",
+        lambda url, mode: events.append(("server", url, mode)) or 18082,
     )
     monkeypatch.setattr(
         ui.webview,
@@ -80,7 +107,7 @@ def test_configured_client_starts_one_main_webview(monkeypatch):
         on_closed=lambda: events.append("closed"),
     ) is True
     assert events == [
-        ("server", "http://lan:8000"),
+        ("server", "http://lan:8000", "managed"),
         ("window", "http://127.0.0.1:18082/"),
         "main-webview",
         "loaded",

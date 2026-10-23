@@ -216,7 +216,7 @@ export default function ScriptDetail() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div className="page-title-row">
         <h2 style={{ margin: 0 }}>{script.name}</h2>
         {canUpload && (
           <Button icon={<PlusOutlined />} onClick={() => setVerModalOpen(true)}>上传新版本</Button>

@@ -29,6 +29,7 @@ def isolated_agent(monkeypatch, tmp_path):
         monkeypatch.setattr(agent, name, value)
     monkeypatch.setattr(agent, "_check_running_process", lambda: None)
     monkeypatch.setattr(agent, "_headers", lambda: {})
+    monkeypatch.setattr(agent, "_notify_execution_start", lambda *a, **kw: None)
     monkeypatch.setattr(agent, "_notify_execution_result", lambda *a, **kw: None)
     # Any unexpected request fails instead of touching a real server.
     for method in ("get", "post", "patch"):
@@ -45,8 +46,8 @@ def test_online_run_uses_locked_version_not_new_market_version(monkeypatch, tmp_
 
     def get(url, **kwargs):
         seen.append(url)
-        if "status=pending" in url:
-            return response([run])
+        if url.endswith("/api/agents/3/next"):
+            return response(run)
         if url.endswith("/api/scripts/1"):
             return response({"name": "demo", "latest_version": 2})
         assert url.endswith("/api/scripts/1/download?version=1")
@@ -65,7 +66,7 @@ def test_online_run_uses_locked_version_not_new_market_version(monkeypatch, tmp_
 
 def test_missing_locked_version_fails_closed(monkeypatch):
     run = {"id": 7, "script_id": 1, "params": "{}"}
-    monkeypatch.setattr(agent.requests, "get", Mock(side_effect=[response([run]), response({"latest_version": 2})]))
+    monkeypatch.setattr(agent.requests, "get", Mock(side_effect=[response(run), response({"latest_version": 2})]))
     monkeypatch.setattr(agent.requests, "post", lambda *a, **kw: response(run))
     failed = Mock()
     monkeypatch.setattr(agent, "_report_run_failure", failed)
@@ -91,9 +92,9 @@ def test_local_request_during_online_preparation_cannot_start(monkeypatch):
     attempted = []
 
     def get(url, **kwargs):
-        if "status=pending" in url:
+        if url.endswith("/api/agents/3/next"):
             attempted.append(agent.start_local_run({"script_id": 1}))
-            return response([])
+            return response(None, status=204)
         raise AssertionError(url)
 
     monkeypatch.setattr(agent.requests, "get", get)

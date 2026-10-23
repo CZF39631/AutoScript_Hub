@@ -181,9 +181,9 @@ export default function Settings() {
         extra={<Link to="/updates"><NotificationOutlined /> 查看更新说明</Link>}
         style={{ maxWidth: 600, marginTop: 16 }}
       >
-        {!agentOnline && <Alert type="info" showIcon message="此功能仅在 Windows 客户端中可用" />}
+        {!agentOnline && <Alert type="info" showIcon title="此功能仅在 Windows 客户端中可用" />}
         {agentOnline && (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <Space orientation="vertical" style={{ width: '100%' }}>
             <div>
               状态：<Tag>{updateState.state || 'idle'}</Tag>
               <Tag color={updateStateColor[updateState.state] || (updateState.error ? 'orange' : 'green')}>
@@ -194,7 +194,7 @@ export default function Settings() {
               <span>已安装版本：{updateState.current_version || '-'}</span>
               <span>最新版本：{updateState.version || '未检查'}</span>
             </Space>
-            {updateState.error && <Alert type="warning" showIcon message={updateState.error} />}
+            {updateState.error && <Alert type="warning" showIcon title={updateState.error} />}
             <Space>
               <Button icon={<ReloadOutlined />} loading={updateBusy} onClick={() => runUpdateAction('check')}>
                 检查更新

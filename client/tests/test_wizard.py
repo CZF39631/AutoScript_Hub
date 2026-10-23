@@ -5,7 +5,8 @@ from client.ui.wizard import WIZARD_HTML, WizardApi
 def test_wizard_is_localized_in_chinese():
     required = [
         "初始化设置", "服务端地址", "用户名", "密码", "脚本下载目录",
-        "结果输出目录", "默认浏览器", "代理地址（可选）", "完成设置",
+        "结果输出目录", "默认浏览器", "代理地址（可选）", "客户端模式",
+        "标准模式（允许本地手工执行）", "被控模式（仅执行管理员下发任务）", "完成设置",
     ]
     for text in required:
         assert text in WIZARD_HTML
@@ -27,7 +28,30 @@ def test_wizard_displays_login_and_save_errors_and_requires_verification():
     assert "if (loginVerified || await testLogin())" in WIZARD_HTML
     assert "if (!loginVerified)" in WIZARD_HTML
     assert "window.pywebview.api.testLogin" in WIZARD_HTML
+    assert "client_mode: document.getElementById('client_mode').value" in WIZARD_HTML
     assert "fetch(url + '/api/auth/login'" not in WIZARD_HTML
+    for disclosure in (
+        "每 60 秒", "上传到中心服务端", "管理员可以", "只保留最新一张",
+        "本机面板暂停采集", "明确同意", "thumbnail_capture_paused",
+    ):
+        assert disclosure in WIZARD_HTML
+    assert "managed_capture_consent" in WIZARD_HTML
+    assert "未同意时默认暂停且不会采集" in WIZARD_HTML
+
+
+def test_wizard_native_bridge_rejects_managed_mode_without_explicit_consent():
+    config = {
+        "client_mode": "managed",
+        "managed_capture_consent": False,
+        "thumbnail_capture_paused": False,
+    }
+
+    try:
+        WizardApi().saveAndFinish(__import__("json").dumps(config))
+    except ValueError as exc:
+        assert "必须显式同意" in str(exc)
+    else:
+        raise AssertionError("未同意的被控模式配置不应保存")
 
 
 def test_wizard_login_uses_native_bridge_to_avoid_browser_cors(monkeypatch):

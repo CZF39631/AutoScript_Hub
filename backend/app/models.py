@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint, Table, Index, CheckConstraint
 from sqlalchemy.orm import relationship, declarative_base  # type: ignore[attr-defined]
@@ -26,6 +27,16 @@ script_groups = Table(
     Column("group_id", Integer, ForeignKey("groups.id"), primary_key=True),
     Column("created_at", DateTime, nullable=False, default=_utcnow),
     Index("ix_script_groups_group_id", "group_id"),
+)
+
+managed_agent_group_members = Table(
+    "managed_agent_group_members",
+    Base.metadata,
+    Column("agent_id", Integer, ForeignKey("agents.id"), primary_key=True),
+    Column("group_id", Integer, ForeignKey("managed_agent_groups.id"), primary_key=True),
+    Column("created_at", DateTime, nullable=False, default=_utcnow),
+    Column("created_by", Integer, ForeignKey("users.id"), nullable=True),
+    Index("ix_managed_agent_group_members_group_id", "group_id"),
 )
 
 
@@ -88,17 +99,107 @@ class Agent(Base):
     Coexists with Environment: Agent = "which machine", Environment = "how to run on it".
     """
     __tablename__ = "agents"
+    __table_args__ = (
+        UniqueConstraint("device_uid", name="uq_agents_device_uid"),
+        CheckConstraint("mode IN ('standard', 'managed')", name="ck_agents_mode"),
+        Index(
+            "ix_agents_managed_list",
+            "mode", "is_deleted", "enabled", "status", "last_heartbeat",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
+    device_uid = Column(String(255), nullable=False, default=lambda: str(uuid.uuid4()))
     machine_name = Column(String(200), nullable=False)
     machine_ip = Column(String(50), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    mode = Column(String(20), nullable=False, default="standard")
+    enabled = Column(Boolean, nullable=False, default=True)
     status = Column(String(20), nullable=False, default="offline")  # online / offline
     agent_version = Column(String(20), nullable=True)
     last_heartbeat = Column(DateTime, nullable=True)
+    agent_token_issued_at = Column(DateTime, nullable=True)
+    thumbnail_updated_at = Column(DateTime, nullable=True)
+    thumbnail_size = Column(Integer, nullable=True)
+    thumbnail_capture_paused = Column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     is_deleted = Column(Boolean, nullable=False, default=False)
+
+    managed_groups = relationship(
+        "ManagedAgentGroup", secondary=managed_agent_group_members,
+        back_populates="agents",
+    )  # type: ignore[call-arg]
+
+
+class ManagedAgentGroup(Base):
+    __tablename__ = "managed_agent_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    is_deleted = Column(Boolean, nullable=False, default=False)
+
+    agents = relationship(
+        "Agent", secondary=managed_agent_group_members,
+        back_populates="managed_groups",
+    )  # type: ignore[call-arg]
+
+
+class ManagedAgentBatch(Base):
+    __tablename__ = "managed_agent_batches"
+    __table_args__ = (
+        UniqueConstraint("created_by", "idempotency_key", name="uq_managed_agent_batch_actor_key"),
+        Index("ix_managed_agent_batches_actor_created", "created_by", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    idempotency_key = Column(String(128), nullable=False)
+    request_hash = Column(String(64), nullable=False)
+    operation = Column(String(40), nullable=False)
+    status = Column(String(20), nullable=False, default="processing")
+    selection_json = Column(Text, nullable=False)
+    request_json = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=True)
+    total_count = Column(Integer, nullable=False, default=0)
+    success_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    skipped_count = Column(Integer, nullable=False, default=0)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    lease_expires_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    items = relationship(
+        "ManagedAgentBatchItem", back_populates="batch", order_by="ManagedAgentBatchItem.id"
+    )  # type: ignore[call-arg]
+
+
+class ManagedAgentBatchItem(Base):
+    __tablename__ = "managed_agent_batch_items"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "agent_id", name="uq_managed_agent_batch_item"),
+        Index("ix_managed_agent_batch_items_batch_result", "batch_id", "result"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("managed_agent_batches.id"), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
+    result = Column(String(20), nullable=False)
+    reason = Column(Text, nullable=True)
+    run_id = Column(Integer, ForeignKey("runs.id"), nullable=True)
+    detail_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    batch = relationship("ManagedAgentBatch", back_populates="items")  # type: ignore[call-arg]
 
 
 class Script(Base):
@@ -150,6 +251,15 @@ class ScriptVersion(Base):
 
 class Run(Base):
     __tablename__ = "runs"
+    __table_args__ = (
+        CheckConstraint(
+            "dispatch_type IN ('standard', 'managed_manual', 'managed_schedule')",
+            name="ck_runs_dispatch_type",
+        ),
+        Index("ix_runs_target_pending", "target_agent_id", "status", "scheduled_for"),
+        Index("ix_runs_schedule_status", "schedule_id", "status"),
+        Index("ix_runs_retry_of_run_id", "retry_of_run_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     script_id = Column(Integer, ForeignKey("scripts.id"), nullable=False)
@@ -161,6 +271,14 @@ class Run(Base):
     result_files = Column(Text, nullable=True)
     environment_id = Column(Integer, ForeignKey("environments.id"), nullable=True)
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)  # §4.5: which machine executed
+    target_agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)
+    requested_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    dispatch_type = Column(String(30), nullable=False, default="standard")
+    schedule_id = Column(Integer, ForeignKey("managed_schedules.id"), nullable=True)
+    retry_of_run_id = Column(Integer, ForeignKey("runs.id"), nullable=True)
+    scheduled_for = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    claimed_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     duration_sec = Column(Integer, nullable=True)
@@ -171,6 +289,47 @@ class Run(Base):
 
     script = relationship("Script", back_populates="runs")  # type: ignore[call-arg]
     user = relationship("User", back_populates="runs", foreign_keys=[user_id])  # type: ignore[call-arg]
+
+
+class ManagedSchedule(Base):
+    """Admin-defined interval or cron dispatch plan for one managed Agent."""
+
+    __tablename__ = "managed_schedules"
+    __table_args__ = (
+        CheckConstraint("schedule_type IN ('interval', 'cron')", name="ck_managed_schedules_type"),
+        CheckConstraint(
+            "(schedule_type = 'interval' AND interval_seconds >= 60 AND cron_expression IS NULL) "
+            "OR (schedule_type = 'cron' AND interval_seconds IS NULL AND cron_expression IS NOT NULL)",
+            name="ck_managed_schedules_rule",
+        ),
+        CheckConstraint(
+            "expires_after_seconds >= 60",
+            name="ck_managed_schedules_expiry",
+        ),
+        Index("ix_managed_schedules_due", "enabled", "next_run_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
+    script_id = Column(Integer, ForeignKey("scripts.id"), nullable=False)
+    params = Column(Text, nullable=False, default="{}")
+    environment_id = Column(Integer, ForeignKey("environments.id"), nullable=True)
+    schedule_type = Column(String(20), nullable=False, default="interval")
+    interval_seconds = Column(Integer, nullable=True)
+    cron_expression = Column(String(100), nullable=True)
+    timezone = Column(String(100), nullable=False, default="UTC")
+    expires_after_seconds = Column(Integer, nullable=False, default=3600)
+    enabled = Column(Boolean, nullable=False, default=True)
+    next_run_at = Column(DateTime, nullable=False)
+    last_run_at = Column(DateTime, nullable=True)
+    last_missed_at = Column(DateTime, nullable=True)
+    last_missed_reason = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    is_deleted = Column(Boolean, nullable=False, default=False)
 
 
 class UserScript(Base):

@@ -128,6 +128,14 @@ class RunBrief(BaseModel):
     script_semantic_version: Optional[str] = None
     user_id: int
     agent_id: Optional[int] = None
+    target_agent_id: Optional[int] = None
+    requested_by: Optional[int] = None
+    dispatch_type: str = "standard"
+    schedule_id: Optional[int] = None
+    retry_of_run_id: Optional[int] = None
+    scheduled_for: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    claimed_at: Optional[datetime] = None
     status: str
     params: Optional[str] = None
     result_files: Optional[str] = None
@@ -137,6 +145,9 @@ class RunBrief(BaseModel):
     created_at: datetime
     username: Optional[str] = None
     script_name: Optional[str] = None
+    agent_name: Optional[str] = None
+    target_agent_name: Optional[str] = None
+    has_result_files: bool = False
 
 
 class RunDetail(RunBrief):

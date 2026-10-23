@@ -254,14 +254,14 @@ export default function Scripts() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="page-title-row">
         <h2 style={{ margin: 0 }}>脚本</h2>
         {canUpload && (
           <Button type="primary" icon={<PlusOutlined />} disabled={!groupsReady} onClick={() => { form.setFieldsValue({ group_ids: defaultGroupIds(groups) }); setUploadOpen(true) }}>上传脚本</Button>
         )}
       </div>
 
-      <Space style={{ marginBottom: 16 }}>
+      <Space className="filter-toolbar">
         <Input placeholder="搜索脚本名称" prefix={<SearchOutlined />}
           value={search} onChange={e => setSearch(e.target.value)} style={{ width: 240 }} allowClear />
         <Select placeholder="全部分类" value={category} onChange={setCategory}
@@ -300,7 +300,7 @@ export default function Scripts() {
         onCancel={() => { if (!deletionLock.current) setDeleteTarget(null) }}
         onOk={confirmDelete} okText="确认从市场删除" cancelText="取消"
         confirmLoading={deleting} closable={!deleting} keyboard={!deleting}
-        maskClosable={!deleting} cancelButtonProps={{ disabled: deleting }}
+        mask={{ closable: !deleting }} cancelButtonProps={{ disabled: deleting }}
         okButtonProps={{ danger: true, disabled: !canConfirmDeletion(confirmation) }}>
         <Alert type="warning" showIcon title="影响所有可访问该脚本的用户"
           description="这是从市场删除脚本，不是卸载本机。历史执行记录、工单和文件会保留；有待执行或运行中的任务时无法删除，不会自动取消任务。" />

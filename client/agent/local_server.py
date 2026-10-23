@@ -95,11 +95,14 @@ class AgentHandler(BaseHTTPRequestHandler):
     get_local_run_fn = None          # (local_run_id: str) -> dict | None
     get_local_run_log_fn = None      # (local_run_id: str) -> {"log": str}
     get_connection_status_fn = None  # () -> {"online": bool, "last_online_at": ..., "pending_sync": int}
+    get_client_info_fn = None         # () -> non-secret identity/current-run fields
+    get_client_mode_fn = None         # () -> standard | managed
     open_result_fn = None            # (path: str) -> {"success": bool, ...}
     get_update_status_fn = None       # () -> durable signed-update state
     check_update_fn = None            # () -> durable signed-update state
     install_update_fn = None          # () -> durable signed-update state
     get_runtime_info_fn = None        # () -> managed private-Python diagnostics
+    set_thumbnail_capture_paused_fn = None  # (paused: bool) -> persisted capture state
     request_shutdown_fn = None        # () -> request drain-then-exit
 
     def _update_status(self, callback, fallback):
@@ -135,10 +138,12 @@ class AgentHandler(BaseHTTPRequestHandler):
             callback = type(self).get_status_fn
             run_id = callback() if callback else None
             version_callback = type(self).get_version_fn
+            info_callback = type(self).get_client_info_fn
             self._json({
                 "running": run_id is not None,
                 "run_id": run_id,
                 "version": version_callback() if version_callback else None,
+                **(info_callback() if info_callback else {}),
             })
         elif self.path == "/detect-browsers":
             self._json(_detect_browsers())
@@ -185,7 +190,25 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
         if not self._authorized():
             return
-        if self.path == "/lifecycle/shutdown":
+        if self.path in (
+            "/local/thumbnail-capture/pause",
+            "/local/thumbnail-capture/resume",
+        ):
+            if not self._consume_body():
+                return
+            callback = type(self).set_thumbnail_capture_paused_fn
+            if not callback:
+                self._json({"error": "画面采集开关不可用"}, 503)
+                return
+            try:
+                paused = self.path.endswith("/pause")
+                self._json(callback(paused))
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 409)
+            except Exception:
+                logger.exception("更新本地画面采集状态失败")
+                self._json({"error": "画面采集状态保存失败"}, 500)
+        elif self.path == "/lifecycle/shutdown":
             if not self._consume_body():
                 return
             callback = type(self).request_shutdown_fn
@@ -197,6 +220,10 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif self.path == "/local/execute":
             data = self._read_json()
             if not data:
+                return
+            mode_callback = type(self).get_client_mode_fn
+            if mode_callback and mode_callback() == "managed":
+                self._json({"error": "被控模式禁止本地手工执行"}, 403)
                 return
             callback = type(self).start_local_run_fn
             if not callback:
@@ -307,11 +334,14 @@ def start_local_server(
     get_local_run_fn=None,
     get_local_run_log_fn=None,
     get_connection_status_fn=None,
+    get_client_info_fn=None,
+    get_client_mode_fn=None,
     open_result_fn=None,
     get_update_status_fn=None,
     check_update_fn=None,
     install_update_fn=None,
     get_runtime_info_fn=None,
+    set_thumbnail_capture_paused_fn=None,
     request_shutdown_fn=None,
 ):
     if not api_token:
@@ -325,11 +355,14 @@ def start_local_server(
     AgentHandler.get_local_run_fn = get_local_run_fn
     AgentHandler.get_local_run_log_fn = get_local_run_log_fn
     AgentHandler.get_connection_status_fn = get_connection_status_fn
+    AgentHandler.get_client_info_fn = get_client_info_fn
+    AgentHandler.get_client_mode_fn = get_client_mode_fn
     AgentHandler.open_result_fn = open_result_fn
     AgentHandler.get_update_status_fn = get_update_status_fn
     AgentHandler.check_update_fn = check_update_fn
     AgentHandler.install_update_fn = install_update_fn
     AgentHandler.get_runtime_info_fn = get_runtime_info_fn
+    AgentHandler.set_thumbnail_capture_paused_fn = set_thumbnail_capture_paused_fn
     AgentHandler.request_shutdown_fn = request_shutdown_fn
     # 更新检查和安装可能持续数分钟；并发处理可确保连接状态、进度等接口仍可响应。
     ports = (port,) if isinstance(port, int) else tuple(port)

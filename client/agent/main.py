@@ -16,8 +16,10 @@ import requests
 from client.agent.local_server import start_local_server
 from client.runtime.local_auth import get_or_create_agent_token
 from client.agent.script_parser import parse_script_config
+from client.agent.thumbnail import capture_thumbnail
 from shared.script_contract import extract_script_archive, validate_params
 from shared.version import get_version
+from client.runtime.client_identity import apply_installed_client_mode, ensure_client_identity
 from client.runtime.environment_manager import EnvironmentUnavailable, ensure_environment
 from client.runtime.paths import ClientPaths
 from client.runtime.python_runtime import PrivatePythonUnavailable, private_python, python_runtime_info
@@ -38,6 +40,8 @@ if os.path.isfile(_config_source):
             _client_config = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("加载客户端配置失败: %s", e)
+_client_config = apply_installed_client_mode(_client_config, _CLIENT_PATHS.install_dir)
+_client_config = ensure_client_identity(_client_config, _CLIENT_CONFIG_PATH)
 
 BACKEND_URL = os.environ.get(
     "BACKEND_URL",
@@ -58,6 +62,7 @@ _LOGS_DIR = os.environ.get(
 )
 
 _token = None
+_agent_token = _client_config.get("agent_token")
 _user_id = None
 _current_run_id = None
 
@@ -80,6 +85,12 @@ _restart_requested = False
 _shutdown_when_idle = False
 _last_settings_sync_time = 0
 _last_script_access_sync_time = 0
+_thumbnail_worker = None
+_thumbnail_worker_lock = threading.Lock()
+_thumbnail_state_lock = threading.Lock()
+_config_write_lock = threading.Lock()
+_last_thumbnail_attempt_at = None
+_last_thumbnail_success_at = None
 
 _CLIENT_SETTING_KEYS = {
     "server_url",
@@ -98,6 +109,8 @@ _CLIENT_SETTING_KEYS = {
 OFFLINE_NOTIFY_THRESHOLD_SEC = 30 * 60  # 30 min (design §5.9)
 UPDATE_CHECK_INTERVAL_SEC = 6 * 60 * 60
 SCRIPT_AUTHORIZATION_MAX_AGE_SEC = 7 * 24 * 60 * 60
+THUMBNAIL_INTERVAL_SEC = 60
+THUMBNAIL_UPLOAD_TIMEOUT_SEC = 10
 PENDING_REPORTS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_reports.json")
 PENDING_LOG_UPLOADS_FILE = str(_CLIENT_PATHS.runs_dir / "pending_log_uploads.json")
 SCRIPT_AUTHORIZATIONS_FILE = str(_CLIENT_PATHS.config_dir / "script_authorizations.json")
@@ -261,6 +274,57 @@ def _headers():
     return {"Authorization": "Bearer {}".format(_token)}
 
 
+def _agent_headers():
+    headers = _headers()
+    if _agent_token:
+        headers["X-Agent-Token"] = _agent_token
+    return headers
+
+
+def _persist_client_config_value(key, value):
+    """Merge and atomically persist one local setting without losing concurrent changes."""
+    global _client_config
+    with _config_write_lock:
+        local = dict(_client_config)
+        if os.path.isfile(_CLIENT_CONFIG_PATH):
+            try:
+                with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as stream:
+                    saved = json.load(stream)
+                if isinstance(saved, dict):
+                    local.update(saved)
+            except (OSError, json.JSONDecodeError):
+                pass
+        local[key] = value
+        temporary = _CLIENT_CONFIG_PATH + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(local, stream, indent=2, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, _CLIENT_CONFIG_PATH)
+        _client_config = local
+
+
+def _persist_agent_token(token):
+    """Persist the device credential atomically without ever logging it."""
+    global _agent_token
+    if not token or token == _agent_token:
+        return
+    _persist_client_config_value("agent_token", token)
+    _agent_token = token
+
+
+def set_thumbnail_capture_paused(paused):
+    """Persist the device owner's capture choice; only the local API calls this."""
+    if _client_config.get("client_mode", "standard") != "managed":
+        raise ValueError("仅被控模式支持画面采集开关")
+    value = bool(paused)
+    _persist_client_config_value("thumbnail_capture_paused", value)
+    return {
+        "thumbnail_capture_paused": value,
+        "thumbnail_capture_allowed": not value,
+    }
+
+
 def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
     """Upload only the UTF-8 log bytes not yet acknowledged by the backend."""
     if not run_id or not log_path or not os.path.isfile(log_path):
@@ -298,7 +362,7 @@ def _upload_log_delta(run_id, log_path, force=False, agent_id=None):
         resp = requests.post(
             "{}/api/runs/{}/log/chunk".format(BACKEND_URL, run_id),
             json=payload,
-            headers=_headers(),
+            headers=_agent_headers(),
             timeout=10,
         )
         data = resp.json()
@@ -387,23 +451,24 @@ def _sync_client_settings():
             return False
         remote = resp.json() or {}
 
-        local = dict(_client_config)
-        if os.path.isfile(_CLIENT_CONFIG_PATH):
-            try:
-                with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
-                    local = json.load(f) or local
-            except (OSError, json.JSONDecodeError):
-                pass
+        with _config_write_lock:
+            local = dict(_client_config)
+            if os.path.isfile(_CLIENT_CONFIG_PATH):
+                try:
+                    with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+                        local = json.load(f) or local
+                except (OSError, json.JSONDecodeError):
+                    pass
 
-        for key in _CLIENT_SETTING_KEYS:
-            if key in remote and remote[key] is not None:
-                local[key] = remote[key]
+            for key in _CLIENT_SETTING_KEYS:
+                if key in remote and remote[key] is not None:
+                    local[key] = remote[key]
 
-        temp_path = _CLIENT_CONFIG_PATH + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(local, f, indent=2, ensure_ascii=False)
-        os.replace(temp_path, _CLIENT_CONFIG_PATH)
-        _client_config = local
+            temp_path = _CLIENT_CONFIG_PATH + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(local, f, indent=2, ensure_ascii=False)
+            os.replace(temp_path, _CLIENT_CONFIG_PATH)
+            _client_config = local
         return True
     except (requests.RequestException, OSError, TypeError, ValueError):
         return False
@@ -476,6 +541,18 @@ def _start_script_subprocess(script_dir, params, log_path, timeout, env_vars=Non
     proc._log_file = log_file
     proc._params_file = params_file
     return proc
+
+
+def _notify_execution_start(script_name):
+    """Notify once immediately before a remotely claimed task starts."""
+    try:
+        from client.agent.notifier import show_system_notification
+        show_system_notification(
+            "AutoScript Hub",
+            "{} 即将开始执行".format(script_name or "脚本"),
+        )
+    except Exception as exc:
+        logger.warning("通知失败: %s", exc)
 
 
 def _notify_execution_result(script_name, status, error=None):
@@ -595,12 +672,24 @@ def register_agent():
     try:
         resp = requests.post(
             "{}/api/agents/register".format(BACKEND_URL),
-            json={"machine_name": machine_name, "machine_ip": machine_ip, "agent_version": agent_version},
-            headers=_headers(),
+            json={
+                "device_uid": _client_config["device_uid"],
+                "mode": _client_config.get("client_mode", "standard"),
+                "machine_name": machine_name,
+                "machine_ip": machine_ip,
+                "agent_version": agent_version,
+                "thumbnail_capture_paused": bool(
+                    _client_config.get("thumbnail_capture_paused", False)
+                ),
+            },
+            headers=_agent_headers(),
             timeout=10,
         )
         if resp.status_code == 200:
-            _agent_id = resp.json()["id"]
+            data = resp.json()
+            _agent_id = data["id"]
+            if data.get("agent_token"):
+                _persist_agent_token(data["agent_token"])
             _last_online_time = time.time()
             print("Agent 已注册: id={} 机器={}".format(_agent_id, machine_name))
             return _agent_id
@@ -618,8 +707,13 @@ def send_heartbeat():
     try:
         resp = requests.post(
             "{}/api/agents/{}/heartbeat".format(BACKEND_URL, _agent_id),
-            json={"machine_ip": machine_ip},
-            headers=_headers(),
+            json={
+                "machine_ip": machine_ip,
+                "thumbnail_capture_paused": bool(
+                    _client_config.get("thumbnail_capture_paused", False)
+                ),
+            },
+            headers=_agent_headers(),
             timeout=5,
         )
         if resp.status_code == 200:
@@ -632,6 +726,76 @@ def send_heartbeat():
     except (requests.RequestException, OSError):
         pass
     return False
+
+
+def _attempt_thumbnail_upload():
+    """Capture and upload one managed-mode thumbnail without leaking failures."""
+    global _last_thumbnail_attempt_at, _last_thumbnail_success_at
+
+    if (
+        _client_config.get("client_mode", "standard") != "managed"
+        or bool(_client_config.get("thumbnail_capture_paused", False))
+        or not _agent_id
+        or not _token
+        or not _agent_token
+    ):
+        return False
+
+    with _thumbnail_state_lock:
+        _last_thumbnail_attempt_at = time.time()
+
+    try:
+        payload = capture_thumbnail()
+        # Local pause is authoritative. If it changes during capture, discard the
+        # bytes and never start an upload.
+        if bool(_client_config.get("thumbnail_capture_paused", False)):
+            return False
+        headers = _agent_headers()
+        headers["Content-Type"] = "image/jpeg"
+        response = requests.post(
+            "{}/api/agents/{}/thumbnail".format(BACKEND_URL, _agent_id),
+            data=payload,
+            headers=headers,
+            timeout=THUMBNAIL_UPLOAD_TIMEOUT_SEC,
+            allow_redirects=False,
+        )
+        if not 200 <= response.status_code < 300:
+            return False
+        with _thumbnail_state_lock:
+            _last_thumbnail_success_at = time.time()
+        return True
+    except Exception as exc:
+        # Screenshot APIs can fail while Windows changes desktop/session. This
+        # worker must never affect polling, heartbeat, or task state.
+        logger.debug("屏幕缩略图捕获或上传失败: %s", exc)
+        return False
+
+
+def _thumbnail_worker_loop(stop_event=None):
+    """Run thumbnail attempts on an isolated daemon worker every 60 seconds."""
+    while True:
+        _attempt_thumbnail_upload()
+        if stop_event is None:
+            time.sleep(THUMBNAIL_INTERVAL_SEC)
+        elif stop_event.wait(THUMBNAIL_INTERVAL_SEC):
+            return
+
+
+def _start_thumbnail_worker():
+    """Start the singleton managed-mode thumbnail daemon, if applicable."""
+    global _thumbnail_worker
+    if _client_config.get("client_mode", "standard") != "managed":
+        return None
+    with _thumbnail_worker_lock:
+        if _thumbnail_worker is not None and _thumbnail_worker.is_alive():
+            return _thumbnail_worker
+        _thumbnail_worker = threading.Thread(
+            target=_thumbnail_worker_loop,
+            name="managed-thumbnail-worker",
+            daemon=True,
+        )
+        _thumbnail_worker.start()
+        return _thumbnail_worker
 
 
 def _check_offline_notification():
@@ -715,9 +879,9 @@ def _flush_pending_reports():
         try:
             resp = requests.patch(
                 "{}/api/runs/{}/status".format(BACKEND_URL, run_id),
-                json=update, headers=_headers(), timeout=10,
+                json=update, headers=_agent_headers(), timeout=10,
             )
-            if resp.status_code != 200:
+            if resp.status_code not in (200, 409):
                 remaining.append(item)
         except (requests.RequestException, OSError):
             remaining.append(item)
@@ -734,9 +898,11 @@ def _report_run_status(run_id, update):
     try:
         resp = requests.patch(
             "{}/api/runs/{}/status".format(BACKEND_URL, run_id),
-            json=update, headers=_headers(), timeout=10,
+            json=update, headers=_agent_headers(), timeout=10,
         )
-        if resp.status_code == 200:
+        if resp.status_code in (200, 409):
+            # 409 means cancel/watchdog already won the atomic terminal-state
+            # race; retrying can never resurrect the run and would grow forever.
             _last_online_time = time.time()
             return True
     except (requests.RequestException, OSError):
@@ -912,6 +1078,8 @@ def list_local_scripts():
 
 def start_local_run(req):
     """Serialize local and online starts without blocking the local HTTP handler."""
+    if _client_config.get("client_mode", "standard") == "managed":
+        return {"error": "被控模式禁止本地手工执行"}
     if not _execution_start_lock.acquire(blocking=False):
         return {"error": "another task is running"}
     try:
@@ -1131,6 +1299,43 @@ def get_local_run_log(local_run_id):
         return {"log": "", "error": str(e)}
 
 
+def get_client_info():
+    """Return non-secret local identity and current execution state."""
+    machine_name, _ = _detect_machine_info()
+    current_run = None
+    if _current_run_id is not None:
+        current_run = {
+            "id": _current_run_id,
+            "status": "running" if _running_proc is not None else "starting",
+            "script_name": _running_info.get("script_name"),
+            "started_at": _running_info.get("start_time"),
+        }
+    elif _local_run_info.get("local_run_id"):
+        current_run = {
+            "id": _local_run_info["local_run_id"],
+            "status": "running",
+            "script_name": _local_run_info.get("script_name"),
+            "started_at": _local_run_info.get("start_time"),
+            "local": True,
+        }
+    info = {
+        "client_mode": _client_config.get("client_mode", "standard"),
+        "device_uid": _client_config.get("device_uid"),
+        "machine_name": machine_name,
+        "current_run": current_run,
+    }
+    if info["client_mode"] == "managed":
+        paused = bool(_client_config.get("thumbnail_capture_paused", False))
+        with _thumbnail_state_lock:
+            info.update({
+                "thumbnail_capture_paused": paused,
+                "thumbnail_capture_allowed": not paused,
+                "last_thumbnail_attempt_at": _last_thumbnail_attempt_at,
+                "last_thumbnail_success_at": _last_thumbnail_success_at,
+            })
+    return info
+
+
 def get_connection_status():
     """Client's view of backend connectivity, for the offline UI banner."""
     online = _last_online_time is not None and (time.time() - _last_online_time) < 90
@@ -1143,6 +1348,7 @@ def get_connection_status():
         "last_online_at": _last_online_time,
         "pending_sync_count": pending_sync,
         "agent_id": _agent_id,
+        **get_client_info(),
     }
 
 
@@ -1214,7 +1420,7 @@ def _sync_local_runs_locked():
             if backend_status == "pending":
                 claim_resp = requests.post(
                     "{}/api/runs/{}/claim".format(BACKEND_URL, backend_run_id),
-                    json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
+                    json={"agent_id": _agent_id}, headers=_agent_headers(), timeout=10,
                 )
                 if claim_resp.status_code != 200:
                     continue
@@ -1242,7 +1448,7 @@ def _sync_local_runs_locked():
                 patch_resp = requests.patch(
                     "{}/api/runs/{}/status".format(BACKEND_URL, backend_run_id),
                     json=update,
-                    headers=_headers(),
+                    headers=_agent_headers(),
                     timeout=10,
                 )
                 status_synced = patch_resp.status_code == 200
@@ -1337,27 +1543,28 @@ def _poll_and_execute_locked():
 
     # 3) Look for pending run
     try:
+        if not _agent_id:
+            return
         resp = requests.get(
-            "{}/api/runs?status=pending&limit=1&mine_only=true".format(BACKEND_URL),
-            headers=_headers(),
+            "{}/api/agents/{}/next".format(BACKEND_URL, _agent_id),
+            headers=_agent_headers(),
             timeout=10,
         )
-        if resp.status_code != 200 or not resp.json():
+        if resp.status_code != 200:
             return
 
-        run = resp.json()[0]
+        run = resp.json()
+        if not run:
+            return
         run_id = run["id"]
         # A local history import must be resumed by the sync path, never executed.
         if any(r.get("backend_run_id") == run_id and not r.get("synced")
                for r in _local_runs.values()):
             return
         _current_run_id = run_id
-        if not _agent_id:
-            _current_run_id = None
-            return
         claim_resp = requests.post(
             "{}/api/runs/{}/claim".format(BACKEND_URL, run_id),
-            json={"agent_id": _agent_id}, headers=_headers(), timeout=10,
+            json={"agent_id": _agent_id}, headers=_agent_headers(), timeout=10,
         )
         if claim_resp.status_code != 200:
             _current_run_id = None
@@ -1471,8 +1678,10 @@ def _poll_and_execute_locked():
 
         timeout = script_config.get("timeout", 600)
 
-        # Start subprocess asynchronously
+        # Start subprocess asynchronously. The system notification deliberately
+        # contains no task parameters.
         params = json.loads(run["params"]) if run.get("params") else {}
+        _notify_execution_start(script_name)
         proc = _start_script_subprocess(
             script_dir, params, log_path, timeout,
             env_vars=env_vars or None, python_executable=python_executable,
@@ -1606,11 +1815,14 @@ def initialize_agent_runtime():
         get_local_run_fn=get_local_run,
         get_local_run_log_fn=get_local_run_log,
         get_connection_status_fn=get_connection_status,
+        get_client_info_fn=get_client_info,
+        get_client_mode_fn=lambda: _client_config.get("client_mode", "standard"),
         open_result_fn=open_local_result,
         get_update_status_fn=_get_update_status,
         check_update_fn=_check_and_stage_update,
         install_update_fn=_install_staged_update,
         get_runtime_info_fn=_get_runtime_info,
+        set_thumbnail_capture_paused_fn=set_thumbnail_capture_paused,
         request_shutdown_fn=request_shutdown_when_idle,
     )
     server_thread.daemon = True
@@ -1629,7 +1841,8 @@ def agent_iteration(username, password):
             _check_offline_notification()
             return False
         print("Agent 已认证为 {},每 {} 秒轮询一次".format(username, POLL_INTERVAL))
-        register_agent()
+        if register_agent():
+            _start_thumbnail_worker()
 
     now = time.time()
     if _last_update_check_time == 0 or now - _last_update_check_time >= UPDATE_CHECK_INTERVAL_SEC:

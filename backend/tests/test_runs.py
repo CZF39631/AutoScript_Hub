@@ -60,6 +60,63 @@ def test_list_runs(client, dev_token):
     assert resp.json()[0]["script_semantic_version"] == "1.0.0"
 
 
+def test_run_filters_support_device_schedule_and_dispatch_type_with_device_names(
+    client, admin_token, dev_token
+):
+    sid = _upload(client, admin_token)
+    registered = client.post(
+        "/api/agents/register",
+        json={"device_uid": "run-filter-device", "machine_name": "筛选工作站", "mode": "managed"},
+        headers={"Authorization": f"Bearer {dev_token}"},
+    )
+    assert registered.status_code == 200
+    agent = registered.json()
+    schedule = client.post(
+        "/api/admin/managed-schedules",
+        json={
+            "name": "筛选计划",
+            "agent_id": agent["id"],
+            "script_id": sid,
+            "params": {"url_file": "C:/filter.txt"},
+            "interval_seconds": 3600,
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    ).json()
+    scheduled_run = client.post(
+        f"/api/admin/managed-schedules/{schedule['id']}/run-now",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    ).json()
+    client.post(
+        f"/api/admin/managed-agents/{agent['id']}/runs",
+        json={"script_id": sid, "params": {"url_file": "C:/manual.txt"}},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    by_agent = client.get(
+        f"/api/runs?agent_id={agent['id']}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    by_schedule = client.get(
+        f"/api/runs?schedule_id={schedule['id']}&dispatch_type=managed_schedule",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    manual = client.get(
+        f"/api/runs?agent_id={agent['id']}&dispatch_type=managed_manual",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert by_agent.status_code == 200
+    assert len(by_agent.json()) == 2
+    assert {item["target_agent_name"] for item in by_agent.json()} == {"筛选工作站"}
+    assert [item["id"] for item in by_schedule.json()] == [scheduled_run["id"]]
+    assert len(manual.json()) == 1
+    detail = client.get(
+        f"/api/runs/{scheduled_run['id']}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    ).json()
+    assert detail["target_agent_name"] == "筛选工作站"
+
+
 def test_operator_sees_own_runs(client, op_token, dev_token):
     sid = _upload(client, dev_token)
     client.post(
@@ -135,7 +192,7 @@ def test_pending_run_cannot_be_marked_running_without_an_atomic_claim(client, de
         headers={"Authorization": f"Bearer {dev_token}"},
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 422
 
 
 def test_result_files_are_client_local_and_server_has_no_open_or_download_routes():

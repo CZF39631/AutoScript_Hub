@@ -67,7 +67,7 @@ export default function Dashboard() {
         <Col xs={24} xl={12}>
           <Card className="dashboard-panel" title="本周成功率">
             <div className="success-overview">
-              <Progress type="dashboard" width={132} percent={stats.week_success_rate}
+              <Progress type="dashboard" size={132} percent={stats.week_success_rate}
                 format={p => `${p}%`}
                 strokeColor={{ '0%': '#007aff', '100%': '#34c759' }} />
               <div className="success-overview__text">

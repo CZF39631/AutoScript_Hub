@@ -6,9 +6,13 @@ from app.models import AuditLog
 logger = logging.getLogger(__name__)
 
 
-def write_audit(user_id, username, action, target_type=None, target_id=None, detail=None, ip_address=None):
-    """Write an audit log entry. Safe to call from any context — creates its own session."""
-    db = SessionLocal()
+def write_audit(
+    user_id, username, action, target_type=None, target_id=None, detail=None,
+    ip_address=None, db=None,
+):
+    """Write an audit entry, optionally in the request's configured DB session."""
+    owns_session = db is None
+    db = db or SessionLocal()
     try:
         entry = AuditLog(
             user_id=user_id,
@@ -25,5 +29,8 @@ def write_audit(user_id, username, action, target_type=None, target_id=None, det
     except Exception:
         db.rollback()
         logger.warning("Failed to write audit log: action=%s user=%s", action, username)
+        if not owns_session:
+            raise
     finally:
-        db.close()
+        if owns_session:
+            db.close()

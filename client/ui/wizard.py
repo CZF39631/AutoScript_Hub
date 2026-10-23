@@ -36,7 +36,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .msg { padding: 8px 12px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; display: none; }
 .msg.error { display: block; background: #fff2f0; color: #ff4d4f; border: 1px solid #ffccc7; }
 .msg.ok { display: block; background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f; }
-.hint { font-size: 12px; color: #999; margin-top: -12px; margin-bottom: 12px; }
+.hint { font-size: 12px; color: #777; margin-top: -12px; margin-bottom: 12px; }
+.managed-disclosure { display: none; margin: -4px 0 16px; padding: 14px; border: 1px solid #b8d7f5; border-radius: 8px; background: #f2f8ff; color: #26384a; font-size: 13px; line-height: 1.55; }
+.managed-disclosure.visible { display: block; }
+.managed-disclosure strong { display: block; margin-bottom: 6px; color: #124a7a; }
+.managed-disclosure ul { margin: 0 0 10px; padding-left: 20px; }
+.managed-consent { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-weight: 600; }
+.managed-consent input { width: 18px; height: 18px; flex: 0 0 auto; margin: 2px 0 0; }
 </style>
 </head>
 <body>
@@ -54,6 +60,24 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   <div class="panel active" id="p1">
     <label>服务端地址</label>
     <input id="server_url" value="http://127.0.0.1:8000" placeholder="例如：http://192.168.1.100:8000">
+    <label>客户端模式</label>
+    <select id="client_mode" onchange="updateManagedDisclosure()">
+      <option value="standard">标准模式（允许本地手工执行）</option>
+      <option value="managed">被控模式（仅执行管理员下发任务）</option>
+    </select>
+    <div class="managed-disclosure" id="managed_disclosure">
+      <strong>启用被控模式前，请确认屏幕缩略图规则</strong>
+      <ul>
+        <li>设备解锁时，Agent 最多每 60 秒截取一张低分辨率屏幕缩略图并上传到中心服务端；</li>
+        <li>管理员可以在管理端查看最新画面，服务端每台设备只保留最新一张，不保存截图历史；</li>
+        <li>你可随时在本机面板暂停采集；暂停后不再截图或上传，并通知服务端清除现有最新缩略图；</li>
+        <li>截图失败不会影响心跳和任务执行，不采集声音，也不提供键鼠控制。</li>
+      </ul>
+      <label class="managed-consent">
+        <input id="managed_capture_consent" type="checkbox">
+        <span>我已阅读并明确同意以上屏幕缩略图采集、上传与管理员查看规则</span>
+      </label>
+    </div>
     <div class="msg" id="m1"></div>
     <div class="btn-row">
       <button class="primary" onclick="goAccountStep()">下一步</button>
@@ -143,10 +167,22 @@ function invalidateLogin() {
   loginVerified = false;
 }
 
+function updateManagedDisclosure() {
+  var managed = document.getElementById('client_mode').value === 'managed';
+  document.getElementById('managed_disclosure').className = managed
+    ? 'managed-disclosure visible'
+    : 'managed-disclosure';
+}
+
 function goAccountStep() {
   var url = document.getElementById('server_url').value.trim();
   if (!/^https?:\/\/[^\s]+$/i.test(url)) {
     showMsg('m1', '请输入有效的服务端地址，必须以 http:// 或 https:// 开头', false);
+    return;
+  }
+  if (document.getElementById('client_mode').value === 'managed' &&
+      !document.getElementById('managed_capture_consent').checked) {
+    showMsg('m1', '启用被控模式前，必须阅读并显式同意屏幕缩略图规则；未同意时默认暂停且不会采集。', false);
     return;
   }
   invalidateLogin();
@@ -228,8 +264,13 @@ async function finish() {
     showMsg('m2', '账号信息尚未通过验证，请先测试登录', false);
     return;
   }
+  var mode = document.getElementById('client_mode').value;
+  var managedConsent = document.getElementById('managed_capture_consent').checked;
   var config = {
     server_url: document.getElementById('server_url').value,
+    client_mode: document.getElementById('client_mode').value,
+    managed_capture_consent: mode === 'managed' && managedConsent,
+    thumbnail_capture_paused: mode === 'managed' ? !managedConsent : true,
     username: document.getElementById('username').value,
     password: document.getElementById('password').value,
     script_download_dir: document.getElementById('script_dir').value,
@@ -285,6 +326,12 @@ class WizardApi:
 
     def saveAndFinish(self, config_json):
         config = json.loads(config_json)
+        consent = config.pop("managed_capture_consent", False) is True
+        if config.get("client_mode") == "managed" and not consent:
+            config["thumbnail_capture_paused"] = True
+            raise ValueError("启用被控模式必须显式同意屏幕缩略图规则")
+        if config.get("client_mode") == "managed":
+            config["thumbnail_capture_paused"] = False
         save_config(config)
         webview.windows[0].destroy()
 
@@ -301,8 +348,8 @@ def run_wizard():
         "AutoScript Hub - 初始化设置",
         html_path,
         js_api=api,
-        width=600,
-        height=520,
+        width=620,
+        height=680,
         resizable=False,
     )
     webview.start()

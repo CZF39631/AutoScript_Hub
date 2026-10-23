@@ -25,7 +25,10 @@ KNOWN_LEGACY_TABLES = {
 }
 LEGACY_ADDED_COLUMNS = {
     "users": {"auth_source", "external_subject"},
-    "runs": {"environment_id", "agent_id"},
+    "runs": {
+        "environment_id", "agent_id", "target_agent_id", "requested_by",
+        "dispatch_type", "schedule_id", "retry_of_run_id", "scheduled_for", "expires_at", "claimed_at",
+    },
     "environments": {"python_version", "venv_path", "venv_status", "python_executable"},
     "issues": {"script_version", "log_snapshot", "resolved_version"},
 }

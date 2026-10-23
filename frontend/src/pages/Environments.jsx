@@ -151,9 +151,9 @@ export default function Environments() {
       title: '操作', key: 'action', width: 100,
       render: (_, r) => (
         <Space>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
+          <Button type="link" size="small" icon={<EditOutlined />} aria-label={`编辑环境${r.name}`} onClick={() => openEdit(r)} />
           <Popconfirm title="确定删除？关联的venv也会被删除" onConfirm={() => onDelete(r.id)} okText="删除" cancelText="取消">
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} aria-label={`删除环境${r.name}`} />
           </Popconfirm>
         </Space>
       ),
@@ -170,7 +170,7 @@ export default function Environments() {
         <Alert
           type={runtimeInfo?.status === 'ready' ? 'success' : 'info'}
           showIcon
-          message="私有 Python 3.11.9"
+          title="私有 Python 3.11.9"
           description={runtimeInfo?.status === 'ready'
             ? `已就绪：${runtimeInfo.path}。脚本依赖会按指纹自动创建、校验并复用独立环境。`
             : '请在 Windows 客户端中查看运行时状态；安装器会提供私有 Python，脚本不使用系统 Python。'}
@@ -252,7 +252,7 @@ export default function Environments() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="page-title-row">
         <h2 style={{ margin: 0 }}>环境管理</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>创建环境</Button>
       </div>

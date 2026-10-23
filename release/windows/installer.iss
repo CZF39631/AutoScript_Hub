@@ -1,20 +1,41 @@
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
-#define MyAppName "AutoScript Hub"
+#ifndef MyEdition
+  #define MyEdition "standard"
+#endif
+#if MyEdition == "managed"
+  #define MyAppName "AutoScript Hub 被控端预览版"
+  #define MyOutputName "AutoScript-Hub-Managed-Preview"
+  #define MyModeFile "client-mode-managed.txt"
+  #define MyDataMarker "client-data-managed.txt"
+  #define MyDataName "AutoScriptHubManagedPreview"
+  #define MyInstallName "AutoScript Hub Managed Preview"
+#else
+  #define MyAppName "AutoScript Hub 管理端预览版"
+  #define MyOutputName "AutoScript-Hub-Manager-Preview"
+  #define MyModeFile "client-mode-standard.txt"
+  #define MyDataMarker "client-data-manager.txt"
+  #define MyDataName "AutoScriptHubManagerPreview"
+  #define MyInstallName "AutoScript Hub Manager Preview"
+#endif
 #define MyAppPublisher "AutoScript Hub"
 
 [Setup]
-AppId={{A77DCEAD-026B-4E4E-9796-821C117A61B8}
+#if MyEdition == "managed"
+AppId={{1D6477AF-8AA7-4B56-8E76-728AFEF18AA9}
+#else
+AppId={{9A498C94-809A-4947-A8BE-EEC5D33EC0C7}
+#endif
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\AutoScript Hub
-DefaultGroupName=AutoScript Hub
+DefaultDirName={localappdata}\Programs\{#MyInstallName}
+DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\..\release-output
-OutputBaseFilename=AutoScript-Hub-Setup-{#MyAppVersion}
+OutputBaseFilename={#MyOutputName}-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -32,30 +53,32 @@ Name: "chinesesimplified"; MessagesFile: "cache\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Dirs]
-Name: "{localappdata}\AutoScriptHub"
-Name: "{localappdata}\AutoScriptHub\config"
-Name: "{localappdata}\AutoScriptHub\scripts"
-Name: "{localappdata}\AutoScriptHub\environments"
-Name: "{localappdata}\AutoScriptHub\logs"
-Name: "{localappdata}\AutoScriptHub\runs"
-Name: "{localappdata}\AutoScriptHub\updates"
-Name: "{localappdata}\AutoScriptHub\output"
+Name: "{localappdata}\{#MyDataName}"
+Name: "{localappdata}\{#MyDataName}\config"
+Name: "{localappdata}\{#MyDataName}\scripts"
+Name: "{localappdata}\{#MyDataName}\environments"
+Name: "{localappdata}\{#MyDataName}\logs"
+Name: "{localappdata}\{#MyDataName}\runs"
+Name: "{localappdata}\{#MyDataName}\updates"
+Name: "{localappdata}\{#MyDataName}\output"
 
 [Files]
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\release-output\windows\AutoScriptHub\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\release-output\windows-runtime\python\*"; DestDir: "{app}\runtime\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "cache\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "{#MyModeFile}"; DestDir: "{app}"; DestName: "client-mode.txt"; Flags: ignoreversion
+Source: "{#MyDataMarker}"; DestDir: "{app}"; DestName: "client-data-dir-name.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\AutoScript Hub"; Filename: "{app}\AutoScriptHub.exe"
-Name: "{userdesktop}\AutoScript Hub"; Filename: "{app}\AutoScriptHub.exe"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\AutoScriptHub.exe"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\AutoScriptHub.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式:"
 
 [Run]
-Filename: "{app}\AutoScriptHub.exe"; Description: "启动 AutoScript Hub"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\AutoScriptHub.exe"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 #include "installer_processes.iss"
@@ -104,7 +127,7 @@ begin
       if not IsWebView2RuntimeInstalled then
         RaiseException('Microsoft Edge WebView2 Runtime was not detected after installation');
     end;
-    PreviousInstaller := ExpandConstant('{localappdata}\AutoScriptHub\updates\previous-installer.exe');
+    PreviousInstaller := ExpandConstant('{localappdata}\{#MyDataName}\updates\previous-installer.exe');
     if not FileExists(PreviousInstaller) then
       FileCopy(ExpandConstant('{srcexe}'), PreviousInstaller, False);
   end;
