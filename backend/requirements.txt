@@ -2,13 +2,13 @@ fastapi==0.141.1
 uvicorn==0.41.0
 sqlalchemy==1.4.54
 pydantic==2.13.4
-PyJWT[crypto]==2.13.0
+PyJWT[crypto]==2.15.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.32
 aiofiles==23.2.1
 httpx==0.25.2
 packaging==26.0
 alembic==1.13.3
-Pillow==12.2.0
+Pillow==13.0.0
 croniter==6.0.0
 tzdata==2025.2
